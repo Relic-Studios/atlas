@@ -35,4 +35,9 @@ jobs:
         env: {GH_TOKEN: "${{ github.token }}"}
         run: |
           NOTES=$(awk "/^## \[?${VERSION}/{f=1;next} /^## /{f=0} f" CHANGELOG.md)
-          gh release create "$GITHUB_REF_NAME" dist/ATLAS-Setup-*.exe --title "ATLAS $VERSION" --notes "${NOTES:-See CHANGELOG.md}"
+          # Publishing a prepared draft also pushes the tag: refresh its .exe instead of failing.
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/ATLAS-Setup-*.exe --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/ATLAS-Setup-*.exe --title "ATLAS $VERSION" --notes "${NOTES:-See CHANGELOG.md}"
+          fi
