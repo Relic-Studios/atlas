@@ -1,0 +1,43 @@
+# ATLAS public build. torch/torchaudio are installed first by install.ps1 / install.sh
+# (CUDA 12.8 wheels on NVIDIA machines, CPU wheels otherwise).
+# realtimestt==0.3.104 is installed separately with --no-deps by install.ps1:
+# it hard-pins faster-whisper==1.1.1 / websockets==15.0.1, but ATLAS is tested on
+# the versions below. Its real dependencies are listed here instead.
+halo==0.0.31
+pvporcupine==1.9.5
+webrtcvad-wheels==2.0.14
+# openwakeword: RealtimeSTT imports it at module load but ATLAS never uses wake words.
+# Its Linux tflite-runtime dep has no py3.12 wheel, so Linux installs it --no-deps (install.sh).
+openwakeword==0.6.0; platform_system == "Windows"
+websocket-client==1.8.0
+realtimetts==0.8.10
+stream2sentence[nltk]==1.0.4
+pydub==0.25.1
+resampy==0.4.3
+numba==0.66.0
+realtimetts-qwen-native==0.2.0
+faster-whisper==1.2.1
+transformers==5.12.0
+sentence-transformers==5.2.3
+speechbrain==1.1.0
+huggingface-hub
+fastapi==0.135.1
+uvicorn==0.32.0
+websockets==13.1
+requests==2.32.5
+numpy==2.2.6
+scipy==1.15.2
+scikit-learn==1.8.0
+sounddevice==0.5.6
+soundfile==0.13.1
+PyAudio==0.2.14
+echoff==0.3.0
+ddgs==9.14.4
+trafilatura==2.0.0
+wordfreq==3.1.1
+mss==10.1.0
+pillow==11.3.0
+psutil==5.9.8
+nvidia-ml-py==13.595.45
+python-dotenv==1.2.2
+openai==1.109.1

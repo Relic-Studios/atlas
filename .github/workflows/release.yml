@@ -1,0 +1,38 @@
+# Tag v*.*.* -> build ATLAS-Setup-<version>.exe on a clean Windows runner -> GitHub Release.
+name: release
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      version: {description: "version (no v)", required: true, default: "0.0.0-test"}
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - name: Version
+        shell: bash
+        run: |
+          V="${{ github.event.inputs.version }}"; [ -n "$V" ] || V="${GITHUB_REF_NAME#v}"
+          echo "VERSION=$V" >> "$GITHUB_ENV"
+      - name: Syntax check (every .py compiles)
+        run: python -m compileall -q -x "(\.venv|node_modules)" .
+      - name: Inno Setup
+        run: |
+          if (-not (Test-Path "C:\Program Files (x86)\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
+      - name: Build installer
+        run: python tools/build_installer.py --version $env:VERSION --ref $env:GITHUB_SHA --iscc "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+      - uses: actions/upload-artifact@v4
+        with: {name: "ATLAS-Setup-${{ env.VERSION }}", path: "dist/ATLAS-Setup-*.exe"}
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env: {GH_TOKEN: "${{ github.token }}"}
+        run: |
+          NOTES=$(awk "/^## \[?${VERSION}/{f=1;next} /^## /{f=0} f" CHANGELOG.md)
+          gh release create "$GITHUB_REF_NAME" dist/ATLAS-Setup-*.exe --title "ATLAS $VERSION" --notes "${NOTES:-See CHANGELOG.md}"

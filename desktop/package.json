@@ -1,0 +1,12 @@
+{
+  "name": "atlas-desktop",
+  "version": "1.0.0",
+  "description": "ATLAS — local voice intelligence. Electron shell over the Python realtime voice backend.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^33.0.0"
+  }
+}

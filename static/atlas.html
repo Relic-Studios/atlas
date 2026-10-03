@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ATLAS — Live Voice Intelligence</title>
+<link rel="icon" href="/favicon.ico">
+<style>
+:root{
+  --bg:#06080c; --glass:rgba(16,20,28,.72); --glass-2:rgba(22,27,37,.78);
+  --line:rgba(120,140,170,.14); --line-2:rgba(120,140,170,.24);
+  --text:#e3e8f0; --muted:#8792a4; --faint:#4d5768;
+  --accent:#22d3ee; --accent-rgb:34,211,238;
+  --ok:#34d399; --warn:#fbbf24; --bad:#f87171; --info:#60a5fa;
+  --font:'Inter','Segoe UI Variable','Segoe UI',system-ui,sans-serif;
+  --mono:'Cascadia Code','JetBrains Mono',ui-monospace,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--text);font-family:var(--font);overflow:hidden;-webkit-font-smoothing:antialiased}
+body{transition:--accent .6s}
+#bg{position:fixed;inset:0;z-index:0}
+@media (max-width:1360px){.app{grid-template-columns:300px minmax(380px,1fr) 340px!important}}
+.app{position:relative;z-index:1;height:100vh;display:grid;
+  grid-template-columns:340px minmax(420px,1fr) 400px;grid-template-rows:62px 1fr;
+  grid-template-areas:"head head head" "core chat side";gap:10px;padding:10px}
+.glass{background:var(--glass);border:1px solid var(--line);border-radius:14px;
+  backdrop-filter:blur(14px) saturate(1.2);box-shadow:0 10px 40px rgba(0,0,0,.35),inset 0 1px 0 rgba(255,255,255,.03);min-width:0;min-height:0}
+.ptitle{display:flex;align-items:center;gap:8px;font-size:10.5px;letter-spacing:2.2px;color:var(--muted);text-transform:uppercase;font-weight:600;margin-bottom:10px}
+.ptitle .pdot{width:6px;height:6px;border-radius:50%;background:var(--accent);box-shadow:0 0 10px var(--accent);animation:pulse 2.4s infinite}
+.ptitle .right{margin-left:auto;font-family:var(--mono);letter-spacing:0;text-transform:none;color:var(--faint);font-weight:500}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+@keyframes slidein{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* header */
+.head{grid-area:head;display:flex;align-items:center;gap:14px;padding:0 16px}
+.brand{display:flex;align-items:center;gap:11px}
+.mark{width:32px;height:32px;border-radius:9px;position:relative;overflow:hidden;
+  background:conic-gradient(from 0deg,var(--accent),#6366f1,#a855f7,var(--accent));animation:spin 8s linear infinite;box-shadow:0 0 22px rgba(var(--accent-rgb),.45)}
+.mark::after{content:"";position:absolute;inset:6px;border-radius:5px;background:#0a0d13}
+.bname{font-weight:700;letter-spacing:5px;font-size:17px}
+.bsub{font-size:9.5px;color:var(--muted);letter-spacing:2px}
+.sep{width:1px;height:30px;background:var(--line-2)}
+.fld{display:flex;flex-direction:column;gap:3px}
+.fld label{font-size:9px;letter-spacing:1.8px;color:var(--faint);text-transform:uppercase}
+select,.btn,input[type=range]{font-family:var(--font)}
+select{appearance:none;background:rgba(10,13,19,.8) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%238792a4'/%3E%3C/svg%3E") no-repeat right 10px center;
+  color:var(--text);border:1px solid var(--line-2);border-radius:8px;padding:6px 28px 6px 10px;font-size:12.5px;outline:none;cursor:pointer;transition:border-color .2s,box-shadow .2s;max-width:100%}
+select:hover,select:focus{border-color:rgba(var(--accent-rgb),.6);box-shadow:0 0 0 3px rgba(var(--accent-rgb),.12)}
+select.persona-sel{font-weight:700;letter-spacing:1px;color:var(--accent);min-width:150px}
+.pills{display:flex;gap:6px;margin-left:auto;align-items:center}
+.pill{display:flex;align-items:center;gap:6px;font-size:10.5px;letter-spacing:1px;padding:5px 9px;border-radius:20px;border:1px solid var(--line);background:rgba(8,10,15,.6);color:var(--muted);font-family:var(--mono)}
+.pill i{width:7px;height:7px;border-radius:50%;background:var(--faint)}
+.pill.ok i{background:var(--ok);box-shadow:0 0 8px var(--ok)} .pill.bad i{background:var(--bad);box-shadow:0 0 8px var(--bad);animation:pulse 1s infinite}
+.pill.eyes{cursor:pointer;position:relative;user-select:none}.pill.eyes:hover{border-color:rgba(94,234,212,.5);color:var(--text)}
+.eyepop{display:none;position:absolute;top:calc(100% + 8px);right:0;z-index:50;width:280px;padding:8px;border-radius:10px;border:1px solid var(--line);background:rgba(8,10,15,.96);box-shadow:0 12px 30px rgba(0,0,0,.5)}
+.pill.eyes:hover .eyepop{display:block}.eyepop img{width:100%;border-radius:6px;display:none}.eyepop img.on{display:block}
+.pill.brain{cursor:pointer;position:relative;user-select:none}.pill.brain:hover{border-color:rgba(var(--accent-rgb),.5);color:var(--text)}
+.pill.brain.hidden{display:none}.pill.brain.busy i{background:var(--warn);animation:pulse .8s infinite}
+.pill.brain:hover .eyepop{display:block}
+.pill.own{cursor:pointer;position:relative;user-select:none}.pill.own:hover{color:var(--text)}.pill.own:hover .eyepop{display:block}
+.pill.own.on{color:var(--bad);border-color:rgba(255,90,90,.6)}.pill.own.on i{background:var(--bad);box-shadow:0 0 8px var(--bad)}
+.pill.own.q.on{color:var(--warn);border-color:rgba(255,190,90,.6)}.pill.own.q.on i{background:var(--warn);box-shadow:0 0 8px var(--warn)}
+.ownrow{display:flex;align-items:center;gap:8px;margin-top:6px;font-size:11px}.ownrow input{flex:1}
+.spk .mutebtn{cursor:pointer;opacity:.45;border:1px solid var(--line);border-radius:6px;padding:1px 5px;font-size:10px;margin-left:4px}.spk .mutebtn:hover{opacity:1}.spk .mutebtn.on{opacity:1;color:var(--bad);border-color:var(--bad)}.spk.muted{opacity:.45}
+#brainMeta{font-size:10.5px;letter-spacing:.3px;color:var(--muted);white-space:normal;line-height:1.5}
+#brainMeta b{color:var(--text);font-weight:600}
+#eyeMeta{font-size:10.5px;letter-spacing:.3px;color:var(--muted);margin-top:6px;white-space:normal;line-height:1.4}
+.pill.flash{animation:eyeflash 1.2s ease-out}@keyframes eyeflash{0%{box-shadow:0 0 0 0 rgba(94,234,212,.8)}100%{box-shadow:0 0 0 12px rgba(94,234,212,0)}}
+.pill.warn i{background:var(--warn);box-shadow:0 0 8px var(--warn)}
+.clock{font-family:var(--mono);font-size:12px;color:var(--muted);min-width:64px;text-align:right}
+
+/* core column */
+.core{grid-area:core;display:flex;flex-direction:column;gap:10px;overflow:hidden}
+.orbwrap{position:relative;padding:14px;flex:0 0 auto}
+#orb{width:100%;height:280px;display:block}
+.statebadge{position:absolute;left:50%;top:170px;transform:translateX(-50%);font-size:11px;letter-spacing:4px;font-weight:700;color:var(--accent);text-shadow:0 0 14px rgba(var(--accent-rgb),.8);pointer-events:none;white-space:nowrap}
+.pname{position:absolute;left:50%;top:128px;transform:translateX(-50%);font-size:24px;font-weight:800;letter-spacing:6px;pointer-events:none;
+  background:linear-gradient(90deg,#fff,var(--accent),#fff);background-size:200% 100%;-webkit-background-clip:text;color:transparent;animation:shimmer 6s linear infinite}
+.lamps{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:6px}
+.lamp{text-align:center;font-size:9.5px;letter-spacing:1.5px;padding:6px 0;border-radius:8px;border:1px solid var(--line);color:var(--faint);transition:all .2s}
+.lamp.on{color:#fff;border-color:rgba(var(--lc),.8);background:rgba(var(--lc),.18);box-shadow:0 0 16px rgba(var(--lc),.35)}
+.meters{padding:12px 14px}
+.meter{display:grid;grid-template-columns:62px 1fr 46px;align-items:center;gap:8px;font-size:10.5px;color:var(--muted);margin:5px 0;font-family:var(--mono)}
+.bar{height:7px;border-radius:5px;background:rgba(255,255,255,.05);overflow:hidden;position:relative}
+.bar b{position:absolute;left:0;top:0;bottom:0;border-radius:5px;background:linear-gradient(90deg,var(--ok),var(--warn) 75%,var(--bad));transition:width .08s linear}
+#spec{width:100%;height:78px;display:block;margin-top:6px}
+#scope{width:100%;height:46px;display:block;margin-top:6px}
+.partial{padding:12px 14px;flex:1 1 auto;display:flex;flex-direction:column;min-height:120px}
+.partial .txt{font-size:14px;line-height:1.45;color:#cfe9f2;min-height:44px;flex:1;overflow:hidden}
+.partial .txt.empty{color:var(--faint);font-style:italic}
+.pipe{display:flex;gap:4px;margin-top:10px}
+.pipe div{flex:1;text-align:center;font-size:9px;letter-spacing:1px;padding:5px 0;border-radius:6px;background:rgba(255,255,255,.03);color:var(--faint);border:1px solid transparent;transition:all .25s}
+.pipe div.on{color:#fff;background:rgba(var(--accent-rgb),.2);border-color:rgba(var(--accent-rgb),.6);box-shadow:0 0 12px rgba(var(--accent-rgb),.3)}
+.pipe div.done{color:var(--muted);background:rgba(var(--accent-rgb),.07)}
+
+/* chat */
+.chat{grid-area:chat;display:flex;flex-direction:column;overflow:hidden}
+.chathead{display:flex;align-items:center;gap:10px;padding:14px 16px 8px}
+.personas{display:flex;gap:8px;padding:0 16px 10px;overflow-x:auto}
+.pcard{flex:1 1 0;min-width:130px;cursor:pointer;border-radius:12px;padding:10px 12px;border:1px solid var(--line);background:rgba(8,10,15,.5);position:relative;overflow:hidden;transition:transform .2s,border-color .25s,box-shadow .25s}
+.pcard:hover{transform:translateY(-2px);border-color:var(--pc)}
+.pcard.active{border-color:var(--pc);box-shadow:0 0 0 1px var(--pc),0 0 28px -6px var(--pc)}
+.pcard.active::before{content:"";position:absolute;inset:0;background:radial-gradient(120% 90% at 0 0,color-mix(in srgb,var(--pc) 22%,transparent),transparent 60%)}
+.pcard .nm{position:relative;font-weight:800;letter-spacing:3px;font-size:14px;color:var(--pc)}
+.pcard .rl{position:relative;font-size:10.5px;color:var(--muted);margin-top:3px}
+.pcard .vc{position:relative;font-size:9.5px;color:var(--faint);margin-top:6px;font-family:var(--mono)}
+.pcard .st{position:absolute;right:10px;top:10px;font-size:8.5px;letter-spacing:1.5px;color:var(--faint)}
+.pcard.active .st{color:var(--pc)}
+.pcard.switching .st::after{content:" …";animation:pulse .7s infinite}
+#feed{flex:1;overflow-y:auto;padding:6px 16px 16px;scroll-behavior:smooth}
+#feed::-webkit-scrollbar,.scroll::-webkit-scrollbar{width:6px} #feed::-webkit-scrollbar-thumb,.scroll::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:4px}
+.msg{max-width:82%;margin:9px 0;padding:10px 13px;border-radius:12px;animation:slidein .25s ease-out;position:relative;border:1px solid var(--line)}
+.msg .who{font-size:9.5px;letter-spacing:2px;font-weight:700;margin-bottom:4px;display:flex;gap:8px;align-items:center}
+.msg .who .t{color:var(--faint);font-weight:500;letter-spacing:.5px;font-family:var(--mono)}
+.msg .body{font-size:14px;line-height:1.5;white-space:pre-wrap;word-wrap:break-word}
+.msg.user{background:rgba(255,255,255,.035)}
+.msg.user .who{color:var(--sc,#5eead4)}
+.msg.assistant{margin-left:auto;background:linear-gradient(135deg,color-mix(in srgb,var(--pc) 16%,transparent),rgba(10,13,19,.55));border-color:color-mix(in srgb,var(--pc) 45%,transparent)}
+.msg.assistant .who{color:var(--pc);justify-content:flex-end}
+.msg.streaming{border-style:dashed}
+.msg.streaming .body::after{content:"▍";color:var(--accent);animation:pulse .8s infinite}
+.msg.sys{max-width:100%;text-align:center;background:none;border:none;font-size:10.5px;color:var(--faint);letter-spacing:1.5px;padding:2px}
+.empty-chat{margin:auto;text-align:center;color:var(--faint);font-size:12px;letter-spacing:1.5px;padding-top:80px}
+.controls{display:flex;gap:10px;align-items:center;padding:10px 16px;border-top:1px solid var(--line)}
+.btn{background:rgba(10,13,19,.8);color:var(--text);border:1px solid var(--line-2);border-radius:8px;padding:7px 12px;font-size:11.5px;letter-spacing:1px;cursor:pointer;transition:all .2s}
+.btn:hover{border-color:rgba(var(--accent-rgb),.7);color:#fff;box-shadow:0 0 14px rgba(var(--accent-rgb),.25)}
+.btn.primary{background:rgba(var(--accent-rgb),.16);border-color:rgba(var(--accent-rgb),.6);color:#fff}
+.speed{display:flex;align-items:center;gap:8px;font-size:10.5px;color:var(--muted);letter-spacing:1px;margin-left:auto}
+input[type=range]{accent-color:var(--accent);width:120px}
+
+/* side */
+.side{grid-area:side;overflow-y:auto;display:flex;flex-direction:column;gap:10px;padding-right:2px}
+.side::-webkit-scrollbar{width:5px}.side::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:4px}
+.panel{padding:13px 14px;animation:slidein .35s ease-out;flex:0 0 auto}
+.side>.glass,.core>.glass{flex-shrink:0}
+.core>.partial{flex:1 1 auto;flex-shrink:1}
+.meter .idle{color:var(--faint)}
+.kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.kpi{background:rgba(255,255,255,.025);border:1px solid var(--line);border-radius:10px;padding:8px 9px}
+.kpi .l{font-size:8.5px;letter-spacing:1.5px;color:var(--faint);text-transform:uppercase}
+.kpi .v{font-family:var(--mono);font-size:17px;font-weight:600;margin-top:2px}
+.kpi .v small{font-size:10px;color:var(--muted);font-weight:400}
+.kpi canvas{width:100%;height:26px;display:block;margin-top:4px}
+.gpugrid{display:grid;grid-template-columns:96px 96px 1fr;gap:10px;align-items:center}
+.ring{width:96px;height:96px;display:block}
+.stats{font-family:var(--mono);font-size:11px;color:var(--muted);line-height:1.7}
+.stats b{color:var(--text);font-weight:500}
+.rowlist{display:flex;flex-direction:column;gap:5px;font-size:11.5px}
+.rl-item{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;padding:6px 8px;border-radius:8px;background:rgba(255,255,255,.025);border:1px solid var(--line)}
+.rl-item .n{font-family:var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rl-item .m{font-family:var(--mono);color:var(--muted);font-size:10.5px}
+.minibar{grid-column:1/-1;height:3px;border-radius:2px;background:rgba(255,255,255,.05);overflow:hidden}
+.minibar b{display:block;height:100%;background:var(--accent);transition:width .5s}
+.spk{display:grid;grid-template-columns:34px 1fr auto;gap:8px;align-items:center;padding:7px 8px;border-radius:9px;background:rgba(255,255,255,.025);border:1px solid var(--line);transition:all .3s}
+.spk.live{border-color:rgba(94,234,212,.6);box-shadow:0 0 14px rgba(94,234,212,.2)}
+.spk.partner{border-color:rgba(var(--accent-rgb),.7)}
+.av{width:34px;height:34px;border-radius:50%;display:grid;place-items:center;font-weight:800;font-size:11px;color:#06080c}
+.spk .line{font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.spk .tag{font-size:8.5px;letter-spacing:1px;padding:2px 6px;border-radius:10px;border:1px solid var(--line-2);color:var(--muted)}
+.spk .tag.hot{color:var(--accent);border-color:rgba(var(--accent-rgb),.6)}
+.thread{padding:7px 9px;border-radius:9px;border:1px solid var(--line);background:rgba(255,255,255,.02);margin-bottom:5px;font-size:11.5px}
+.thread.active{border-color:rgba(var(--accent-rgb),.7);background:rgba(var(--accent-rgb),.08)}
+.thread .top{display:flex;justify-content:space-between;font-family:var(--mono);font-size:10px;color:var(--muted);margin-bottom:3px}
+.thread .rs{display:flex;gap:4px;flex-wrap:wrap;margin-top:4px}
+.thread .rs span{font-size:8.5px;padding:1px 5px;border-radius:6px;background:rgba(255,255,255,.05);color:var(--muted)}
+.floorrow{display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap}
+.chip{font-size:10px;padding:4px 8px;border-radius:14px;border:1px solid var(--line-2);color:var(--muted);font-family:var(--mono)}
+.chip.on{color:#fff;border-color:rgba(var(--accent-rgb),.6);background:rgba(var(--accent-rgb),.12)}
+.chip.q{color:#fff;border-color:rgba(251,191,36,.6);background:rgba(251,191,36,.12)}
+.note{font-family:var(--mono);font-size:10.5px;color:var(--muted);white-space:pre-wrap;max-height:120px;overflow:auto;background:rgba(0,0,0,.25);border-radius:8px;padding:8px;border:1px solid var(--line)}
+.events{max-height:260px;overflow-y:auto;display:flex;flex-direction:column;gap:3px}
+.ev{display:grid;grid-template-columns:52px 64px 1fr;gap:6px;font-size:10.5px;font-family:var(--mono);padding:4px 6px;border-radius:6px;animation:slidein .2s;align-items:start}
+.ev .tm{color:var(--faint)} .ev .k{font-weight:700;letter-spacing:.5px} .ev .x{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ev.SPEAK .k{color:var(--ok)} .ev.HOLD .k{color:var(--warn)} .ev.INVALID .k,.ev.error .k{color:var(--bad)} .ev.error{background:rgba(248,113,113,.07)}
+.logs{max-height:220px;overflow-y:auto;font-family:var(--mono);font-size:10px;line-height:1.5;color:var(--muted)}
+.logs div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.logs .WARNING{color:var(--warn)} .logs .ERROR,.logs .CRITICAL{color:var(--bad)}
+.tabs{display:flex;gap:4px;margin-left:auto}
+.tabs span{font-size:9px;letter-spacing:1px;padding:3px 7px;border-radius:6px;cursor:pointer;color:var(--faint);border:1px solid transparent}
+.tabs span.on{color:var(--text);border-color:var(--line-2)}
+.devgrid{display:grid;gap:8px}
+.devgrid select{width:100%}
+.overlay{position:fixed;inset:0;z-index:5;display:none;place-items:center;background:rgba(4,6,10,.72);backdrop-filter:blur(6px)}
+.overlay.show{display:grid}
+.overlay .box{text-align:center;padding:28px 36px}
+.spinner{width:42px;height:42px;border-radius:50%;border:3px solid rgba(var(--accent-rgb),.2);border-top-color:var(--accent);animation:spin 1s linear infinite;margin:0 auto 14px}
+.toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%) translateY(30px);opacity:0;z-index:6;padding:9px 16px;border-radius:10px;font-size:12px;transition:all .3s;pointer-events:none}
+.toast.show{opacity:1;transform:translateX(-50%)}
+
+/* ---------------- agent dock (tiny avatars + hover card + create) */
+.dock{display:flex;align-items:center;gap:7px;padding:4px 8px;border-radius:999px;background:rgba(8,10,15,.55);border:1px solid var(--line)}
+.av{--pc:#22d3ee;position:relative;width:30px;height:30px;border-radius:50%;cursor:pointer;flex:0 0 auto;
+  display:grid;place-items:center;font-weight:800;font-size:13px;color:#0a0d13;letter-spacing:0;
+  background:radial-gradient(circle at 32% 28%,color-mix(in srgb,var(--pc) 55%,#fff) 0,var(--pc) 45%,color-mix(in srgb,var(--pc) 45%,#000) 100%);
+  opacity:.55;filter:saturate(.7);transition:transform .18s cubic-bezier(.3,1.6,.5,1),opacity .2s,filter .2s,box-shadow .25s;outline:none}
+.av:hover,.av:focus-visible{opacity:1;filter:none;transform:translateY(-2px) scale(1.12)}
+.av.active{opacity:1;filter:none;box-shadow:0 0 0 2px #0a0d13,0 0 0 3.5px var(--pc),0 0 18px -2px var(--pc)}
+.av.active.speaking::after{content:"";position:absolute;inset:-6px;border-radius:50%;border:2px solid var(--pc);animation:ring 1.1s ease-out infinite}
+.av.switching::before{content:"";position:absolute;inset:-4px;border-radius:50%;border:2px solid transparent;border-top-color:var(--pc);animation:spin .7s linear infinite}
+.av .cu{position:absolute;right:-2px;bottom:-2px;width:9px;height:9px;border-radius:50%;background:#0a0d13;border:1.5px solid var(--pc)}
+@keyframes ring{from{transform:scale(.85);opacity:.9}to{transform:scale(1.35);opacity:0}}
+.av.add{background:transparent;border:1.5px dashed var(--line-2);color:var(--muted);font-size:17px;font-weight:400;opacity:.9;filter:none}
+.av.add:hover{border-color:var(--accent);color:var(--accent);box-shadow:0 0 14px -3px var(--accent)}
+.avtip{position:fixed;z-index:60;pointer-events:none;min-width:150px;max-width:240px;padding:9px 12px;border-radius:10px;
+  background:rgba(12,15,22,.96);border:1px solid var(--line-2);box-shadow:0 12px 30px rgba(0,0,0,.5);opacity:0;transform:translateY(-4px);transition:opacity .12s,transform .12s}
+.avtip.show{opacity:1;transform:none}
+.avtip .n{font-weight:800;letter-spacing:2px;font-size:12.5px}
+.avtip .r{font-size:10.5px;color:var(--muted);margin-top:2px}
+.avtip .m{font-size:9.5px;color:var(--faint);margin-top:6px;font-family:var(--mono)}
+
+/* ---------------- agent creator */
+.modal{position:fixed;inset:0;z-index:70;display:none;align-items:center;justify-content:center;background:rgba(3,5,8,.62);backdrop-filter:blur(6px)}
+.modal.open{display:flex;animation:slidein .2s ease-out}
+.creator{width:min(880px,94vw);max-height:90vh;display:flex;flex-direction:column;overflow:hidden}
+.creator .ch{display:flex;align-items:center;gap:12px;padding:16px 18px;border-bottom:1px solid var(--line)}
+.creator .ch .ttl{font-weight:800;letter-spacing:4px;font-size:14px}
+.creator .ch .steps{margin-left:auto;display:flex;gap:6px;font-size:9.5px;letter-spacing:1.6px;color:var(--faint)}
+.creator .ch .steps b{padding:3px 8px;border-radius:999px;border:1px solid var(--line)}
+.creator .ch .steps b.on{color:var(--accent);border-color:rgba(var(--accent-rgb),.6)}
+.creator .x{cursor:pointer;color:var(--muted);font-size:18px;padding:0 4px}
+.creator .cb{padding:16px 18px;overflow-y:auto;display:grid;gap:12px}
+.creator .row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.creator .preview-row{display:grid;grid-template-columns:auto 1fr;gap:14px;align-items:center}
+.creator .big{width:64px;height:64px;font-size:26px;opacity:1;filter:none;cursor:default;box-shadow:0 0 0 2px #0a0d13,0 0 0 4px var(--pc),0 0 30px -4px var(--pc)}
+.creator .big:hover{transform:none}
+.cin,.creator textarea{width:100%;background:rgba(10,13,19,.8);color:var(--text);border:1px solid var(--line-2);border-radius:8px;padding:8px 10px;font:13px var(--font);outline:none;resize:vertical}
+.cin:focus,.creator textarea:focus{border-color:rgba(var(--accent-rgb),.6);box-shadow:0 0 0 3px rgba(var(--accent-rgb),.12)}
+.creator .hint{font-size:10.5px;color:var(--faint);margin-top:3px}
+.creator .swatches{display:flex;gap:6px;flex-wrap:wrap}
+.creator .sw{width:18px;height:18px;border-radius:50%;cursor:pointer;border:2px solid transparent}
+.creator .sw.on{border-color:#fff}
+.creator pre{margin:0;white-space:pre-wrap;font:11.5px/1.5 var(--mono);color:var(--muted);background:rgba(6,8,12,.7);border:1px solid var(--line);border-radius:8px;padding:10px 12px;max-height:210px;overflow:auto}
+.creator .cf{display:flex;gap:8px;align-items:center;padding:12px 18px;border-top:1px solid var(--line)}
+.creator .cf .err{color:var(--bad);font-size:11.5px;margin-right:auto}
+.btn.primary{background:rgba(var(--accent-rgb),.18);border-color:rgba(var(--accent-rgb),.6);color:#fff}
+.btn[disabled]{opacity:.45;pointer-events:none}
+.creator .src{font-size:9.5px;letter-spacing:1.5px;padding:2px 7px;border-radius:999px;border:1px solid var(--line-2);color:var(--muted)}
+.creator .busy{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:12px}
+.creator .busy .spinner{width:16px;height:16px;margin:0;border-width:2px}
+.modal a{color:var(--accent);text-decoration:none;border-bottom:1px dotted rgba(var(--accent-rgb),.6)}.modal a:hover{border-bottom-style:solid}
+#crPrompt{background:rgba(6,8,12,.7);color:var(--text);border:1px solid var(--line-2)}
+</style>
+</head>
+<body>
+<canvas id="bg"></canvas>
+<div class="app">
+  <header class="head glass">
+    <div class="brand"><div class="mark"></div><div><div class="bname">ATLAS</div><div class="bsub">LIVE VOICE INTELLIGENCE</div></div></div>
+    <div class="sep"></div>
+    <div class="fld"><label>Agent</label><div class="dock" id="dock"></div></div>
+    <div class="fld"><label>Voice</label><select id="voiceSel"></select></div>
+    <div class="fld"><label>Model</label><div id="modelName" style="font-family:var(--mono);font-size:12px;padding-top:4px">—</div></div>
+    <div class="pills">
+      <div class="pill" id="pBackend"><i></i>BACKEND</div>
+      <div class="pill" id="pOllama"><i></i>OLLAMA</div>
+      <div class="pill" id="pBridge"><i></i>CALL</div>
+      <div class="pill own" id="pMute" title="Hard mute: agent says nothing (Ctrl+Shift+M). Click to toggle."><i></i><span id="muteLbl">LIVE</span><div class="eyepop"><div>Hard mute stops the reply mid-word and blocks every turn until you unmute.<br>Hotkey: <b>Ctrl+Shift+M</b> (works from any window).</div></div></div>
+      <div class="pill own q" id="pQuiet" title="Quiet mode: agent only answers when named."><i></i><span id="quietLbl">QUIET</span><div class="eyepop"><div id="quietMeta">Quiet mode: only answers when someone says its name. Click the pill to toggle (10 min).</div><div class="ownrow">quiet<input type="range" id="talkSlider" min="0" max="1" step="0.05">chatty <span id="talkVal"></span></div><div style="font-size:10.5px;color:var(--muted)">Talkativeness for the active agent (saved).</div></div></div>
+      <div class="pill eyes" id="pEyes" title="Let agents look at your screen when asked. Click to toggle."><i></i>EYES<div class="eyepop" id="eyePop"><img id="eyeImg" alt=""><div id="eyeMeta">No looks yet</div></div></div>
+      <div class="pill brain hidden" id="pBrain" title="Where the LLM runs. Click to switch."><i></i><span id="brainLbl">LOCAL</span><div class="eyepop"><div id="brainMeta">…</div></div></div>
+      <div class="pill" id="pWs"><i></i>LINK</div>
+      <div class="clock" id="uptime">--:--:--</div>
+    </div>
+  </header>
+
+  <section class="core">
+    <div class="glass orbwrap">
+      <canvas id="orb"></canvas>
+      <div class="pname" id="orbName">ATLAS</div>
+      <div class="statebadge" id="orbState">STANDBY</div>
+      <div class="lamps">
+        <div class="lamp" id="lHear" style="--lc:94,234,212">HEARING</div>
+        <div class="lamp" id="lThink" style="--lc:167,139,250">THINKING</div>
+        <div class="lamp" id="lSpeak" style="--lc:52,211,153">SPEAKING</div>
+        <div class="lamp" id="lQuiet" style="--lc:251,191,36">QUIET</div>
+      </div>
+    </div>
+    <div class="glass meters">
+      <div class="ptitle"><span class="pdot"></span>Audio<span class="right" id="devLabel">—</span></div>
+      <div class="meter"><span>CALL IN</span><div class="bar"><b id="mIn"></b></div><span id="vIn">-∞</span></div>
+      <div class="meter"><span>CLEAN</span><div class="bar"><b id="mClean"></b></div><span id="vClean">-∞</span></div>
+      <div class="meter"><span>VOICE OUT</span><div class="bar"><b id="mOut"></b></div><span id="vOut">-∞</span></div>
+      <div class="meter stutter" title="Voice playback health: audible gaps (buffer ran dry mid-reply), total gap time, current jitter buffer"><span>SMOOTH</span><span id="vStutter" style="grid-column:2/4;text-align:right;font-variant-numeric:tabular-nums">—</span></div>
+      <canvas id="spec"></canvas>
+      <canvas id="scope"></canvas>
+    </div>
+    <div class="glass partial">
+      <div class="ptitle"><span class="pdot"></span>Hearing now<span class="right" id="curSpk">—</span></div>
+      <div class="txt empty" id="partialTxt">waiting for speech…</div>
+      <div class="pipe" id="pipe"><div data-s="hear">HEAR</div><div data-s="end">TURN END</div><div data-s="decide">DECIDE</div><div data-s="gen">GENERATE</div><div data-s="speak">SPEAK</div></div>
+    </div>
+  </section>
+
+  <section class="chat glass">
+    <div class="chathead"><div class="ptitle" style="margin:0"><span class="pdot"></span>Conversation<span class="right" id="chatCount"></span></div></div>
+    <div id="feed"></div>
+    <div class="controls">
+      <button class="btn" id="clearBtn" title="Clear the model's conversation history">CLEAR HISTORY</button>
+      <button class="btn" id="clearView">CLEAR VIEW</button>
+      <div class="speed"><span>TURN-TAKING</span><span style="color:var(--faint)">fast</span><input type="range" id="speed" min="0" max="100" value="0"><span style="color:var(--faint)">patient</span><span id="speedV" style="font-family:var(--mono);min-width:62px;color:var(--accent)">SNAPPY</span></div>
+    </div>
+  </section>
+
+  <aside class="side">
+    <div class="glass panel">
+      <div class="ptitle"><span class="pdot"></span>Latency<span class="right" id="turnsN"></span></div>
+      <div class="kpis">
+        <div class="kpi"><div class="l">Speech→voice</div><div class="v" id="kE2E">—</div><canvas id="sE2E"></canvas></div>
+        <div class="kpi"><div class="l">Decision</div><div class="v" id="kHdr">—</div><canvas id="sHdr"></canvas></div>
+        <div class="kpi"><div class="l">Turn pause</div><div class="v" id="kPause">—</div><canvas id="sPause"></canvas></div>
+      </div>
+      <div class="kpis" style="margin-top:8px">
+        <div class="kpi"><div class="l">Speak</div><div class="v" id="cSpeak" style="color:var(--ok)">0</div></div>
+        <div class="kpi"><div class="l">Hold</div><div class="v" id="cHold" style="color:var(--warn)">0</div></div>
+        <div class="kpi"><div class="l">Invalid / err</div><div class="v" id="cBad" style="color:var(--bad)">0</div></div>
+      </div>
+    </div>
+
+    <div class="glass panel">
+      <div class="ptitle"><span class="pdot"></span>GPU<span class="right" id="gpuName">—</span></div>
+      <div class="gpugrid">
+        <canvas class="ring" id="rUtil" width="192" height="192"></canvas>
+        <canvas class="ring" id="rMem" width="192" height="192"></canvas>
+        <div class="stats" id="gpuStats">—</div>
+      </div>
+      <canvas id="gpuHist" style="width:100%;height:46px;display:block;margin-top:8px"></canvas>
+      <div class="rowlist" id="gpuProcs" style="margin-top:8px"></div>
+    </div>
+
+    <div class="glass panel">
+      <div class="ptitle"><span class="pdot"></span>Models<span class="right" id="procStats">—</span></div>
+      <div class="rowlist" id="models"></div>
+    </div>
+
+    <div class="glass panel">
+      <div class="ptitle"><span class="pdot"></span>Room<span class="right" id="roomN">—</span></div>
+      <div class="floorrow" id="floorRow"></div>
+      <div class="rowlist" id="roster"></div>
+    </div>
+
+    <div class="glass panel">
+      <div class="ptitle"><span class="pdot"></span>Threads<span class="right">arbiter</span></div>
+      <div id="threads"><div class="stats">no open threads</div></div>
+    </div>
+
+    <div class="glass panel">
+      <div class="ptitle"><span class="pdot"></span>Model context<span class="right" id="ctxStats">—</span></div>
+      <div class="note" id="roomNote">—</div>
+    </div>
+
+    <div class="glass panel">
+      <div class="ptitle"><span class="pdot"></span>Pipeline feed
+        <div class="tabs"><span class="on" data-t="events">EVENTS</span><span data-t="logs">LOG</span></div></div>
+      <div class="events" id="events"></div>
+      <div class="logs" id="logs" style="display:none"></div>
+    </div>
+
+    <div class="glass panel">
+      <div class="ptitle"><span class="pdot"></span>Audio routing</div>
+      <div class="devgrid">
+        <div class="fld"><label>Input (call audio in)</label><select id="devIn"></select></div>
+        <div class="fld"><label>Output (voice to call)</label><select id="devOut"></select></div>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<div class="overlay" id="overlay"><div class="box glass"><div class="spinner"></div>
+  <div style="letter-spacing:3px;font-weight:700">BACKEND OFFLINE</div>
+  <div id="ovMsg" style="color:var(--muted);font-size:12px;margin-top:6px">reconnecting…</div></div></div>
+<div class="modal" id="creatorModal">
+  <div class="glass creator" role="dialog" aria-label="Create agent">
+    <div class="ch"><div class="ttl">NEW AGENT</div>
+      <div class="steps"><b id="stp1" class="on">1 · DESCRIBE</b><b id="stp2">2 · REFINE</b></div>
+      <div class="x" id="crClose" title="Close (Esc)">✕</div></div>
+    <div class="cb" id="crStep1">
+      <div class="preview-row">
+        <div class="av big" id="crAv1">?</div>
+        <div class="row">
+          <div class="fld"><label>Name</label><input class="cin" id="crName" maxlength="40" placeholder="e.g. Gordon"></div>
+          <div class="fld"><label>Voice</label><div style="display:flex;gap:6px"><select id="crVoice" style="flex:1"></select><button class="btn" id="crVoiceUp" title="Import a voice from an audio clip (4-20 s of one person talking, no music)">+ VOICE</button></div><div class="hint" id="crVoiceHint"></div></div>
+        </div>
+      </div>
+      <div class="fld"><label>Who are they? Describe them in your own words</label>
+        <textarea class="cin" id="crDesc" rows="7" placeholder="Angry celebrity chef who roasts everyone's food, secretly soft on beginners, yells about raw chicken, loves a proper beef wellington…"></textarea>
+        <div class="hint">Or <a href="#" id="crHeart">import a heart.md</a> character sheet. The model turns this into a character sheet. Room etiquette, reply length, loop-breaking and no-punching-down rules are added automatically, the same as the built-in agents.</div></div>
+      <div class="busy" id="crBusy" style="display:none"><div class="spinner"></div>interpreting with the local model…</div>
+    </div>
+    <div class="cb" id="crStep2" style="display:none">
+      <div class="preview-row">
+        <div class="av big" id="crAv2">?</div>
+        <div>
+          <div style="display:flex;gap:8px;align-items:center"><span id="crName2" style="font-weight:800;letter-spacing:3px"></span><span class="src" id="crSrc"></span></div>
+          <div class="fld" style="margin-top:6px"><label>Role tags</label><input class="cin" id="crRole" maxlength="80"></div>
+          <div class="swatches" id="crSw" style="margin-top:8px"></div>
+        </div>
+      </div>
+      <div class="row">
+        <div class="fld"><label>Identity (a few words)</label><input class="cin" id="f_identity" maxlength="120"></div>
+        <div class="fld"><label>When baited, they react…</label><input class="cin" id="f_bait" maxlength="160"></div>
+      </div>
+      <div class="fld"><label>Who they are</label><textarea class="cin" id="f_who" rows="3" maxlength="700"></textarea></div>
+      <div class="fld"><label>How they talk</label><textarea class="cin" id="f_talk" rows="2" maxlength="400"></textarea></div>
+      <div class="fld"><label>Their own stuff (favourites, opinions, habits — the more specific the better)</label><textarea class="cin" id="f_canon" rows="2" maxlength="600"></textarea></div>
+      <div class="row">
+        <div class="fld"><label>Interests (they jump in on these)</label><input class="cin" id="crInterests" maxlength="200" placeholder="cooking, football, restaurants"></div>
+        <div class="fld"><label>Talkativeness <span id="crTalkV"></span></label><input type="range" id="crTalk" min="0.1" max="0.8" step="0.05" value="0.35"></div>
+      </div>
+      <div class="fld"><label>Final system prompt (exactly what gets saved — edit freely; <a href="#" id="crRegen">rebuild from fields</a>)</label><textarea class="cin" id="crPrompt" rows="9" spellcheck="false" style="font-family:var(--mono,monospace);font-size:11px"></textarea><div class="hint" id="crPromptHint"></div></div>
+    </div>
+    <div class="cf">
+      <div class="err" id="crErr"></div>
+      <button class="btn" id="crBack" style="display:none">BACK</button>
+      <button class="btn" id="crSkip" title="Use the description as-is without the model">SKIP MODEL</button>
+      <button class="btn primary" id="crNext">INTERPRET →</button>
+      <button class="btn primary" id="crCreate" style="display:none">CREATE &amp; SWITCH</button>
+    </div>
+  </div>
+</div>
+<input type="file" id="crHeartFile" accept=".md,.txt,text/markdown,text/plain" style="display:none">
+<input type="file" id="crVoiceFile" accept="audio/*,.wav,.mp3,.flac,.ogg,.m4a" style="display:none">
+<div class="avtip" id="avTip"></div>
+<div class="toast glass" id="toast"></div>
+<script src="/static/atlas.js"></script>
+</body>
+</html>

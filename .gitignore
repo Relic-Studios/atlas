@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+_bak/
+logs/
+*.log
+private/
+memory_db/
+desktop/node_modules/
+tests/reports/
+*.bak_*
+*.wav.tmp
+agent_state/
+recordings/
+corpus/review_*.html
+user/
+.venv/
+dist/

@@ -1,0 +1,431 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ATLAS · Setup</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="/favicon.ico">
+<style>
+:root{--bg:#0b0d10;--panel:#12161c;--line:#232a33;--fg:#e6edf3;--mut:#8b96a3;--accent:#22d3ee;--ok:#4ade80;--bad:#f87171;--warn:#fbbf24}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font:14px/1.5 "Segoe UI",system-ui,sans-serif}
+.wrap{max-width:760px;margin:0 auto;padding:36px 24px 60px}
+.brand{display:flex;align-items:center;gap:10px;margin-bottom:22px}
+.brand b{letter-spacing:.32em;font-size:18px}
+.brand span{color:var(--mut);font-size:12px}
+.steps{display:flex;gap:6px;margin-bottom:22px}
+.steps i{flex:1;height:4px;border-radius:2px;background:var(--line);transition:background .3s}
+.steps i.on{background:var(--accent)}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:26px 26px 22px}
+h1{font-size:22px;margin:0 0 6px}
+h2{font-size:14px;margin:20px 0 8px;color:var(--mut);font-weight:600;letter-spacing:.04em;text-transform:uppercase}
+p.lead{color:var(--mut);margin:0 0 18px}
+label{display:block;color:var(--mut);font-size:12px;margin:12px 0 5px}
+input,select,textarea{width:100%;background:#0e1217;border:1px solid var(--line);color:var(--fg);border-radius:8px;padding:9px 11px;font:inherit}
+textarea{min-height:110px;resize:vertical}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent)}
+.row{display:flex;gap:12px}.row>*{flex:1}
+.choice{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:6px 0 4px}
+.opt{border:1px solid var(--line);border-radius:12px;padding:16px;cursor:pointer;background:#0e1217;transition:border-color .2s}
+.opt:hover{border-color:#3a4552}.opt.sel{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}
+.opt b{display:block;margin-bottom:4px}.opt small{color:var(--mut)}
+.nav{display:flex;justify-content:space-between;align-items:center;margin-top:22px}
+button{background:var(--accent);color:#04161a;border:0;border-radius:9px;padding:10px 18px;font:600 14px inherit;cursor:pointer}
+button.ghost{background:transparent;color:var(--mut);border:1px solid var(--line)}
+button:disabled{opacity:.45;cursor:default}
+.note{font-size:12px;color:var(--mut);margin-top:8px}
+.msg{margin-top:12px;padding:10px 12px;border-radius:8px;font-size:13px;display:none}
+.msg.ok{display:block;background:rgba(74,222,128,.08);border:1px solid rgba(74,222,128,.35);color:var(--ok)}
+.msg.bad{display:block;background:rgba(248,113,113,.08);border:1px solid rgba(248,113,113,.35);color:var(--bad)}
+.msg.info{display:block;background:rgba(34,211,238,.06);border:1px solid rgba(34,211,238,.3);color:var(--accent)}
+.bar{height:8px;background:#0e1217;border:1px solid var(--line);border-radius:5px;overflow:hidden;margin-top:10px}
+.bar i{display:block;height:100%;width:0;background:var(--accent);transition:width .4s}
+.kv{display:grid;grid-template-columns:140px 1fr;gap:4px 12px;font-size:13px;margin:6px 0}
+.kv span:nth-child(odd){color:var(--mut)}
+a{color:var(--accent)}
+.drop{border:1.5px dashed #3a4552;border-radius:12px;padding:22px;text-align:center;color:var(--mut);cursor:pointer}
+.drop.has{border-color:var(--accent);color:var(--fg)}
+.hide{display:none!important}
+.pill{display:inline-block;font-size:11px;padding:2px 8px;border-radius:99px;border:1px solid var(--line);color:var(--mut)}
+.pill.ok{color:var(--ok);border-color:rgba(74,222,128,.4)}.pill.bad{color:var(--bad);border-color:rgba(248,113,113,.4)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand"><b>ATLAS</b><span>first-time setup</span></div>
+  <div class="steps" id="steps"></div>
+
+  <!-- 0 welcome -->
+  <section class="card step" data-step="0">
+    <h1>Welcome to ATLAS</h1>
+    <p class="lead">A voice companion that joins your calls, listens, and talks back in a voice you choose.
+      Everything runs on this computer unless you link a cloud model yourself. No accounts, no hidden keys.</p>
+    <div class="kv" id="sysinfo"></div>
+    <p class="note">Setup takes about five minutes: pick a brain, pick your microphone and speakers,
+      give your agent a voice, and describe who they are.</p>
+    <div class="nav"><span></span><button onclick="go(1)">Get started</button></div>
+  </section>
+
+  <!-- 1 brain -->
+  <section class="card step hide" data-step="1">
+    <h1>Choose a brain</h1>
+    <p class="lead">The language model that decides what your agent says.</p>
+    <div class="choice">
+      <div class="opt" id="optLocal" onclick="pickMode('local')"><b>On this computer</b>
+        <small>Free and private. Uses your GPU through Ollama.</small></div>
+      <div class="opt" id="optCloud" onclick="pickMode('cloud')"><b>Cloud provider</b>
+        <small>Faster on small GPUs. Bring your own API key.</small></div>
+    </div>
+
+    <div id="localPane" class="hide">
+      <h2>Ollama <span class="pill" id="olPill">checking…</span></h2>
+      <div id="olMissing" class="hide">
+        <p class="note">Ollama runs local models. Install it, then come back here (this page checks every few seconds).</p>
+        <div class="row" style="margin-top:8px">
+          <button class="ghost" onclick="installOllama()">Install with winget</button>
+          <button class="ghost" onclick="window.open('https://ollama.com/download','_blank')">Download page</button>
+        </div>
+      </div>
+      <div id="olReady" class="hide">
+        <label>Model</label>
+        <select id="localModel"></select>
+        <p class="note" id="recNote"></p>
+        <div id="pullBox" class="hide"><div class="bar"><i id="pullBar"></i></div><p class="note" id="pullTxt"></p></div>
+      </div>
+    </div>
+
+    <div id="cloudPane" class="hide">
+      <label>Provider</label>
+      <select id="prov" onchange="provChanged()"></select>
+      <p class="note" id="provKeys"></p>
+      <div class="row">
+        <div><label>Model</label><input id="cModel" placeholder="model id"></div>
+        <div><label>API key</label><input id="cKey" type="password" placeholder="sk-…" autocomplete="off"></div>
+      </div>
+      <label>Endpoint</label><input id="cUrl">
+      <p class="note">Your key is stored only on this computer (user/settings.json) and sent only to the provider you pick.</p>
+    </div>
+    <div class="msg" id="brainMsg"></div>
+    <div class="nav"><button class="ghost" onclick="go(0)">Back</button>
+      <button id="brainBtn" onclick="saveBrain()" disabled>Continue</button></div>
+  </section>
+
+  <!-- 2 audio -->
+  <section class="card step hide" data-step="2">
+    <h1>Microphone and speakers</h1>
+    <p class="lead">What your agent hears and where it talks. For Discord calls, pick a virtual cable
+      (e.g. VB-Audio / Voicemeeter) on both sides; for a normal chat, your headset is perfect.</p>
+    <div class="row">
+      <div><label>Listen on (input)</label><select id="inDev"></select></div>
+      <div><label>Speak on (output)</label><select id="outDev"></select></div>
+    </div>
+    <p class="note">Headphones are best: with open speakers the agent may hear itself (echo cancellation helps, but not perfectly).</p>
+    <div class="msg" id="audioMsg"></div>
+    <div class="nav"><button class="ghost" onclick="go(1)">Back</button><button onclick="saveAudio()">Continue</button></div>
+  </section>
+
+  <!-- 3 voice -->
+  <section class="card step hide" data-step="3">
+    <h1>Give your agent a voice</h1>
+    <p class="lead">Upload 5–20 seconds of one person speaking clearly with no music. ATLAS clones the voice locally.
+      Only use voices you have permission to use.</p>
+    <div class="drop" id="drop" onclick="document.getElementById('vFile').click()">Drop an audio file here or click to choose (wav, mp3, m4a, ogg, flac)</div>
+    <input type="file" id="vFile" accept="audio/*,.wav,.mp3,.m4a,.ogg,.flac" class="hide" onchange="fileChosen(this.files[0])">
+    <div class="row">
+      <div><label>Voice name</label><input id="vName" placeholder="e.g. Sam"></div>
+    </div>
+    <label>What is said in the clip (optional — makes the clone closer)</label>
+    <textarea id="vText" style="min-height:60px" placeholder="Type the words spoken in the clip"></textarea>
+    <div class="msg" id="voiceMsg"></div>
+    <div class="nav"><button class="ghost" onclick="go(2)">Back</button>
+      <span><button class="ghost" onclick="skipVoice()">Skip (default voice)</button>
+      <button id="voiceBtn" onclick="importVoice()" disabled>Import voice</button></span></div>
+  </section>
+
+  <!-- 4 persona -->
+  <section class="card step hide" data-step="4">
+    <h1>Who is your agent?</h1>
+    <p class="lead">Describe them in your own words and ATLAS drafts a personality you can edit.
+      Or import a <code>heart.md</code> character file.</p>
+    <div class="row">
+      <div><label>Name</label><input id="pName" placeholder="e.g. Juniper"></div>
+      <div><label>Voice</label><select id="pVoice"></select></div>
+    </div>
+    <label>Describe them</label>
+    <textarea id="pDesc" placeholder="A dry-humoured night-owl astronomer who loves bad puns, old sci-fi, and rooting for the underdog. Warm but teases people who take themselves too seriously."></textarea>
+    <div class="row" style="margin-top:10px">
+      <button class="ghost" onclick="document.getElementById('hFile').click()">Import heart.md</button>
+      <button id="draftBtn" onclick="draft()">Draft personality</button>
+    </div>
+    <input type="file" id="hFile" accept=".md,text/markdown,text/plain" class="hide" onchange="heartChosen(this.files[0])">
+    <div id="draftBox" class="hide">
+      <label>Personality prompt (edit freely, this is exactly what the model reads)</label>
+      <textarea id="pPrompt" style="min-height:240px"></textarea>
+      <div class="row"><div><label>Interests (comma separated)</label><input id="pInt"></div>
+        <div><label>Talkativeness</label><input id="pTalk" type="range" min="0.1" max="0.9" step="0.05" value="0.35"></div></div>
+    </div>
+    <div class="msg" id="personaMsg"></div>
+    <div class="nav"><button class="ghost" onclick="go(3)">Back</button>
+      <button id="createBtn" onclick="createAgent()" disabled>Create agent</button></div>
+  </section>
+
+  <!-- 5 done -->
+  <section class="card step hide" data-step="5">
+    <h1>All set</h1>
+    <p class="lead" id="doneTxt">ATLAS will restart once to load your choices, then open the dashboard.</p>
+    <div class="kv" id="summary"></div>
+    <p class="note">You can change any of this later: the dashboard has a Settings button, and new agents come from the + in the dock.</p>
+    <div class="msg" id="doneMsg"></div>
+    <div class="nav"><button class="ghost" onclick="go(4)">Back</button><button id="finishBtn" onclick="finish()">Open ATLAS</button></div>
+  </section>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const N = 6;
+let S = {}, mode = null, voiceFile = null, draftData = null;
+let W = JSON.parse(localStorage.getItem('atlas.setup') || '{}');  // survives the restart
+const saveW = () => localStorage.setItem('atlas.setup', JSON.stringify(W));
+$('steps').innerHTML = Array.from({length: N}, () => '<i></i>').join('');
+
+function msg(id, kind, text) { const e = $(id); e.className = 'msg ' + kind; e.textContent = text; }
+function clearMsg(id) { $(id).className = 'msg'; }
+async function api(path, opts = {}) {
+  const r = await fetch(path, opts);
+  let j = {}; try { j = await r.json(); } catch (_) {}
+  if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+  return j;
+}
+const post = (path, body) => api(path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body || {})});
+
+function go(n) {
+  W.step = n; saveW();
+  document.querySelectorAll('.step').forEach((s) => s.classList.toggle('hide', +s.dataset.step !== n));
+  document.querySelectorAll('#steps i').forEach((b, i) => b.classList.toggle('on', i <= n));
+  if (n === 1) refreshBrain();
+  if (n === 4) fillVoices();
+  if (n === 5) fillSummary();
+}
+
+async function load() {
+  S = await api('/api/setup/status');
+  const g = S.gpu || {};
+  $('sysinfo').innerHTML =
+    `<span>GPU</span><span>${g.name ? `${esc(g.name)} · ${g.total_gb} GB` : 'none detected (ATLAS needs an NVIDIA GPU)'}</span>` +
+    `<span>Ollama</span><span>${S.ollama.running ? 'running ' + (S.ollama.version || '') : (S.ollama.installed ? 'installed, not running' : 'not installed')}</span>`;
+  // providers
+  $('prov').innerHTML = Object.entries(S.providers).map(([k, v]) => `<option value="${k}">${esc(v.label)}</option>`).join('');
+  const cloud = ((S.settings.llm || {}).cloud) || {};
+  if (cloud.provider) $('prov').value = cloud.provider;
+  provChanged(cloud);
+  // audio
+  const opts = (list, sel) => list.map((d) => `<option value="${esc(d.name)}"${d.name === sel ? ' selected' : ''}>${esc(d.name)}</option>`).join('');
+  const a = S.settings.audio || {};
+  $('inDev').innerHTML = '<option value="">System default</option>' + opts(S.devices.inputs || [], a.input);
+  $('outDev').innerHTML = '<option value="">System default</option>' + opts(S.devices.outputs || [], a.output);
+  const m = (S.settings.llm || {}).mode;
+  if (m) pickMode(m === 'cloud' ? 'cloud' : 'local');
+}
+function esc(s) { return String(s ?? '').replace(/[&<>"]/g, (c) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c])); }
+
+// ---------------- brain ----------------
+function pickMode(m) {
+  mode = m;
+  $('optLocal').classList.toggle('sel', m === 'local');
+  $('optCloud').classList.toggle('sel', m === 'cloud');
+  $('localPane').classList.toggle('hide', m !== 'local');
+  $('cloudPane').classList.toggle('hide', m !== 'cloud');
+  clearMsg('brainMsg'); refreshBrain();
+}
+function provChanged(saved) {
+  const p = S.providers[$('prov').value]; if (!p) return;
+  saved = saved && saved.provider === $('prov').value ? saved : {};
+  $('cModel').value = saved.model || p.model;
+  $('cUrl').value = saved.base_url || p.base_url;
+  $('cKey').placeholder = saved.has_key ? `saved key ${saved.key_hint || ''} (leave empty to keep)` : 'sk-…';
+  $('provKeys').innerHTML = p.keys ? `Get a key: <a href="${p.keys}" target="_blank">${esc(p.keys)}</a>` : 'Any OpenAI-compatible server (vLLM, LM Studio, llama.cpp server).';
+  $('brainBtn').disabled = mode !== 'cloud' ? $('brainBtn').disabled : false;
+}
+let olTimer = null;
+async function refreshBrain() {
+  if (mode !== 'local') { $('brainBtn').disabled = mode !== 'cloud'; return; }
+  try { S = await api('/api/setup/status'); } catch (_) { return; }
+  const ol = S.ollama, ready = ol.running;
+  $('olPill').textContent = ready ? 'running' : (ol.installed ? 'installed · start it' : 'not installed');
+  $('olPill').className = 'pill ' + (ready ? 'ok' : 'bad');
+  $('olMissing').classList.toggle('hide', ready);
+  $('olReady').classList.toggle('hide', !ready);
+  if (ready && !$('localModel').options.length) {
+    const have = new Set(ol.models), rec = S.recommended.model;
+    const ladder = S.local_models.map((m) => m.model);
+    const extra = ol.models.filter((m) => !ladder.includes(m) && !/embed/i.test(m));
+    $('localModel').innerHTML = S.local_models.map((m) =>
+      `<option value="${m.model}"${m.model === (((S.settings.llm || {}).local || {}).model || rec) ? ' selected' : ''}>${esc(m.label)}${have.has(m.model) ? ' · installed' : ''}${m.model === rec ? ' · recommended' : ''}</option>`).join('') +
+      extra.map((m) => `<option value="${esc(m)}">${esc(m)} · installed</option>`).join('');
+    const r = S.recommended || {};
+    $('recNote').textContent = !S.gpu.total_gb
+      ? "No NVIDIA GPU found. The voice engine needs one, so ATLAS can't speak on this PC yet."
+      : (r.fits === false ? `Your ${S.gpu.total_gb} GB GPU is below the local minimum (~11.5 GB total: ~6 GB for voice and listening plus ~5 GB for the smallest model that holds a conversation). A cloud provider will work much better.`
+                          : `Recommended for your ${S.gpu.total_gb} GB GPU (voice and listening use ~6 GB of it). Smaller models were tested and can't keep up with a group call.`);
+  }
+  const p = S.pull;
+  if (p && p.model && !['idle'].includes(p.status)) showPull(p);
+  $('brainBtn').disabled = !ready || (p && p.status !== 'success' && p.status !== 'idle' && p.status !== 'error');
+  clearTimeout(olTimer);
+  if (W.step === 1 && mode === 'local') olTimer = setTimeout(refreshBrain, ready ? 1500 : 4000);
+}
+function showPull(p) {
+  $('pullBox').classList.remove('hide');
+  $('pullBar').style.width = (p.status === 'success' ? 100 : p.pct) + '%';
+  const gb = (b) => (b / 1e9).toFixed(1);
+  $('pullTxt').textContent = p.status === 'success' ? `${p.model} downloaded.` :
+    p.status === 'error' ? `Download failed: ${p.error}` :
+    `Downloading ${p.model}: ${p.status}${p.total ? ` · ${gb(p.completed)} / ${gb(p.total)} GB (${p.pct}%)` : ''}`;
+}
+async function installOllama() {
+  try { await post('/api/setup/ollama/install'); msg('brainMsg', 'info', 'Installer started in a new window. Finish it, then this page continues by itself.'); }
+  catch (e) { msg('brainMsg', 'bad', e.message); }
+}
+async function saveBrain() {
+  clearMsg('brainMsg'); $('brainBtn').disabled = true;
+  try {
+    if (mode === 'local') {
+      const model = $('localModel').value;
+      if (!S.ollama.models.includes(model)) {
+        if (!(S.pull && S.pull.model === model && S.pull.status === 'success')) {
+          await post('/api/setup/ollama/pull', {model});
+          msg('brainMsg', 'info', 'Downloading the model. This only happens once.');
+          await waitPull(model);
+        }
+      }
+      await post('/api/setup/llm', {mode: 'local', model});
+      W.brain = 'Local · ' + model;
+    } else {
+      msg('brainMsg', 'info', 'Testing the connection…');
+      const r = await post('/api/setup/llm', {mode: 'cloud', provider: $('prov').value, model: $('cModel').value.trim(),
+        base_url: $('cUrl').value.trim(), api_key: $('cKey').value.trim()});
+      $('cKey').value = '';
+      W.brain = `${S.providers[$('prov').value].label} · ${$('cModel').value.trim()} (${r.ms} ms)`;
+    }
+    // Load the new brain now so the persona drafter (step 5) uses it.
+    W.step = 2; saveW();
+    msg('brainMsg', 'info', 'Loading your model (restarting ATLAS, about a minute)…');
+    await restartAndWait();
+    go(2);
+  } catch (e) { msg('brainMsg', 'bad', e.message); }
+  $('brainBtn').disabled = false;
+}
+async function waitPull(model) {
+  for (;;) {
+    const p = (await api('/api/setup/ollama/pull')).pull; showPull(p);
+    if (p.status === 'success') return;
+    if (p.status === 'error') throw new Error('Download failed: ' + p.error);
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+}
+
+async function restartAndWait() {
+  await post('/api/setup/restart').catch(() => {});
+  await new Promise((r) => setTimeout(r, 3000));
+  for (let i = 0; i < 600; i++) {
+    try { S = await api('/api/setup/status'); return; } catch (_) {}
+    await new Promise((r) => setTimeout(r, 1500));
+  }
+}
+
+// ---------------- audio ----------------
+async function saveAudio() {
+  try {
+    await post('/api/setup/audio', {input: $('inDev').value || null, output: $('outDev').value || null});
+    W.audio = `${$('inDev').value || 'default mic'} → ${$('outDev').value || 'default speakers'}`; W.restart = true; saveW(); go(3);
+  } catch (e) { msg('audioMsg', 'bad', e.message); }
+}
+
+// ---------------- voice ----------------
+const drop = $('drop');
+['dragover', 'dragenter'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add('has'); }));
+drop.addEventListener('drop', (e) => { e.preventDefault(); fileChosen(e.dataTransfer.files[0]); });
+function fileChosen(f) {
+  if (!f) return; voiceFile = f; drop.classList.add('has');
+  drop.textContent = `${f.name} · ${(f.size / 1e6).toFixed(1)} MB`;
+  if (!$('vName').value) $('vName').value = f.name.replace(/\.[^.]+$/, '').slice(0, 30);
+  $('voiceBtn').disabled = false;
+}
+async function importVoice() {
+  if (!voiceFile) return; $('voiceBtn').disabled = true; msg('voiceMsg', 'info', 'Cleaning and importing…');
+  try {
+    const q = new URLSearchParams({label: $('vName').value.trim() || 'my voice', filename: voiceFile.name, transcript: $('vText').value.trim()});
+    const r = await api('/api/voices/import?' + q, {method: 'POST', body: await voiceFile.arrayBuffer()});
+    W.voice = r.key; W.voices = r.voices; saveW();
+    msg('voiceMsg', 'ok', `Voice "${W.voice}" ready.`); setTimeout(() => go(4), 600);
+  } catch (e) { msg('voiceMsg', 'bad', e.message); }
+  $('voiceBtn').disabled = false;
+}
+function skipVoice() { W.voice = ''; saveW(); go(4); }
+
+// ---------------- persona ----------------
+async function fillVoices() {
+  try { S = await api('/api/setup/status'); } catch (_) {}
+  const v = S.voices || [];
+  $('pVoice').innerHTML = (v.length ? '' : '<option value="">Default voice</option>') +
+    v.map((x) => `<option value="${esc(x)}"${x === W.voice ? ' selected' : ''}>${esc(x)}</option>`).join('');
+}
+async function draft() {
+  const name = $('pName').value.trim(), description = $('pDesc').value.trim();
+  if (name.length < 2 || description.length < 10) return msg('personaMsg', 'bad', 'Give a name and a sentence or two about them.');
+  $('draftBtn').disabled = true; msg('personaMsg', 'info', 'Drafting… (uses the brain you picked)');
+  try { showDraft(await post('/api/agents/draft', {name, description, voice: $('pVoice').value}));
+    msg('personaMsg', draftData.source === 'llm' ? 'ok' : 'info', draftData.source === 'llm' ? 'Draft ready. Edit anything you like.' :
+      'Your model is not loaded yet, so this is a plain template from your description. Edit it, or come back after the restart to redraft.');
+  } catch (e) { msg('personaMsg', 'bad', e.message); }
+  $('draftBtn').disabled = false;
+}
+function showDraft(d) {
+  draftData = d; $('draftBox').classList.remove('hide');
+  if (d.name) $('pName').value = d.name;
+  $('pPrompt').value = d.prompt || ''; $('pInt').value = (d.interests || []).join(', ');
+  $('pTalk').value = d.talkativeness ?? 0.35; $('createBtn').disabled = false;
+}
+async function heartChosen(f) {
+  if (!f) return;
+  try { showDraft(await post('/api/agents/heart', {text: await f.text(), name: $('pName').value, voice: $('pVoice').value}));
+    msg('personaMsg', 'ok', 'Imported ' + f.name); } catch (e) { msg('personaMsg', 'bad', e.message); }
+}
+async function createAgent() {
+  const d = draftData || {}; $('createBtn').disabled = true;
+  try {
+    const r = await post('/api/agents', {...d, name: $('pName').value.trim(), voice: $('pVoice').value,
+      prompt: $('pPrompt').value, interests: $('pInt').value.split(',').map((s) => s.trim()).filter(Boolean),
+      talkativeness: +$('pTalk').value, fields: undefined});
+    W.agent = (r.agent || {}).id; W.agentName = $('pName').value.trim(); saveW(); go(5);
+  } catch (e) { msg('personaMsg', 'bad', e.message); $('createBtn').disabled = false; }
+}
+
+// ---------------- done ----------------
+function fillSummary() {
+  $('summary').innerHTML = `<span>Brain</span><span>${esc(W.brain || 'unchanged')}</span>` +
+    `<span>Audio</span><span>${esc(W.audio || 'system default')}</span>` +
+    `<span>Voice</span><span>${esc(W.voice || 'default')}</span>` +
+    `<span>Agent</span><span>${esc(W.agentName || 'not created')}</span>`;
+  $('finishBtn').disabled = !W.agent;
+  if (!W.agent) msg('doneMsg', 'bad', 'Create an agent first (step 5).');
+}
+async function finish() {
+  $('finishBtn').disabled = true;
+  try {
+    await post('/api/setup/complete', {agent: W.agent});
+    msg('doneMsg', 'info', 'Restarting ATLAS with your settings…');
+    localStorage.removeItem('atlas.setup');
+    await post('/api/setup/restart').catch(() => {});
+    // The desktop app relaunches the backend itself; in a browser, wait for it.
+    for (let i = 0; i < 600; i++) {
+      await new Promise((r) => setTimeout(r, 1500));
+      try { const s = await api('/api/setup/status'); if (!s.setup_needed) { location.href = '/static/atlas.html'; return; } } catch (_) {}
+    }
+  } catch (e) { msg('doneMsg', 'bad', e.message); $('finishBtn').disabled = false; }
+}
+
+load().then(() => go(W.step || 0)).catch((e) => document.body.insertAdjacentHTML('beforeend', `<p style="color:#f87171;text-align:center">${esc(e.message)}</p>`));
+</script>
+</body>
+</html>

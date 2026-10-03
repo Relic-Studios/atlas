@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ATLAS</title>
+<style>
+  :root { --bg:#0b0d10; --cyan:#22d3ee; --indigo:#5b6cf0; --violet:#8b5cf6; --muted:#7b8494; }
+  * { box-sizing:border-box; }
+  html,body { height:100%; margin:0; }
+  body {
+    background: radial-gradient(900px 500px at 50% 30%, #141a24 0%, var(--bg) 65%);
+    color:#d6dbe3; font-family:'Inter',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+    display:grid; place-items:center; -webkit-font-smoothing:antialiased;
+  }
+  .wrap { text-align:center; padding:0 32px; }
+  .mark {
+    width:64px; height:64px; margin:0 auto 24px; border-radius:18px;
+    background:linear-gradient(135deg,var(--indigo),var(--violet));
+    box-shadow:0 0 40px rgba(91,108,240,.45);
+    animation:breathe 2.4s ease-in-out infinite;
+  }
+  @keyframes breathe { 0%,100%{transform:scale(1);opacity:.85} 50%{transform:scale(1.08);opacity:1} }
+  .name { font-size:26px; letter-spacing:8px; font-weight:600; }
+  .sub { font-size:11px; letter-spacing:3px; text-transform:uppercase; color:var(--muted); margin-top:6px; }
+  .status { margin-top:36px; font-size:13px; color:var(--muted); letter-spacing:1px; }
+  .status .dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--cyan); margin-right:8px; animation:pulse 1.2s ease-in-out infinite; vertical-align:middle; }
+  @keyframes pulse { 50% { opacity:.3; } }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="mark"></div>
+    <div class="name">ATLAS</div>
+    <div class="sub">Local Voice Intelligence</div>
+    <div class="status"><span class="dot"></span><span id="status">Initializing local models…</span></div>
+    <pre id="err" style="display:none;max-width:860px;max-height:300px;overflow:auto;text-align:left;margin:22px auto 0;padding:12px 14px;border-radius:10px;background:#11151c;border:1px solid #2a2f3a;color:#f0a3a3;font:11px/1.45 ui-monospace,Consolas,monospace;white-space:pre-wrap"></pre>
+    <a id="restart" href="atlas://restart" style="display:none;margin-top:18px;padding:9px 18px;border-radius:9px;background:linear-gradient(135deg,var(--indigo),var(--violet));color:#fff;text-decoration:none;font-size:13px;letter-spacing:1px">Restart backend</a>
+  </div>
+</body>
+</html>
