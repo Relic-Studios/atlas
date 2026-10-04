@@ -1,0 +1,58 @@
+{
+ "title": "Game night",
+ "voices": {
+  "Sam": "en_US-joe-medium",
+  "Riley": "en_US-kristin-medium"
+ },
+ "lead_in_s": 3.0,
+ "tail_s": 4.0,
+ "reply_timeout_s": 12.0,
+ "lines": [
+  {
+   "who": "Sam",
+   "text": "Hey {N}, you there? It's Sam.",
+   "gap_s": 0.6
+  },
+  {
+   "who": "Riley",
+   "text": "Hi {N}, I'm Riley. We're trying to pick a game for tonight.",
+   "wait_reply": true,
+   "gap_s": 0.6
+  },
+  {
+   "who": "Sam",
+   "text": "Riley, did you finish the update yet?",
+   "wait_reply": true,
+   "gap_s": 0.8
+  },
+  {
+   "who": "Riley",
+   "text": "Almost. Like two more minutes.",
+   "gap_s": 0.6
+  },
+  {
+   "who": "Sam",
+   "text": "Okay {N}, settle it. Co-op or competitive, for four people?",
+   "gap_s": 1.2
+  },
+  {
+   "who": "Riley",
+   "text": "Something short though, I have work early.",
+   "wait_reply": true,
+   "gap_s": 0.6
+  },
+  {
+   "who": "Sam",
+   "text": "Alright {N}, quick test. What's my name?",
+   "wait_reply": true,
+   "gap_s": 0.7,
+   "reply_timeout_s": 5.0
+  },
+  {
+   "who": "Riley",
+   "text": "Nice. Okay, loading in.",
+   "wait_reply": true,
+   "gap_s": 0.7
+  }
+ ]
+}

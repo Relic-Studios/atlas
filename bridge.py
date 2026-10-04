@@ -27,7 +27,8 @@ STT_RATE = 16000
 class CallBridge:
     def __init__(self, *, enable_aec: bool = True, self_reference_audio: str | None = None,
                  input_device=None, output_device=None):
-        from audio_io import CallAudio
+        from demo_call import call_audio_class   # virtual device in demo/sim calls
+        CallAudio = call_audio_class()  # noqa: N806
         self.enable_aec = enable_aec
         self.input_device = input_device
         self.output_device = output_device
@@ -166,6 +167,10 @@ class CallBridge:
     def reconfigure(self, *, input_device=None, output_device=None) -> None:
         """Close and reopen the audio path with new in/out devices (hot-swap)."""
         from audio_io import CallAudio
+        import demo_call
+        if demo_call.enabled():
+            log.info("[bridge] demo call active: device change ignored")
+            return
         self.input_device = input_device
         self.output_device = output_device
         self.call_audio.close()

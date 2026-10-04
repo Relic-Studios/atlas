@@ -22,13 +22,22 @@ jobs:
           echo "VERSION=$V" >> "$GITHUB_ENV"
       - name: Syntax check (every .py compiles)
         run: python -m compileall -q -x "(\.venv|node_modules)" .
+      - name: Dependency vulnerability gate
+        # PYSEC-2026-3740 (nltk, no fix released): TransitionParser model-path APIs that
+        # ATLAS never calls. Accepted; see SECURITY.md. Any other known CVE fails the build.
+        run: |
+          python -m pip install --quiet pip-audit
+          python -m pip_audit -r requirements-public.txt --ignore-vuln PYSEC-2026-3740 --progress-spinner off
       - name: Inno Setup
         run: |
           if (-not (Test-Path "C:\Program Files (x86)\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
       - name: Build installer
         run: python tools/build_installer.py --version $env:VERSION --ref $env:GITHUB_SHA --iscc "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+      - name: Checksums
+        shell: bash
+        run: cd dist && sha256sum ATLAS-Setup-*.exe > SHA256SUMS.txt && cat SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
-        with: {name: "ATLAS-Setup-${{ env.VERSION }}", path: "dist/ATLAS-Setup-*.exe"}
+        with: {name: "ATLAS-Setup-${{ env.VERSION }}", path: "dist/*"}
       - name: Release
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
@@ -37,7 +46,7 @@ jobs:
           NOTES=$(awk "/^## \[?${VERSION}/{f=1;next} /^## /{f=0} f" CHANGELOG.md)
           # Publishing a prepared draft also pushes the tag: refresh its .exe instead of failing.
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" dist/ATLAS-Setup-*.exe --clobber
+            gh release upload "$GITHUB_REF_NAME" dist/ATLAS-Setup-*.exe dist/SHA256SUMS.txt --clobber
           else
-            gh release create "$GITHUB_REF_NAME" dist/ATLAS-Setup-*.exe --title "ATLAS $VERSION" --notes "${NOTES:-See CHANGELOG.md}"
+            gh release create "$GITHUB_REF_NAME" dist/ATLAS-Setup-*.exe dist/SHA256SUMS.txt --title "ATLAS $VERSION" --notes "${NOTES:-See CHANGELOG.md}"
           fi

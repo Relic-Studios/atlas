@@ -74,7 +74,7 @@ if (-not (Test-Path $VPy)) {
     $exe = $py[0]; $rest = @(); if ($py.Count -gt 1) { $rest = $py[1..($py.Count - 1)] }
     Run $exe ($rest + @('-m', 'venv', $Venv))
 }
-Run $VPy @('-m', 'pip', 'install', '--upgrade', 'pip', 'wheel', '--quiet')
+Run $VPy @('-m', 'pip', 'install', '--upgrade', 'pip', 'wheel', 'setuptools>=83', '--quiet')
 Ok '.venv ready'
 
 # 3. PyTorch ---------------------------------------------------------------

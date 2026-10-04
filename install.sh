@@ -44,7 +44,7 @@ ok "python: $(python3.12 --version)"
 step 2 "Private Python environment (.venv)"
 VPY="$ROOT/.venv/bin/python"
 [ -x "$VPY" ] || run python3.12 -m venv "$ROOT/.venv"
-run "$VPY" -m pip install --upgrade pip wheel --quiet
+run "$VPY" -m pip install --upgrade pip wheel "setuptools>=83" --quiet
 ok ".venv ready"
 
 step 3 "PyTorch"

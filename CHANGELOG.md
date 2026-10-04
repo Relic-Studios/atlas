@@ -22,6 +22,20 @@
   junk above 16 kHz), and loud syllables are smoothly limited instead of hard-clipped, which caused
   crackle.
 
+**Security**
+- The local server only accepts requests from ATLAS itself. Before, any web page you visited could
+  call its API or open its WebSocket and read live transcripts. Host-header checks block DNS
+  rebinding; browser Origins are checked on every WebSocket and every state-changing request;
+  security headers are sent on every response.
+- The server listens on this computer only (127.0.0.1).
+- Your cloud API key is encrypted at rest (Windows DPAPI; owner-only file permissions on Linux) and
+  never returned by the API.
+- Desktop window is sandboxed; links open in your browser; microphone access is granted only to ATLAS.
+- Oversized voice uploads are refused before they are read into memory.
+- Dependencies updated to clear 42 known vulnerabilities (Pillow, requests, sentence-transformers,
+  setuptools). Release builds now fail if any new known vulnerability appears, and ship SHA-256
+  checksums.
+
 **Fixes**
 - Large memory batches could crash the embedder cache.
 - An agent whose voice file was missing could stop the first boot.

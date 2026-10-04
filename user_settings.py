@@ -63,19 +63,38 @@ def is_public() -> bool:
     return not (ROOT / "dev_pack").is_dir()
 
 
+def _cloud_block(d: dict):
+    c = (d.get("llm") or {}).get("cloud") if isinstance(d.get("llm"), dict) else None
+    return c if isinstance(c, dict) else None
+
+
 def load() -> dict:
+    """Settings with the cloud key decrypted (it is stored DPAPI-protected on Windows)."""
     try:
         d = json.loads(PATH.read_text(encoding="utf-8"))
-        return d if isinstance(d, dict) else {}
+        d = d if isinstance(d, dict) else {}
     except (OSError, ValueError):
         return {}
+    c = _cloud_block(d)
+    if c and c.get("api_key"):
+        import security
+        c["api_key"] = security.unprotect(c["api_key"])
+    return d
 
 
 def save(data: dict) -> None:
+    import copy
+    import security
+    data = copy.deepcopy(data)
+    c = _cloud_block(data)
+    if c and c.get("api_key"):
+        c["api_key"] = security.protect(c["api_key"])
     with _LOCK:
         PATH.parent.mkdir(parents=True, exist_ok=True)
         tmp = PATH.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        if os.name != "nt":
+            os.chmod(tmp, 0o600)            # the key is plaintext off Windows: owner-only file
         os.replace(tmp, PATH)
 
 

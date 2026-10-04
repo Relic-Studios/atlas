@@ -1,5 +1,5 @@
 /* ATLAS desktop shell — spawns the Python backend, waits for it, then loads the UI. */
-const { app, BrowserWindow, session, globalShortcut } = require('electron');
+const { app, BrowserWindow, session, globalShortcut, shell } = require('electron');
 const { spawn, spawnSync } = require('child_process');
 const path = require('path');
 const http = require('http');
@@ -118,13 +118,20 @@ async function createWindow() {
     backgroundColor: '#0b0d10',
     autoHideMenuBar: true,
     title: 'ATLAS',
-    webPreferences: { contextIsolation: true, nodeIntegration: false },
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true },
     show: false,
   });
   await mainWindow.loadFile(path.join(__dirname, 'splash.html'));
   mainWindow.once('ready-to-show', () => mainWindow.show());
+  // Security: the window may only show ATLAS's own pages. Anything else (a link in
+  // a transcript, a provider's key page) opens in the user's browser instead.
+  const appOrigin = new URL(APP_URL).origin;
+  const isAppUrl = (u) => { try { const x = new URL(u); return x.origin === appOrigin || x.protocol === 'file:'; } catch (_) { return false; } };
+  const openOutside = (u) => { try { const x = new URL(u); if (x.protocol === 'https:' || x.protocol === 'http:') shell.openExternal(x.href); } catch (_) {} };
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => { openOutside(url); return { action: 'deny' }; });
   mainWindow.webContents.on('will-navigate', (ev, url) => {
-    if (url.startsWith('atlas://restart')) { ev.preventDefault(); restartBackend(); }
+    if (url.startsWith('atlas://restart')) { ev.preventDefault(); restartBackend(); return; }
+    if (!isAppUrl(url)) { ev.preventDefault(); openOutside(url); }
   });
 
   const ok = await waitForBackend();
@@ -137,8 +144,12 @@ async function createWindow() {
 
 app.whenReady().then(async () => {
   // Grant microphone/media permission (getUserMedia in the renderer).
-  session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) => {
-    cb(permission === 'media' || permission === 'mediaKeySystem');
+  // Microphone only, and only for ATLAS's own pages.
+  const appOrigin = new URL(APP_URL).origin;
+  session.defaultSession.setPermissionRequestHandler((wc, permission, cb) => {
+    let own = false;
+    try { own = new URL(wc.getURL()).origin === appOrigin; } catch (_) {}
+    cb(own && (permission === 'media' || permission === 'mediaKeySystem'));
   });
 
   // Reuse a backend that is already running; otherwise start our own.

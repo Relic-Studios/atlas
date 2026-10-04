@@ -42,7 +42,6 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.responses import HTMLResponse, Response, FileResponse
 
@@ -270,14 +269,14 @@ async def setup_restart(request: Request):
     threading.Thread(target=_bye, daemon=True).start()
     return {"ok": True}
 
-# Enable CORS if needed
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Local-server hardening (security.py): Host allowlist (DNS rebinding), browser
+# Origin check on WebSockets and state-changing requests (cross-site pages),
+# security headers. Replaces the old wildcard CORS, which let any web
+# page drive the API. Same-origin UI needs no CORS at all.
+import security as _security  # noqa: E402
+import user_settings as _us_sec  # noqa: E402
+_LAN = (os.environ.get("ATLAS_HOST", "").strip() or ("127.0.0.1" if _us_sec.is_public() else "0.0.0.0")) not in ("127.0.0.1", "localhost", "::1")
+app.add_middleware(_security.LocalGuard, lan=_LAN)
 
 # Mount static files with no cache
 app.mount("/static", NoCacheStaticFiles(directory="static"), name="static")
@@ -529,6 +528,12 @@ async def voices_import(request: Request, label: str = "", filename: str = "", t
     import voice_import as VI
     if not _is_owner(request):
         return JSONResponse({"error": "owner only"}, status_code=403)
+    try:
+        declared = int(request.headers.get("content-length") or 0)
+    except ValueError:
+        declared = 0
+    if declared > VI.MAX_UPLOAD:                     # refuse before buffering it
+        return JSONResponse({"error": "That file is too large to import."}, status_code=413)
     data = await request.body()
     from voices import voice_names
     try:
@@ -2160,7 +2165,7 @@ if __name__ == "__main__":
     # Run the server without SSL
     if not USE_SSL:
         logger.info("🖥️▶️ Starting server without SSL.")
-        uvicorn.run("server:app", host=_bind_host(), port=8000, log_config=None)
+        uvicorn.run("server:app", host=_bind_host(), port=int(os.environ.get("ATLAS_PORT", "8000")), log_config=None)
 
     else:
         logger.info("🖥️🔒 Attempting to start server with SSL.")
@@ -2181,7 +2186,7 @@ if __name__ == "__main__":
         uvicorn.run(
             "server:app",
             host=_bind_host(),
-            port=8000,
+            port=int(os.environ.get("ATLAS_PORT", "8000")),
             log_config=None,
             ssl_certfile=cert_file,
             ssl_keyfile=key_file,
