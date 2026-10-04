@@ -6,6 +6,8 @@
   could stop for good. The agent kept listening and generating replies, but nobody heard them until
   ATLAS was restarted. The sender now survives that moment and plays the next reply. Covered by a
   regression test that lands the interruption at every point in the send step.
+- Security: desktop shell upgraded from Electron 33 to 41.10.7, closing the published Electron
+  advisories flagged by Dependabot (Chromium/V8 fixes). The release build now fails on any npm advisory as well as Python ones.
 - Project website (`site/`) with a GitHub Pages deploy workflow.
 
 ## 0.2.0 — memory, privacy and audio quality

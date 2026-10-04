@@ -28,6 +28,10 @@ jobs:
         run: |
           python -m pip install --quiet pip-audit
           python -m pip_audit -r requirements-public.txt --ignore-vuln PYSEC-2026-3740 --progress-spinner off
+      - name: Desktop (npm) vulnerability gate
+        # Electron ships inside the installed app, so its CVEs count too.
+        shell: bash
+        run: cd desktop && npm audit --audit-level=low
       - name: Inno Setup
         run: |
           if (-not (Test-Path "C:\Program Files (x86)\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
