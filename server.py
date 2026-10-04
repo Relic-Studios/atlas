@@ -21,6 +21,13 @@ def _rec_event(kind, **fields):
         REC.event(kind, **fields)
     except Exception:  # noqa: BLE001
         pass
+    # Demo runs (demo_call.py) also log what was said, so the clipper can find
+    # the agent's lines by text and time.
+    try:
+        import demo_call
+        demo_call.note(kind, **fields)
+    except Exception:  # noqa: BLE001
+        pass
 if __name__ == "__main__":
     logger.info("🖥️👋 Welcome to local real-time voice chat")
 

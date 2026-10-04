@@ -3,7 +3,7 @@
 The user gives a name, a voice and a free-text description ("system prompt" in
 their own words). The resident LLM interprets that description into a few short
 fields (identity line, who-you-are, how-you-talk, how-you-react-to-bait, role
-tags). Everything that keeps an agent stable in a Discord call is deterministic
+tags). Everything that keeps an agent stable in a group conversation is deterministic
 and identical for every agent: staying in character, spoken-length rules, room
 etiquette, loop-breaking and the no-punching-down rule. Built-in personas were
 tuned with exactly this structure, so custom ones inherit what we learned.
@@ -92,7 +92,7 @@ def assemble_prompt(name: str, fields: dict) -> str:
     canon = _sentence(_clean(fields.get("canon"), 600))
     intro = f"You're {n}, {identity}," if identity else f"You're {n},"
     return "\n\n".join(p for p in [
-        f"{intro} hanging out in a Discord voice call with a group of friends. Everyone in the call "
+        f"{intro} hanging out in a group conversation with friends. Everyone in the group "
         f"knows you're an AI playing {n}, and you don't care: you stay {n} the whole time. Never answer "
         f"as an assistant and never deflect with what you are (an AI, code, no body); answer as {n}, "
         f"with {n}'s own life and opinions.",
@@ -219,7 +219,7 @@ def draft_fields(name: str, description: str, model: str,
 
 
 DRAFT_SYSTEM = (
-    "You write character sheets for a voice character who hangs out in a Discord voice call. "
+    "You write character sheets for a voice character who hangs out in group conversations. "
     "Turn the user's description into a PERSON with texture, not a list of adjectives. Rules: "
     "second person ('you love...'); concrete beats generic (name the actual song, dish, game, city); "
     "give them one opinion they'd argue for and one thing that annoys them; the humour should come "

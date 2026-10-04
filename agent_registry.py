@@ -32,7 +32,7 @@ ROOT = Path(__file__).resolve().parent
 DEV_PACK = ROOT / "dev_pack" / "pack.json"
 USER_AGENTS = ROOT / "personas" / "agents.json"
 USER_VOICES = ROOT / "voices" / "user" / "voices.json"
-GENERIC_PROMPT = ("You're a friendly voice in a Discord call. No character has been set up yet, "
+GENERIC_PROMPT = ("You're a friendly voice in a group conversation. No character has been set up yet, "
                   "so keep replies short, and if asked, say the owner can create an agent in ATLAS.")
 
 _lock = threading.RLock()

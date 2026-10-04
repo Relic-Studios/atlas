@@ -146,6 +146,18 @@ input[type=range]{accent-color:var(--accent);width:120px}
 .gpugrid{display:grid;grid-template-columns:96px 96px 1fr;gap:10px;align-items:center}
 .ring{width:96px;height:96px;display:block}
 .stats{font-family:var(--mono);font-size:11px;color:var(--muted);line-height:1.7}
+.guide{padding:10px 12px}
+.guide.hidden{display:none}
+.guide .gsteps{display:flex;gap:4px;margin-bottom:7px}
+.guide .gs{flex:1;display:flex;flex-direction:column;gap:4px;font-size:10px;color:var(--faint);letter-spacing:.3px;cursor:default}
+.guide .gs i{height:3px;border-radius:2px;background:var(--line-2)}
+.guide .gs.done{color:var(--muted)} .guide .gs.done i{background:var(--ok)}
+.guide .gs.cur{color:var(--text);font-weight:600} .guide .gs.cur i{background:var(--accent);box-shadow:0 0 8px var(--accent)}
+.guide .ghint{font-size:11.5px;color:var(--muted);line-height:1.45}
+.guide .gact{display:flex;gap:10px;margin-top:6px}
+.guide .gact button{background:none;border:0;padding:0;color:var(--accent);font:inherit;font-size:11px;cursor:pointer}
+.guide .gact button.dim{color:var(--faint)}
+.guide .gact button.hidden{display:none}
 .stats b{color:var(--text);font-weight:500}
 .rowlist{display:flex;flex-direction:column;gap:5px;font-size:11.5px}
 .rl-item{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;padding:6px 8px;border-radius:8px;background:rgba(255,255,255,.025);border:1px solid var(--line)}
@@ -294,6 +306,12 @@ input[type=range]{accent-color:var(--accent);width:120px}
         <div class="lamp" id="lSpeak" style="--lc:52,211,153">SPEAKING</div>
         <div class="lamp" id="lQuiet" style="--lc:251,191,36">QUIET</div>
       </div>
+    </div>
+    <div class="glass guide hidden" id="guide">
+      <div class="ptitle"><span class="pdot"></span>Your loop<span class="right" id="guideCalls"></span></div>
+      <div class="gsteps" id="guideSteps"></div>
+      <div class="ghint" id="guideHint"></div>
+      <div class="gact"><button id="guideDone" class="hidden">Mark reviewed</button><button id="guideHide" class="dim">Hide guide</button></div>
     </div>
     <div class="glass meters">
       <div class="ptitle"><span class="pdot"></span>Audio<span class="right" id="devLabel">—</span></div>

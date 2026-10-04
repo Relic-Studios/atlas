@@ -145,6 +145,18 @@ class Director:
         return self.done_at is not None and self.t - self.done_at >= self.tail
 
 
+_ACTIVE = None   # the running VirtualCallAudio, if any
+
+
+def note(kind, **fields):
+    """Called by server._rec_event: forward user/agent text into events.jsonl."""
+    dev = _ACTIVE
+    if dev is None or not dev.running or dev.wall_t0 is None:
+        return
+    dev._event("said_" + kind, t=dev.director.t, **{k: v for k, v in fields.items()
+                                                    if isinstance(v, (str, int, float))})
+
+
 class VirtualCallAudio(CallAudio):
     """CallAudio with the sound card replaced by a real-time virtual clock."""
 
@@ -173,6 +185,8 @@ class VirtualCallAudio(CallAudio):
 
     def open(self):
         log.info("[audio] DEMO virtual call: %s -> %s", os.environ["ATLAS_DEMO_SCENE"], self.out_dir)
+        global _ACTIVE
+        _ACTIVE = self
         self._running = True
         self._thread = threading.Thread(target=self._clock, name="demo-clock", daemon=True)
         self._thread.start()

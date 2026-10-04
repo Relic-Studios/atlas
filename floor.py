@@ -1,4 +1,4 @@
-"""Deterministic turn management for multi-party (Discord) calls.
+"""Deterministic turn management for multi-party group conversations.
 
 Everything here is pure text/time logic -- microseconds, no model -- and sits
 in front of / alongside the Model SPEAK/HOLD decision:
@@ -361,7 +361,7 @@ class ConversationFloor:
 
 # ---------------------------------------------------------------- banter layer
 VIBE = (
-    "VIBE: casual Discord call with friends. You like these people; talk like one of "
+    "VIBE: casual group conversation with friends. You like these people; talk like one of "
     "them. Not every line needs to be a joke."
 )
 _INSULT = re.compile(

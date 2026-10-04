@@ -63,7 +63,7 @@ The setup wizard walks you through:
      Paste your own key; it's stored only in `user/settings.json` on this PC and never shown again in full.
      The same reply-format check runs against your provider.
 2. **Audio:** pick the input the agent listens on and the output it speaks to.
-   To use it in a Discord/voice call, route the call into a virtual cable (e.g. VB-Audio Voicemeeter)
+   To bring it into an online voice call (any app), route the call into a virtual cable (e.g. VB-Audio Voicemeeter)
    and pick that cable here.
 3. **Voice:** import a 10–20 second clean clip of the voice you want (WAV/MP3), plus what's said in it.
    Until you do, ATLAS uses a neutral starter voice generated on your PC.

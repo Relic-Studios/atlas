@@ -227,3 +227,28 @@ async def memory_open(aid: str, request: Request):
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"error": str(e), "folder": str(d)}, status_code=500)
     return {"ok": True, "folder": str(d)}
+
+
+# ---------------------------------------------------------------- guide strip (journey.py)
+@router.get("/api/journey")
+async def journey_get(request: Request):
+    if not _owner(request):
+        return _deny()
+    import journey
+    return await asyncio.to_thread(journey.state)
+
+
+@router.post("/api/journey")
+async def journey_post(request: Request):
+    if not _owner(request):
+        return _deny()
+    import journey
+    body = await request.json()
+    act = body.get("action")
+    if act == "reviewed":
+        journey.mark_reviewed()
+    elif act in ("hide", "show"):
+        journey.set_hidden(act == "hide")
+    else:
+        return JSONResponse({"error": "action must be reviewed, hide or show"}, status_code=400)
+    return await asyncio.to_thread(journey.state)
