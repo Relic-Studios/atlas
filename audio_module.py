@@ -20,6 +20,8 @@ from RealtimeTTS import TextToAudioStream
 try:
     from RealtimeTTS import QwenEngine, QwenVoice
     QWEN_AVAILABLE = True
+    from tts_conditioning import install_qwen_soft_clip
+    install_qwen_soft_clip()   # engine hard-clipped overshoot at +-1.0 (crackle)
 except ImportError:
     QWEN_AVAILABLE = False
 

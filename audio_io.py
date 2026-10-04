@@ -131,6 +131,8 @@ class CallAudio:
         # speech goes through it; the deque above is kept only for old callers.
         from playout import Playout
         self._playout = Playout(sample_rate)
+        from tts_conditioning import Upsampler2x
+        self._up2x = Upsampler2x()   # stateful polyphase (linear interp left -60 dB images)
 
         # Live meters for the telemetry panel (RMS of the last 20 ms block).
         self.level_in = 0.0
@@ -256,7 +258,7 @@ class CallAudio:
             g = gcd(sample_rate, self.sample_rate)
             up, down = self.sample_rate // g, sample_rate // g
             if (up, down) == (2, 1):
-                audio = self._resample_2x(audio)
+                audio = self._up2x(audio)
             else:
                 from scipy.signal import resample_poly
                 audio = resample_poly(audio, up, down).astype(np.float32)

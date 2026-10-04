@@ -41,7 +41,8 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-ROOT = Path(__file__).resolve().parent / "agent_state" / "hypergraph"
+import agent_memory as AM
+ROOT = AM.ROOT          # agent_state/memory/<agent>/graph.json + emb.npy (one folder per agent)
 ENABLED = os.environ.get("ATLAS_HG", "1") != "0"
 MODEL = os.environ.get("ATLAS_HG_MODEL", "BAAI/bge-m3")
 DEVICE = os.environ.get("ATLAS_HG_DEVICE", "cpu")   # cpu by default: never share the live CUDA ctx
@@ -66,10 +67,24 @@ HEBB_RECALL = 0.05
 PAIR_SIM = 0.48
 PAIR_DISTINCT = 0.85  # two "same person" memories must differ this much to count as joint evidence
 HUB_PENALTY = float(os.environ.get("ATLAS_HG_HUB", "1.0"))
+PF_GAP_S = float(os.environ.get("ATLAS_HG_PF_GAP", "0.08"))   # pause between prefetches (bounds CPU)
+PF_TTL_S = 20.0                                                # a prefetched recall is reusable this long
 RARE_DEG = 3            # a shared content word this rare counts like a name       # see pair_ok in retrieve()
 SPREAD_SCORE = 0.3    # spread lets a memory IN; its own similarity still ranks it     # a strongly co-used memory comes along even if not similar   # same-person bridge (multi-hop: "the guy who moved to Denver, ...")
 HEBB_SPREAD = 0.20
 STRENGTH_BONUS = 0.05
+# Named-chatter gate (owner 10-03, tests/sim_named_chatter.py): a person's name alone
+# inflated similarity, so "Sam you're muted" pulled up everything about Sam. When a
+# line names someone, a memory must also match the line WITHOUT the name, minus how
+# much that remainder looks like generic call chatter.
+NAMED_TOPIC = 0.17
+PHATIC_W = 0.5
+_PHATIC = ["is my mic working", "are you there", "hello can anyone hear me", "you cut out",
+           "you're breaking up", "hold on one sec", "brb", "ok cool", "yeah sure", "sounds good",
+           "never mind", "what did you say", "say that again", "lol", "wait what", "thank you",
+           "good night", "see you later", "what's up", "how are you", "you there?",
+           "turn your volume down", "you're too loud", "I can't hear you", "what are we doing now",
+           "anyway", "fine", "let's go", "who's talking", "be quiet for a second"]
 
 _STOP = set("""a an the and or but so to of in on at for with is are was were be been being am i you he she
 it we they me him her us them my your his its our their this that these those there here what which who whom
@@ -82,6 +97,24 @@ well now time today yesterday tomorrow im ive dont cant wont didnt isnt its that
 wait anyway anyways honestly literally basically actually maybe sure fine cool nice good bad huh yo hey""".split())
 _WORD = re.compile(r"[a-z][a-z'-]{2,}")
 _TAG = re.compile(r"\[[^\]]*\]|\bS\d{1,4}\b")
+
+
+def qkey(text: str) -> str:
+    """Prefetch match key: words only (tags, case and punctuation don't change recall)."""
+    return " ".join(re.findall(r"[\w']+", _TAG.sub(" ", text or "").lower()))
+
+
+def same_query(a: str, b: str) -> bool:
+    """Final transcript vs last partial: identical, or one word swapped/added/dropped in a
+    line long enough that recall can't change meaningfully (finals often re-punctuate or
+    fix one word). Short lines must match exactly: one word IS the meaning there."""
+    if a == b:
+        return True
+    wa, wb = a.split(), b.split()
+    if min(len(wa), len(wb)) < 6 or abs(len(wa) - len(wb)) > 1:
+        return False
+    sa, sb = set(wa), set(wb)
+    return len(sa ^ sb) <= 2 and len(sa & sb) / max(1, len(sa | sb)) >= 0.8
 
 
 UNCOMMON_ZIPF = 4.2     # "play"/"favourite" (~5) are everyday words, "ska"/"chess" (<4) carry meaning
@@ -118,9 +151,45 @@ def content_nodes(text: str) -> list:
     return out[:24]
 
 
+# Never stored at all (whole line dropped), checked before anything else:
+#  - secrets: passwords, PINs, keys, card/bank/social-security numbers
+#  - where someone lives: "I live at 42 ...", street addresses
+#  - the speaker asked: "don't remember this", "off the record", "between us"
+_PRIVATE = re.compile(
+    r"\b(pass ?words?|passcodes?|pin (?:code|number)|security code|api ?keys?|secret keys?|"
+    r"seed phrase|social security|ssn|credit ?card|debit ?card|card number|bank account|"
+    r"routing number|login (?:is|was)|my (?:home )?address|i live at|we live at|"
+    r"don'?t (?:remember|save|store|record|repeat|tell anyone)|do not (?:remember|save|store|record|repeat)|"
+    r"off the record|between (?:you and me|us)|keep (?:this|it|that) (?:a )?secret|"
+    r"(?:it'?s|this is) (?:private|confidential))\b", re.I)
+# a street address = number + Capitalised name + street word ("42 Wallaby Way");
+# case-sensitive so "drove 20 minutes down the road" is not an address
+_STREET = re.compile(r"\b\d{1,6}\s+(?:[A-Z][a-z]+\s+){1,3}(?:St|Street|Ave|Avenue|Rd|Road|Blvd|Boulevard|"
+                     r"Lane|Ln|Drive|Dr|Way|Court|Ct|Place|Pl|Terrace|Crescent)\b")
+_FORGET = re.compile(r"\b(?:forget (?:that|this|what i (?:just )?said|it|everything i said)|"
+                     r"scratch that,? (?:don'?t|do not) remember|delete that)\b", re.I)
+
+
+_EMAIL = re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.]+\b")
+_PHONE = re.compile(r"(?<!\w)\+?\d[\d\s().-]{7,}\d(?!\w)")
+
+
+def is_private(text: str) -> bool:
+    """A line with a secret, an address, an email or a phone number is not stored at all
+    (a redacted 'my number is [number]' is useless as a memory and still says too much)."""
+    t = text or ""
+    return bool(_PRIVATE.search(t) or _STREET.search(t) or _EMAIL.search(t) or _PHONE.search(t))
+
+
+def is_forget_request(text: str) -> bool:
+    return bool(_FORGET.search(text or ""))
+
+
 def _clean(text: str) -> str:
     """Scrub before storage: speaker tags, slurs (whole memory dropped), emails, phone numbers."""
     t = _TAG.sub(" ", text or "")
+    if is_private(t):
+        return ""
     try:
         import speech_safety
         if speech_safety.has_slur(t):
@@ -160,16 +229,23 @@ class Embedder:
         texts = [t or "" for t in texts]
         with self._lock:
             m = self._load()
-            miss = [t for t in texts if t not in self._cache]
+            if not texts:
+                return np.zeros((0, self.dim), np.float32)
+            got = {t: self._cache[t] for t in texts if t in self._cache}
+            miss = list(dict.fromkeys(t for t in texts if t not in got))
             if miss:
                 v = m.encode(miss, batch_size=16, normalize_embeddings=True,
                              convert_to_numpy=True, show_progress_bar=False).astype(np.float32)
-                for t, e in zip(miss, v):
-                    self._cache[t] = e
-                if len(self._cache) > 512:
-                    for k in list(self._cache)[:256]:
-                        self._cache.pop(k, None)
-            return np.stack([self._cache[t] for t in texts]) if texts else np.zeros((0, self.dim), np.float32)
+                got.update(zip(miss, v))
+            # Build the result BEFORE trimming the cache: a batch with >256 new
+            # texts used to evict its own vectors -> KeyError (sim_memory_crowding).
+            out = np.stack([got[t] for t in texts])
+            for t in miss[-256:]:
+                self._cache[t] = got[t]
+            if len(self._cache) > 512:
+                for k in list(self._cache)[:len(self._cache) - 256]:
+                    self._cache.pop(k, None)
+            return out
 
 
 _SHARED_EMBEDDER = None
@@ -189,7 +265,8 @@ class HyperMemory:
     def __init__(self, agent: str, root: Path = None, embedder=None, clock=time.time,
                  autosave: bool = True):
         self.agent = (agent or "unknown").lower()
-        self.dir = Path(root or ROOT) / self.agent
+        self.dir = AM.folder(self.agent, root or ROOT)
+        AM.migrate(root or ROOT)
         self.emb_model = embedder
         self.clock = clock
         self.autosave = autosave
@@ -201,7 +278,14 @@ class HyperMemory:
         self.next_id = 1
         self.active: list = []          # ids active in the current turn (temporal Hebbian)
         self._dirty = False
+        self.root = root or ROOT
+        self.gen = AM.ident(self.agent, self.root)   # folder identity at load time
+        self.dead = False
         self._load()
+
+    def stale(self) -> bool:
+        """The folder was archived (agent deleted) or re-created since this graph loaded."""
+        return self.dead or AM.ident(self.agent, self.root, create=False) != self.gen
 
     # ---- persistence ------------------------------------------------------
     def _load(self):
@@ -232,9 +316,14 @@ class HyperMemory:
 
     def save(self):
         with self._lock:
+            if self.stale():
+                # never resurrect a deleted agent's memories into its folder or its successor
+                if not self.dead:
+                    logger.info("hypergraph[%s]: folder replaced/archived; dropping stale save", self.agent)
+                self.dead = True
+                return
             if not self._dirty and (self.dir / "graph.json").exists():
                 return
-            self.dir.mkdir(parents=True, exist_ok=True)
             d = {"agent": self.agent, "next_id": self.next_id, "edges": self.edges, "hebb": self.hebb,
                  "model": getattr(self.emb_model, "model_name", "")}
             gt, et = self.dir / "graph.tmp", self.dir / "emb.tmp.npy"
@@ -250,6 +339,98 @@ class HyperMemory:
         for i, e in enumerate(self.edges):
             for n in e["nodes"]:
                 self.node_index.setdefault(n, set()).add(i)
+
+    # ---- owner controls ---------------------------------------------------
+    def _drop(self, idxs: set):
+        keep = [i for i in range(len(self.edges)) if i not in idxs]
+        gone = {self.edges[i]["id"] for i in idxs}
+        self.edges = [self.edges[i] for i in keep]
+        self.vecs = self.vecs[keep] if keep else np.zeros((0, 0), np.float32)
+        for k in list(self.hebb):
+            a, b = k.split("|", 1)
+            if a in gone or b in gone:
+                del self.hebb[k]
+        self.active = [a for a in self.active if a not in gone]
+        self._reindex()
+        self._dirty = True
+
+    def forget(self, ids) -> int:
+        """Remove memories completely: text, embedding and every Hebbian link."""
+        ids = set(ids)
+        with self._lock:
+            idx = {i for i, e in enumerate(self.edges) if e["id"] in ids}
+            if idx:
+                self._drop(idx)
+            return len(idx)
+
+    def forget_since(self, cutoff: float) -> int:
+        """Owner wipe: drop every memory FORMED at/after `cutoff` (epoch seconds), whatever
+        its kind, pinned or not. cutoff <= 0 wipes the whole graph, links included."""
+        with self._lock:
+            if cutoff <= 0:
+                n = len(self.edges)
+                self.edges, self.vecs, self.hebb, self.active = [], np.zeros((0, 0), np.float32), {}, []
+                self._reindex()
+                self._dirty = True
+                return n
+            idx = {i for i, e in enumerate(self.edges) if float(e.get("created", e.get("t", 0))) >= cutoff}
+            if idx:
+                self._drop(idx)
+            self.active = []
+            return len(idx)
+
+    def forget_last(self, who: str = "", within_s: float = 600.0) -> str | None:
+        """'forget that': drop the newest memory from that speaker (recent ones only)."""
+        now = self.clock()
+        who = (who or "").strip().lower()
+        with self._lock:
+            for i in range(len(self.edges) - 1, -1, -1):
+                e = self.edges[i]
+                if now - e["created"] > within_s:
+                    continue
+                if e.get("kind") == "episodic" and (not who or e.get("who", "").lower() == who):
+                    self._drop({i})
+                    return e["id"]
+        return None
+
+    def set_pinned(self, eid: str, pinned: bool = True) -> bool:
+        with self._lock:
+            for e in self.edges:
+                if e["id"] == eid:
+                    e["pinned"] = bool(pinned)
+                    if pinned:
+                        e["kind"] = "approved"
+                    self._dirty = True
+                    return True
+        return False
+
+    def sync_approved(self, texts: list) -> int:
+        """Approved memories are pinned; anything pinned as approved that the owner has
+        since rejected or forgotten is REMOVED (it must never be recalled again)."""
+        want = {_clean(t).lower() for t in texts}
+        with self._lock:
+            idx = {i for i, e in enumerate(self.edges)
+                   if e.get("kind") == "approved" and e["text"].lower() not in want}
+            if idx:
+                self._drop(idx)
+            have = {e["text"].lower() for e in self.edges if e.get("kind") == "approved"}
+        added = 0
+        for t in texts:
+            if _clean(t).lower() not in have:
+                if self.add(t, kind="approved", pinned=True):
+                    added += 1
+        return added
+
+    def listing(self, limit: int = 200) -> list:
+        """For the owner's memory panel: pinned first, then strongest."""
+        now = self.clock()
+        with self._lock:
+            rows = [{"id": e["id"], "text": e["text"], "who": e.get("who", ""), "kind": e.get("kind", ""),
+                     "pinned": bool(e.get("pinned")), "hits": e.get("hits", 0),
+                     "strength": round(self._w(e, now), 3), "created": e["created"]}
+                    for e in self.edges]
+        rows.sort(key=lambda r: (-r["pinned"], -r["strength"]))
+        return rows[:limit]
 
     # ---- decay ------------------------------------------------------------
     def _w(self, e: dict, now: float) -> float:
@@ -289,6 +470,8 @@ class HyperMemory:
                     e["w"] = min(1.0, self._w(e, now) + ETA * (1 - self._w(e, now)))
                     e["t"], e["hits"] = now, e.get("hits", 0) + 1
                     e["pinned"] = e.get("pinned") or pinned
+                    if pinned:
+                        e["kind"] = kind
                     self._dirty = True
                     return e["id"]
             eid = f"{self.agent}-e{self.next_id}"
@@ -297,10 +480,21 @@ class HyperMemory:
                  "w": max(INIT_W, PIN_FLOOR if pinned else 0.0), "t": now, "created": now,
                  "hits": 0, "pinned": bool(pinned)}
             self.edges.append(e)
+            old_vecs = self.vecs
             self.vecs = vec[None, :].astype(np.float32) if self.vecs.size == 0 else \
                 np.vstack([self.vecs, vec[None, :].astype(np.float32)])
             i = len(self.edges) - 1
             self._hub = None
+            # incremental hub sums: O(n) per add instead of an O(n^2) rebuild on the
+            # next recall (136 ms at 4000 memories, and every live line is an add)
+            hs = getattr(self, "_hub_sum", None)
+            if (hs is not None and getattr(self, "_hub_src", None) is old_vecs
+                    and len(hs) == i and i > 0):
+                s = (old_vecs @ self.vecs[i]).astype(np.float64)
+                self._hub_sum = np.concatenate([hs + s, [float(s.sum())]])
+                self._hub_src = self.vecs
+            else:
+                self._hub_sum = None
             for n in nodes:
                 self.node_index.setdefault(n, set()).add(i)
             for a in self.active[-6:]:             # temporal Hebbian: formed while these were active
@@ -374,6 +568,23 @@ class HyperMemory:
         if not qnodes:          # "lol", "anyway", "wait what": nothing to remember about
             return []
         with self._lock:
+            names = [w for w in dict.fromkeys(re.findall(r"[a-z]+", query.lower()))
+                     if f"@{w}" in self.node_index]
+        # "what's Nina's job": a possessive means the line is ABOUT that person, so the
+        # name is the topic, not an address ("Sam, what time is it"). Don't gate those.
+        if any(re.search(r"\b" + w + r"'s\b", query, re.I) for w in names):
+            names = []
+        topical = None
+        if names:
+            rest = query
+            for w in names:
+                rest = re.sub(rf"\b{w}\b('s)?,?", " ", rest, flags=re.I)
+            rest = " ".join(rest.split()) or "."
+            svec = self.emb_model.encode([rest])[0]
+            if svec.shape[0] == qvec.shape[0]:
+                ph = float(np.max(self._phatic_vecs() @ svec))
+                topical = (svec, ph)
+        with self._lock:
             if self.vecs.shape[1] != qvec.shape[0]:
                 return []
             raw = self.vecs @ qvec
@@ -433,8 +644,13 @@ class HyperMemory:
                     if any(y != x and float(self.vecs[x] @ self.vecs[y]) < PAIR_DISTINCT for y in lst):
                         pair_ok.add(x)
             cand = set(act) | set(spread)
+            tscore = None
+            if topical is not None:
+                tscore = self.vecs @ topical[0] - PHATIC_W * topical[1]
             out = []
             for i in cand:
+                if tscore is not None and float(tscore[i]) < NAMED_TOPIC:
+                    continue
                 e = self.edges[i]
                 s = float(sims[i])
                 node_hit = len(qnodes & set(e["nodes"])) / max(1, len(qnodes)) if qnodes else 0.0
@@ -448,23 +664,37 @@ class HyperMemory:
                 score = s + SPREAD_SCORE * spread.get(i, 0.0) + 0.05 * node_hit + STRENGTH_BONUS * self._w(e, now)
                 out.append({"id": e["id"], "text": e["text"], "who": e.get("who", ""),
                             "score": round(score, 4), "sim": round(s, 4),
-                            "age_s": now - e["created"], "pinned": e.get("pinned", False)})
+                            "age_s": now - e["created"], "created": e["created"],
+                            "pinned": e.get("pinned", False), "kind": e.get("kind", "")})
             out.sort(key=lambda r: -r["score"])
             out = out[:k]
             if mark_active:
                 self.active = (self.active + [r["id"] for r in out])[-12:]
             return out
 
+    def _phatic_vecs(self) -> np.ndarray:
+        v = getattr(self, "_phatic", None)
+        if v is None:
+            v = self._phatic = np.asarray(self.emb_model.encode(_PHATIC), np.float32)
+        return v
+
     def _hub_scores(self) -> np.ndarray:
         """Per-memory centrality minus the store average (cached; recomputed on change)."""
         n = len(self.edges)
         if getattr(self, "_hub_n", -1) != n or getattr(self, "_hub", None) is None:
+            hs = getattr(self, "_hub_sum", None)
+            if hs is None or getattr(self, "_hub_src", None) is not self.vecs or len(hs) != n:
+                # full rebuild: row sums of the similarity matrix, diagonal excluded
+                if n:
+                    m = (self.vecs @ self.vecs.T).astype(np.float64)
+                    hs = m.sum(axis=1) - np.diagonal(m)
+                else:
+                    hs = np.zeros(0, np.float64)
+                self._hub_sum, self._hub_src = hs, self.vecs
             if n < 8:
                 self._hub = np.zeros(n, np.float32)
             else:
-                m = self.vecs @ self.vecs.T
-                np.fill_diagonal(m, np.nan)
-                c = np.nanmean(m, axis=1)
+                c = hs / (n - 1)
                 self._hub = np.clip(c - float(np.mean(c)), 0.0, None).astype(np.float32)
             self._hub_n = n
         return self._hub
@@ -479,22 +709,23 @@ class HyperMemory:
 
 
 # ---------------------------------------------------------------- prompt glue
-def _age(s: float) -> str:
-    if s < 3600:
-        return "earlier this call" if s < 3 * 3600 else "today"
+def _age(s: float, this_call: bool = False) -> str:
+    if this_call:
+        return "earlier this call"
     if s < 86400:
         return "today"
     d = int(s // 86400)
     return "yesterday" if d == 1 else f"{d} days ago"
 
 
-def note(hits: list) -> str:
+def note(hits: list, session_start: float = None) -> str:
     if not hits:
         return ""
     lines = []
     for h in hits:
         who = h["who"] or "someone"
-        lines.append(f"- {who} ({_age(h['age_s'])}): {h['text']}")
+        this_call = session_start is not None and h.get("created", 0) >= session_start
+        lines.append(f"- {who} ({_age(h['age_s'], this_call)}): {h['text']}")
     return ("THINGS YOU REMEMBER THAT MIGHT MATTER NOW (only use one if it genuinely fits; "
             "never recite the list; don't invent details beyond it):\n" + "\n".join(lines))
 
@@ -521,6 +752,16 @@ class MemoryService:
         self._q: "queue.Queue" = queue.Queue(maxsize=256)
         self._stop = threading.Event()
         self._last_hits: dict = {}
+        self._epoch: dict = {}           # agent -> bumped on delete/wipe; older queued jobs are dropped
+        self._job_lock = threading.Lock()  # a wipe never interleaves with a half-done write
+        self.session_start = clock()
+        # recall prefetch from partial transcripts: latest-wins, one job at a time
+        self._pf_cv = threading.Condition()
+        self._pf_pending = None          # (agent, key, text, epoch, k)
+        self._pf_running = None          # (agent, key)
+        self._pf: dict = {}              # agent -> {"key","hits","ep","k","t"}
+        self._pf_thread = None
+        self.pf_stats = {"hit": 0, "waited": 0, "miss": 0}
         self._worker = threading.Thread(target=self._run, name="HypergraphWriter", daemon=True)
         self._worker.start()
 
@@ -528,6 +769,8 @@ class MemoryService:
         agent = (agent or "unknown").lower()
         with self._lock:
             g = self.graphs.get(agent)
+            if g is not None and g.stale():
+                g = None                     # deleted/re-created on disk: load the new folder
             if g is None:
                 g = HyperMemory(agent, root=self.root, embedder=self.embedder or shared_embedder(),
                                 clock=self.clock)
@@ -536,10 +779,18 @@ class MemoryService:
 
     # called from the live turn handler; never blocks
     def observe_user(self, agent: str, who: str, text: str):
-        if not ENABLED or len(content_nodes(text)) < 3:
+        if not ENABLED:
+            return
+        if is_forget_request(text):
+            try:
+                self._q.put_nowait(("forget_last", agent, who, text, self._ep(agent)))
+            except queue.Full:
+                pass
+            return
+        if len(content_nodes(text)) < 3 or is_private(text):
             return
         try:
-            self._q.put_nowait(("add", agent, who, text))
+            self._q.put_nowait(("add", agent, who, text, self._ep(agent)))
         except queue.Full:
             pass
 
@@ -547,34 +798,164 @@ class MemoryService:
         hits = self._last_hits.pop((agent or "").lower(), None)
         if hits:
             try:
-                self._q.put_nowait(("reinforce", agent, hits, reply))
+                self._q.put_nowait(("reinforce", agent, hits, reply, self._ep(agent)))
             except queue.Full:
                 pass
 
-    def recall_note(self, agent: str, query: str, k: int = 4, budget_s: float = 0.35) -> str:
+    # ---- recall prefetch ---------------------------------------------------
+    def prefetch(self, agent: str, text: str, k: int = 4):
+        """Start recall for a PARTIAL transcript in the background (never blocks).
+        When the turn's final text matches, recall_note() reuses the result, so memory
+        costs ~0 ms at turn end instead of ~140 ms (embedding is ~85% of it)."""
+        if not ENABLED or not text or len(content_nodes(text)) < 1:
+            return
+        a, key = (agent or "").lower(), qkey(text)
+        if not key:
+            return
+        with self._pf_cv:
+            c = self._pf.get(a)
+            if c is not None and c["key"] == key and c["ep"] == self._ep(a):
+                return
+            if self._pf_running == (a, key):
+                return
+            self._pf_pending = (a, key, text, self._ep(a), k)
+            if self._pf_thread is None or not self._pf_thread.is_alive():
+                self._pf_thread = threading.Thread(target=self._pf_run, name="HypergraphPrefetch",
+                                                   daemon=True)
+                self._pf_thread.start()
+            self._pf_cv.notify_all()
+
+    def _pf_run(self):
+        while not self._stop.is_set():
+            with self._pf_cv:
+                while self._pf_pending is None and not self._stop.is_set():
+                    self._pf_cv.wait(1.0)
+                if self._pf_pending is None:
+                    continue
+                a, key, text, ep, k = self._pf_pending
+                self._pf_pending = None
+                self._pf_running = (a, key)
+            hits = None
+            try:
+                hits = self.graph(a).retrieve(text, k=k, mark_active=False)
+            except Exception as ex:  # noqa: BLE001
+                logger.warning("hypergraph prefetch failed: %s", ex)
+            with self._pf_cv:
+                self._pf_running = None
+                if hits is not None and ep == self._ep(a):
+                    self._pf[a] = {"key": key, "hits": hits, "ep": ep, "k": k, "t": time.monotonic()}
+                self._pf_cv.notify_all()
+            time.sleep(PF_GAP_S)        # bound CPU while someone is talking
+
+    def _pf_take(self, agent: str, query: str, k: int, budget_s: float):
+        """Prefetched hits for exactly this text (waiting for an in-flight one), else None."""
+        a, key = (agent or "").lower(), qkey(query)
+        with self._pf_cv:
+            waited = False
+            # a prefetch only QUEUED for this text would run after the current one: that's
+            # two retrieves of wait. Cancel it and let the caller compute directly.
+            if self._pf_pending is not None and self._pf_pending[0] == a:
+                self._pf_pending = None
+            run = self._pf_running
+            if run is not None and run[0] == a and same_query(run[1], key):
+                waited = True     # already computing (nearly) this text: finishing it is cheaper
+                self._pf_cv.wait_for(lambda: self._pf_running != run, timeout=budget_s)
+            c = self._pf.get(a)
+            if (c is not None and same_query(c["key"], key) and c["ep"] == self._ep(a)
+                    and c["k"] >= k and time.monotonic() - c["t"] < PF_TTL_S):
+                self.pf_stats["waited" if waited else "hit"] += 1
+                return [dict(h) for h in c["hits"][:k]]
+        self.pf_stats["miss"] += 1
+        return None
+
+    def _pf_clear(self, agent: str):
+        with self._pf_cv:
+            self._pf.pop((agent or "").lower(), None)
+
+    def recall_note(self, agent: str, query: str, k: int = 4, budget_s: float = 0.35,
+                    exclude: set = None) -> str:
         """Retrieve within a time budget; on timeout the turn simply goes without memory."""
         if not ENABLED or not query or len(content_nodes(query)) < 1:
             return ""
-        box = {}
+        t0 = time.monotonic()
+        hits = self._pf_take(agent, query, k, budget_s)
+        if hits is not None:
+            try:   # the prefetch didn't mark these active (a partial isn't a turn yet)
+                g = self.graph(agent)
+                g.active = (g.active + [h["id"] for h in hits])[-12:]
+            except Exception:  # noqa: BLE001
+                pass
+        else:
+            box = {}
 
-        def work():
-            try:
-                box["hits"] = self.graph(agent).retrieve(query, k=k)
-            except Exception as ex:  # noqa: BLE001
-                logger.warning("hypergraph recall failed: %s", ex)
-        t = threading.Thread(target=work, daemon=True)
-        t.start()
-        t.join(budget_s)
-        hits = box.get("hits") or []
+            def work():
+                try:
+                    box["hits"] = self.graph(agent).retrieve(query, k=k)
+                except Exception as ex:  # noqa: BLE001
+                    logger.warning("hypergraph recall failed: %s", ex)
+            t = threading.Thread(target=work, daemon=True)
+            t.start()
+            t.join(max(0.0, budget_s - (time.monotonic() - t0)))
+            hits = box.get("hits") or []
+        if exclude:   # already in the prompt as an approved memory: don't list it twice
+            ex = {x.strip().lower() for x in exclude}
+            hits = [h for h in hits if h["text"].strip().lower() not in ex]
         self._last_hits[(agent or "").lower()] = hits
-        return note(hits)
+        return note(hits, self.session_start)
 
     def sync_approved(self, agent: str, texts: list):
-        for t in texts:
-            try:
-                self._q.put_nowait(("pin", agent, "", t))
-            except queue.Full:
-                pass
+        """Replace the agent's approved set (rejected/forgotten ones are removed)."""
+        try:
+            self._q.put_nowait(("sync", agent, "", list(texts), self._ep(agent)))
+        except queue.Full:
+            pass
+
+    # owner controls: synchronous (rare, and the owner is waiting for the answer)
+    def forget(self, agent: str, ids) -> int:
+        self._pf_clear(agent)
+        g = self.graph(agent)
+        n = g.forget(ids)
+        g.save()
+        return n
+
+    def set_pinned(self, agent: str, eid: str, pinned: bool = True) -> bool:
+        self._pf_clear(agent)
+        g = self.graph(agent)
+        ok = g.set_pinned(eid, pinned)
+        g.save()
+        return ok
+
+    def listing(self, agent: str, limit: int = 200) -> list:
+        return self.graph(agent).listing(limit)
+
+    def _ep(self, agent: str) -> int:
+        return self._epoch.get((agent or "").lower(), 0)
+
+    def drop_agent(self, agent: str):
+        """Agent deleted: drop the in-memory graph (its folder is archived separately) and
+        invalidate every write still queued for it."""
+        with self._lock:
+            a = (agent or "").lower()
+            self._epoch[a] = self._epoch.get(a, 0) + 1
+            g = self.graphs.pop(a, None)
+            if g is not None:
+                g.dead = True
+        self._last_hits.pop((agent or "").lower(), None)
+        self._pf_clear(agent)
+
+    def wipe(self, agent: str, cutoff: float) -> int:
+        """Owner wipe for ONE agent: invalidate its queued writes (a line heard before the wipe
+        can't land after it), then drop memories formed since `cutoff` (<= 0: all of them)."""
+        a = (agent or "").lower()
+        with self._job_lock:
+            with self._lock:
+                self._epoch[a] = self._epoch.get(a, 0) + 1
+            self._last_hits.pop(a, None)
+            self._pf_clear(a)
+            g = self.graph(a)
+            n = g.forget_since(cutoff)
+            g.save()
+            return n
 
     def flush(self, timeout: float = 30.0):
         end = time.time() + timeout
@@ -587,6 +968,8 @@ class MemoryService:
     def close(self):
         self.flush()
         self._stop.set()
+        with self._pf_cv:
+            self._pf_cv.notify_all()
 
     def _run(self):
         last_save = time.time()
@@ -597,12 +980,19 @@ class MemoryService:
                 job = None
             try:
                 if job:
+                    self._job_lock.acquire()
+                stale = bool(job) and len(job) > 4 and job[4] != self._ep(job[1])
+                if job and not stale:            # stale = queued before the agent was deleted/wiped
                     op, agent = job[0], job[1]
                     g = self.graph(agent)
                     if op == "add":
                         g.add(job[3], who=job[2])
                     elif op == "pin":
                         g.add(job[3], kind="approved", pinned=True)
+                    elif op == "sync":
+                        g.sync_approved(job[3])
+                    elif op == "forget_last":
+                        g.forget_last(job[2])
                     elif op == "reinforce":
                         hits, reply = job[2], job[3]
                         g.reinforce([h["id"] for h in hits], used_ids=used_by(reply, hits))
@@ -610,6 +1000,7 @@ class MemoryService:
                 logger.warning("hypergraph writer: %s", ex)
             finally:
                 if job:
+                    self._job_lock.release()
                     self._q.task_done()
             if time.time() - last_save > 20:
                 for g in list(self.graphs.values()):

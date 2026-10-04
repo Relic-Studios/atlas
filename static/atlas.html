@@ -210,6 +210,24 @@ input[type=range]{accent-color:var(--accent);width:120px}
 .avtip .r{font-size:10.5px;color:var(--muted);margin-top:2px}
 .avtip .m{font-size:9.5px;color:var(--faint);margin-top:6px;font-family:var(--mono)}
 
+/* ---------------- agent memory panel (right-click an agent) */
+.agmem{width:min(460px,92vw);padding:0;overflow:hidden}
+.agmem .ch{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line)}
+.agmem .ch .ttl{font-weight:800;letter-spacing:3px;font-size:13px}
+.agmem .ch .x{margin-left:auto;cursor:pointer;color:var(--muted);font-size:18px;padding:0 4px}
+.agmem .cb{padding:14px 16px;display:grid;gap:12px}
+.agmem .counts{display:flex;gap:8px;flex-wrap:wrap}
+.agmem .counts span{font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:3px 9px}
+.agmem .counts b{color:var(--text)}
+.agmem .wipe{display:flex;gap:8px;align-items:center}
+.agmem .wipe select{flex:1}
+.agmem .hint{font-size:10.5px;color:var(--faint);line-height:1.45}
+.btn.danger{border-color:rgba(248,113,113,.55);color:var(--bad)}
+.btn.danger:hover{background:rgba(248,113,113,.14);box-shadow:0 0 14px rgba(248,113,113,.25);color:#fff}
+.btn.danger.arm{background:rgba(248,113,113,.22);color:#fff}
+.agmem .cf{display:flex;gap:8px;padding:12px 16px;border-top:1px solid var(--line)}
+.agmem .cf .sp{flex:1}
+
 /* ---------------- agent creator */
 .modal{position:fixed;inset:0;z-index:70;display:none;align-items:center;justify-content:center;background:rgba(3,5,8,.62);backdrop-filter:blur(6px)}
 .modal.open{display:flex;animation:slidein .2s ease-out}
@@ -421,6 +439,33 @@ input[type=range]{accent-color:var(--accent);width:120px}
 </div>
 <input type="file" id="crHeartFile" accept=".md,.txt,text/markdown,text/plain" style="display:none">
 <input type="file" id="crVoiceFile" accept="audio/*,.wav,.mp3,.flac,.ogg,.m4a" style="display:none">
+<div class="modal" id="memModal">
+  <div class="glass agmem" role="dialog" aria-label="Agent memory">
+    <div class="ch"><div class="ttl" id="memTitle">MEMORY</div><span class="x" id="memClose" title="Close">×</span></div>
+    <div class="cb">
+      <div class="counts" id="memCounts"><span>loading…</span></div>
+      <div>
+        <div class="wipe">
+          <select id="memWindow" aria-label="How far back to delete">
+            <option value="1h">Past 1 hour</option>
+            <option value="12h">Past 12 hours</option>
+            <option value="1d">Past day</option>
+            <option value="1w">Past week</option>
+            <option value="all">Everything</option>
+          </select>
+          <button class="btn danger" id="memWipe">DELETE MEMORIES</button>
+        </div>
+        <div class="hint" id="memHint" style="margin-top:6px"></div>
+      </div>
+    </div>
+    <div class="cf">
+      <button class="btn" id="memOpen" title="Open this agent's memory folder">OPEN FOLDER</button>
+      <span class="sp"></span>
+      <button class="btn danger" id="memDelAgent" style="display:none">DELETE AGENT</button>
+      <button class="btn" id="memDone">CLOSE</button>
+    </div>
+  </div>
+</div>
 <div class="avtip" id="avTip"></div>
 <div class="toast glass" id="toast"></div>
 <script src="/static/atlas.js"></script>

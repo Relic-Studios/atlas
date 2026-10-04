@@ -75,7 +75,7 @@ function renderDock() {
       d.onclick = () => setPersona(p.id);
       d.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setPersona(p.id); } };
       d.onmouseenter = () => showTip(d, p); d.onmouseleave = hideTip; d.onfocus = () => showTip(d, p); d.onblur = hideTip;
-      d.oncontextmenu = (e) => { e.preventDefault(); if (p.custom) deleteAgent(p); };
+      d.oncontextmenu = (e) => { e.preventDefault(); hideTip(); openMemory(p); };
       box.appendChild(d);
     });
     const add = document.createElement('div');
@@ -96,7 +96,7 @@ function showTip(el, p) {
   const st = p.id ? (S.switching === p.id ? 'switching…' : p.id === S.persona ? (S.fast.speaking ? 'speaking' : 'active') : 'click to switch') : '';
   t.innerHTML = `<div class="n" style="color:${esc(p.accent || 'var(--accent)')}">${esc((p.name || '').toUpperCase())}</div>`
     + `<div class="r">${esc(p.role || '')}</div>`
-    + (p.voice || st ? `<div class="m">${p.voice ? 'voice · ' + esc(p.voice) : ''}${p.voice && st ? ' — ' : ''}${esc(st)}${p.custom ? ' · right-click to delete' : ''}</div>` : '');
+    + (p.voice || st ? `<div class="m">${p.voice ? 'voice · ' + esc(p.voice) : ''}${p.voice && st ? ' — ' : ''}${esc(st)}${p.id ? ' · right-click: memory' : ''}</div>` : '');
   t.style.left = Math.max(8, Math.min(innerWidth - 250, r.left + r.width / 2 - 80)) + 'px';
   t.style.top = (r.bottom + 10) + 'px';
   t.classList.add('show');
@@ -134,6 +134,65 @@ async function deleteAgent(p) {
   if (!r.ok) { toast(m.error || 'delete failed', '#f87171'); return; }
   applyPersonasMsg(m); toast(`deleted ${p.name}`);
 }
+
+/* ---------------------------------------------------------------- agent memory panel */
+// Owner 10-03: every agent gets a delete button with a time window, clearing ONLY that
+// agent's memories, so a crowded/broken memory is always something the user can fix.
+const MEM = { p: null, armT: 0 };
+const MEM_LABEL = { '1h': 'the past hour', '12h': 'the past 12 hours', '1d': 'the past day', '1w': 'the past week', all: 'everything' };
+function memHint() {
+  const w = $('memWindow').value, n = MEM.p ? MEM.p.name : '';
+  $('memHint').textContent = w === 'all'
+    ? `Deletes everything ${n} remembers, including memories you approved. Other agents keep theirs. Can't be undone.`
+    : `Deletes what ${n} learned or saved in ${MEM_LABEL[w]}. Older memories and other agents are untouched. Can't be undone.`;
+  disarmWipe();
+}
+function disarmWipe() { clearTimeout(MEM.armT); const b = $('memWipe'); b.classList.remove('arm'); b.textContent = 'DELETE MEMORIES'; }
+async function loadMemCounts() {
+  const box = $('memCounts'); const p = MEM.p; if (!p) return;
+  try {
+    const r = await fetch(`/api/memory/${encodeURIComponent(p.id)}`); const m = await r.json();
+    if (!r.ok) throw new Error(m.error || r.status);
+    if (MEM.p !== p) return;
+    box.innerHTML = `<span><b>${m.approved.length}</b> approved</span><span><b>${m.candidates.length}</b> waiting for review</span><span><b>${m.learned.length}</b> learned in calls</span>`;
+  } catch (e) { box.innerHTML = `<span>memory unavailable: ${esc(String(e.message || e))}</span>`; }
+}
+function openMemory(p) {
+  MEM.p = p;
+  $('memTitle').textContent = `${(p.name || p.id).toUpperCase()} · MEMORY`;
+  $('memTitle').style.color = p.accent || '';
+  $('memDelAgent').style.display = p.custom ? '' : 'none';
+  $('memWindow').value = '1h'; memHint();
+  $('memCounts').innerHTML = '<span>loading…</span>';
+  $('memModal').classList.add('open');
+  loadMemCounts();
+}
+function closeMemory() { disarmWipe(); $('memModal').classList.remove('open'); MEM.p = null; }
+async function wipeMemory() {
+  const b = $('memWipe'); const p = MEM.p; if (!p) return;
+  if (!b.classList.contains('arm')) {            // two-step: first click arms, second deletes
+    b.classList.add('arm'); b.textContent = 'CLICK AGAIN TO DELETE';
+    MEM.armT = setTimeout(disarmWipe, 4000); return;
+  }
+  disarmWipe(); b.disabled = true;
+  const w = $('memWindow').value;
+  try {
+    const r = await fetch(`/api/memory/${encodeURIComponent(p.id)}/wipe`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ window: w }) });
+    const m = await r.json();
+    if (!r.ok) throw new Error(m.error || r.status);
+    const n = (m.items || 0) + (m.learned || 0);
+    toast(n ? `${p.name}: deleted ${n} memor${n === 1 ? 'y' : 'ies'} from ${MEM_LABEL[w]}` : `${p.name}: nothing to delete from ${MEM_LABEL[w]}`, p.accent);
+    loadMemCounts();
+  } catch (e) { toast(`memory delete failed: ${e.message || e}`, '#f87171'); }
+  b.disabled = false;
+}
+$('memWindow').onchange = memHint;
+$('memWipe').onclick = wipeMemory;
+$('memClose').onclick = closeMemory; $('memDone').onclick = closeMemory;
+$('memOpen').onclick = async () => { if (!MEM.p) return; const r = await fetch(`/api/memory/${encodeURIComponent(MEM.p.id)}/open`, { method: 'POST' }); if (!r.ok) toast('could not open the folder', '#f87171'); };
+$('memDelAgent').onclick = async () => { const p = MEM.p; if (!p) return; closeMemory(); await deleteAgent(p); };
+$('memModal').onclick = (e) => { if (e.target.id === 'memModal') closeMemory(); };
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && $('memModal').classList.contains('open')) closeMemory(); });
 
 /* ---------------------------------------------------------------- agent creator */
 const CR = { step: 1, draft: null, accent: null, palette: [], usedVoices: [], previewT: 0 };

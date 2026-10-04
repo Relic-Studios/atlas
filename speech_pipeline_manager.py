@@ -417,6 +417,8 @@ class SpeechPipelineManager:
                 def _warm(svc=self.hgmem):
                     try:
                         import call_memory as _cm
+                        import agent_memory as _am
+                        _am.ensure_all(list(PERSONAS))   # every agent gets its memory folder
                         _hg.shared_embedder().encode(["warm up"])
                         for p in list(PERSONAS):
                             svc.sync_approved(p, [it["text"] for it in _cm.approved(p)])
@@ -989,7 +991,9 @@ class SpeechPipelineManager:
                     room = (room + chr(10) + memn).strip()
                 hg = getattr(self, "hgmem", None)
                 if hg is not None and ctx:
-                    hgn = hg.recall_note(getattr(self, "current_persona", ""), ctx)
+                    hgn = hg.recall_note(getattr(self, "current_persona", ""), ctx,
+                                         exclude={i["text"] for i in _cmem.approved(
+                                             getattr(self, "current_persona", ""))})
                     if hgn:
                         room = (room + chr(10) + hgn).strip()
             except Exception as e:  # noqa: BLE001

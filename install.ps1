@@ -139,7 +139,18 @@ else {
     $ws = New-Object -ComObject WScript.Shell
     $icon = Join-Path $Root 'static\favicon.ico'
     foreach ($dir in @([Environment]::GetFolderPath('Desktop'), (Join-Path ([Environment]::GetFolderPath('Programs')) ''))) {
-        $lnk = $ws.CreateShortcut((Join-Path $dir 'ATLAS.lnk'))
+        # Never take over a shortcut that belongs to a different ATLAS folder
+        # (10-03: a test install overwrote the owner's dev-build shortcut).
+        $path = Join-Path $dir 'ATLAS.lnk'
+        if (Test-Path $path) {
+            $old = $ws.CreateShortcut($path)
+            $ours = Join-Path $Root 'desktop'
+            if ($old.WorkingDirectory -and ($old.WorkingDirectory.TrimEnd('\') -ine $ours.TrimEnd('\')) -and (Test-Path $old.TargetPath)) {
+                $path = Join-Path $dir ('ATLAS (' + (Split-Path $Root -Leaf) + ').lnk')
+                Write-Host "    an ATLAS shortcut for another folder exists; leaving it alone, creating $(Split-Path $path -Leaf)"
+            }
+        }
+        $lnk = $ws.CreateShortcut($path)
         $lnk.TargetPath = $Electron
         $lnk.Arguments = '.'
         $lnk.WorkingDirectory = Join-Path $Root 'desktop'

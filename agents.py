@@ -163,6 +163,11 @@ def save_agent(agent: dict) -> dict:
         tmp = REGISTRY.with_suffix(".tmp")
         tmp.write_text(json.dumps(reg, indent=2), encoding="utf-8")
         tmp.replace(REGISTRY)
+    try:
+        import agent_memory
+        agent_memory.ensure(rec["id"])        # its own memory folder, from the first second
+    except Exception as e:  # noqa: BLE001
+        logger.warning("memory folder for %s: %s", rec["id"], e)
     return rec
 
 
@@ -176,6 +181,11 @@ def delete_agent(aid: str) -> bool:
         p = PERSONA_DIR / f"{aid}.txt"
         if p.exists():
             p.rename(p.with_suffix(".deleted"))
+    try:
+        import agent_memory
+        agent_memory.archive(aid)   # a new agent with the same name must start empty
+    except Exception as e:  # noqa: BLE001
+        logger.warning("archive memory for %s: %s", aid, e)
     return True
 
 

@@ -254,6 +254,8 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 from setup_api import router as _setup_router  # noqa: E402  first-run setup (public build)
 app.include_router(_setup_router)
+from memory_api import router as _memory_router  # noqa: E402  per-agent memory panel (owner only)
+app.include_router(_memory_router)
 
 
 @app.post("/api/setup/restart")
@@ -573,6 +575,8 @@ async def agents_delete(aid: str, request: Request):
     mgr = app.state.SpeechPipelineManager
     if not mgr.remove_agent(aid):
         return JSONResponse({"error": "Can't delete a built-in or the active agent."}, status_code=400)
+    if getattr(mgr, "hgmem", None) is not None:
+        mgr.hgmem.drop_agent(aid)
     await asyncio.to_thread(A.delete_agent, aid)
     return mgr.personas_info()
 
@@ -1300,6 +1304,14 @@ class TranscriptionCallbacks:
         self.abort_text = txt # Update text used for abort check
         self.abort_request_event.set() # Signal the abort worker
         self._check_barge_in(txt)
+        # Memory recall prefetch: embed + search while they're still talking, so the
+        # turn's recall is ready (~0 ms) when the sentence lands. Non-blocking.
+        try:
+            _m = self.app.state.SpeechPipelineManager
+            if getattr(_m, "hgmem", None) is not None:
+                _m.hgmem.prefetch(getattr(_m, "current_persona", ""), txt)
+        except Exception:  # noqa: BLE001 - prefetch must never touch the turn
+            pass
 
     def safe_abort_running_syntheses(self, reason: str):
         """Placeholder for safely aborting syntheses (currently does nothing)."""

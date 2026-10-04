@@ -1,6 +1,7 @@
 """Owner-approved memory across calls, per persona.
 
-Store: agent_state/memory/<persona>.json  ->  {"items": [{id, text, status, src, t}]}
+Store: agent_state/memory/<persona>/items.json  ->  {"items": [{id, text, status, src, t}]}
+(one folder per agent, see agent_memory.py)
   status: "candidate" (proposed off-call by tools/memory_review.py) | "approved" | "rejected"
 
 Only APPROVED items ever reach the model, as a short list. Nothing is extracted
@@ -13,7 +14,9 @@ import threading
 import time
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent / "agent_state" / "memory"
+import agent_memory as AM
+
+ROOT = AM.ROOT
 MAX_IN_PROMPT = int(os.environ.get("ATLAS_MEMORY_MAX", "8"))
 ENABLED = os.environ.get("ATLAS_MEMORY", "1") != "0"
 
@@ -22,7 +25,8 @@ _cache: dict = {}   # persona -> (mtime, items)
 
 
 def _path(persona: str, root: Path = None) -> Path:
-    return Path(root or ROOT) / f"{(persona or 'unknown').lower()}.json"
+    AM.migrate(root or ROOT)
+    return AM.folder(persona, root or ROOT) / AM.ITEMS
 
 
 def load(persona: str, root: Path = None) -> list:
@@ -56,7 +60,7 @@ def save(persona: str, items: list, root: Path = None) -> None:
 def add_candidates(persona: str, texts: list, src: str = "", root: Path = None) -> int:
     items = load(persona, root)
     have = {i["text"].strip().lower() for i in items}
-    n = len(items)
+    n = max([int(i["id"].rsplit("m", 1)[-1]) for i in items if i["id"].rsplit("m", 1)[-1].isdigit()] or [0])
     added = 0
     for t in texts:
         t = " ".join(str(t).split())[:220]
@@ -81,6 +85,46 @@ def set_status(persona: str, ids, status: str, root: Path = None) -> int:
             n += 1
     save(persona, items, root)
     return n
+
+
+def forget(persona: str, ids, root: Path = None) -> int:
+    """Remove items entirely (not just 'rejected'): the owner said forget it."""
+    ids = set(ids)
+    items = load(persona, root)
+    keep = [i for i in items if i["id"] not in ids]
+    if len(keep) != len(items):
+        save(persona, keep, root)
+    return len(items) - len(keep)
+
+
+def forget_since(persona: str, cutoff: float, root: Path = None) -> int:
+    """Owner wipe: drop approved/candidate memories added at/after `cutoff` (cutoff <= 0:
+    all of them). Rejected items stay: they are the owner's "no" list, not memories, and
+    they stop the reviewer from proposing the same thing again."""
+    items = load(persona, root)
+    keep = [i for i in items if i.get("status") == "rejected"
+            or (cutoff > 0 and float(i.get("t", 0) or 0) < cutoff)]
+    if len(keep) != len(items):
+        save(persona, keep, root)
+    return len(items) - len(keep)
+
+
+def add_approved(persona: str, text: str, src: str = "owner", root: Path = None) -> str | None:
+    """Owner kept a learned memory in the app: store it as approved directly."""
+    t = " ".join(str(text).split())[:220]
+    if not t:
+        return None
+    items = load(persona, root)
+    for i in items:
+        if i["text"].strip().lower() == t.lower():
+            i["status"] = "approved"
+            save(persona, items, root)
+            return i["id"]
+    n = max([int(i["id"].rsplit("m", 1)[-1]) for i in items if i["id"].rsplit("m", 1)[-1].isdigit()] or [0]) + 1
+    iid = f"{AM.slug(persona)}-m{n:04d}"
+    items.append({"id": iid, "text": t, "status": "approved", "src": src, "t": round(time.time())})
+    save(persona, items, root)
+    return iid
 
 
 def approved(persona: str, root: Path = None) -> list:
