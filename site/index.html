@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ATLAS: voice agents that join your calls and run on your own PC</title>
+<meta name="description" content="ATLAS adds a talking AI to your group voice calls. It hears everyone, learns names, answers when spoken to and stays quiet when it isn't. Local-first, no account, no hidden keys.">
+<meta property="og:title" content="ATLAS: voice agents for your calls, running on your PC">
+<meta property="og:description" content="Give it a voice and a personality. It joins the call, knows when it's being talked to, and remembers what matters. Local-first and open source.">
+<meta property="og:image" content="https://relic-studios.github.io/atlas/img/social-preview.png">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary_large_image">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'none'; base-uri 'none'; form-action 'none'">
+<style>
+:root{--bg:#05080f;--panel:#0b1220;--line:#1a2740;--fg:#e8eef8;--mute:#93a3bd;--cyan:#38d6ff;--amber:#ffb547}
+*{box-sizing:border-box}html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+a{color:var(--cyan)}img{max-width:100%;display:block}
+.wrap{max-width:1120px;margin:0 auto;padding:0 24px}
+nav{position:sticky;top:0;z-index:5;background:rgba(5,8,15,.82);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+nav .wrap{display:flex;align-items:center;gap:24px;height:60px}
+nav b{letter-spacing:.18em;font-size:18px}nav .sp{flex:1}
+nav a{color:var(--mute);text-decoration:none;font-size:14px}nav a:hover{color:var(--fg)}
+.btn{display:inline-block;padding:12px 22px;border-radius:10px;font-weight:600;text-decoration:none;border:1px solid var(--line);color:var(--fg)}
+.btn.primary{background:linear-gradient(135deg,var(--cyan),#2b8cff);color:#021018;border:0}
+.hero{position:relative;min-height:min(78vh,760px);display:flex;align-items:flex-end;overflow:hidden}
+.hero picture,.hero img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.hero::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(5,8,15,.15) 0%,rgba(5,8,15,.55) 55%,var(--bg) 100%)}
+.hero .wrap{position:relative;z-index:2;padding-bottom:72px}
+h1{font-size:clamp(36px,5.4vw,64px);line-height:1.05;margin:0 0 18px;max-width:14em}
+.lede{font-size:clamp(17px,2vw,21px);color:#c9d5e8;max-width:38em;margin:0 0 28px}
+.cta{display:flex;gap:12px;flex-wrap:wrap}.fine{color:var(--mute);font-size:13px;margin-top:14px}
+section{padding:88px 0;border-top:1px solid var(--line)}
+h2{font-size:clamp(26px,3.2vw,38px);margin:0 0 14px}
+.kicker{color:var(--amber);text-transform:uppercase;letter-spacing:.16em;font-size:12px;font-weight:700}
+.split{display:grid;grid-template-columns:1fr 1fr;gap:48px;align-items:center}
+.split.rev>:first-child{order:2}
+.split img{border-radius:16px;border:1px solid var(--line)}
+.steps{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:36px;counter-reset:s}
+.step{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px}
+.step::before{counter-increment:s;content:counter(s);display:inline-grid;place-items:center;width:30px;height:30px;border-radius:50%;background:rgba(56,214,255,.12);color:var(--cyan);font-weight:700;margin-bottom:10px}
+.step h3{margin:0 0 6px;font-size:18px}.step p{margin:0;color:var(--mute);font-size:15px}
+table{width:100%;border-collapse:collapse;margin-top:24px;font-size:15px}
+td,th{padding:12px 14px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{color:var(--mute);font-weight:600}td:last-child{color:var(--mute)}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:28px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px}
+.card h3{margin:0 0 6px;font-size:17px}.card p{margin:0;color:var(--mute);font-size:15px}
+footer{padding:40px 0;color:var(--mute);font-size:14px;border-top:1px solid var(--line)}
+@media(max-width:860px){.split,.steps,.grid3{grid-template-columns:1fr}.split.rev>:first-child{order:0}nav a.hide{display:none}}
+</style>
+</head>
+<body>
+<nav><div class="wrap"><b>ATLAS</b><span class="sp"></span>
+<a class="hide" href="#how">How it works</a><a class="hide" href="#memory">Memory</a><a class="hide" href="#privacy">Privacy</a><a class="hide" href="#requirements">Requirements</a>
+<a href="https://github.com/Relic-Studios/atlas">GitHub</a></div></nav>
+
+<header class="hero">
+<picture><source srcset="img/hero.webp" type="image/webp"><img src="img/hero.jpg" alt="" fetchpriority="high"></picture>
+<div class="wrap">
+<div class="kicker">Open source · local-first · v0.2.0</div>
+<h1>A voice agent that joins your calls and runs on your own PC.</h1>
+<p class="lede">Give it a voice from a short clip and a personality in plain words. It hears everyone, learns their names, answers when someone talks to it, and stays out of the way when they don't.</p>
+<div class="cta"><a class="btn primary" href="https://github.com/Relic-Studios/atlas/releases/latest">Download for Windows</a><a class="btn" href="https://github.com/Relic-Studios/atlas#install">Linux install</a></div>
+<p class="fine">Free. No account. No hidden API keys. Requires an NVIDIA GPU.</p>
+</div></header>
+
+<section id="how"><div class="wrap">
+<div class="kicker">How you use it</div>
+<h2>Four steps, the same every time.</h2>
+<p class="lede">ATLAS is built around one loop: set it up once, then make agents, take them into calls, and review what happened.</p>
+<div class="steps">
+<div class="step"><h3>Set up</h3><p>The first-run wizard checks your GPU, installs or finds Ollama, picks a model that fits, or connects your own cloud provider.</p></div>
+<div class="step"><h3>Make an agent</h3><p>Import a voice clip you have the rights to, describe a personality, let ATLAS draft the rest, edit and save.</p></div>
+<div class="step"><h3>Join a call</h3><p>Route your call audio in and the agent's voice out. Mute, quiet mode and a talkativeness slider are one click away.</p></div>
+<div class="step"><h3>Review</h3><p>After the call: who it talked to, when it held back, what it said. Approve what it should remember. Clear anything you don't want kept.</p></div>
+</div></div></section>
+
+<section><div class="wrap split">
+<div><div class="kicker">Built for groups</div><h2>Knows when it's being talked to.</h2>
+<p>Most voice bots answer everything. ATLAS tracks who is speaking, decides whether a line is meant for it, and holds back when it isn't. It learns names from introductions instead of calling people "Speaker 3".</p>
+<table><tr><th>Measured on Qwen3 14B</th><th></th></tr>
+<tr><td>Interrupted when not addressed</td><td>0 times</td></tr>
+<tr><td>Missed when addressed</td><td>0 times</td></tr>
+<tr><td>Requests completed</td><td>12 of 12</td></tr>
+<tr><td>Replies in its own words</td><td>29 of 30</td></tr></table>
+<p class="fine">From the turn-taking and request benchmarks in the repo. An 8B model also works, with 3 of 12 misses.</p></div>
+<picture><source srcset="img/group.webp" type="image/webp"><img src="img/group.jpg" alt="Several voices meeting at one point above a round table" loading="lazy"></picture>
+</div></section>
+
+<section id="memory"><div class="wrap split rev">
+<div><div class="kicker">Memory</div><h2>Remembers what matters. Forgets on request.</h2>
+<p>Each agent has its own long-term memory: a graph of what was said that strengthens links it uses and lets the rest fade. Relevant memories come back on their own. The search starts while people are still talking, so it adds almost no delay.</p>
+<div class="grid3" style="grid-template-columns:1fr 1fr">
+<div class="card"><h3>Private by default</h3><p>Phone numbers, emails, addresses and keys are never stored.</p></div>
+<div class="card"><h3>Separate per agent</h3><p>Agents never see each other's memories.</p></div>
+<div class="card"><h3>You approve</h3><p>Review what it proposes to remember after each call.</p></div>
+<div class="card"><h3>Clear anytime</h3><p>Last hour, 12 hours, day, week or everything, per agent.</p></div>
+</div></div>
+<picture><source srcset="img/memory.webp" type="image/webp"><img src="img/memory.jpg" alt="A glowing network of connected points" loading="lazy"></picture>
+</div></section>
+
+<section id="privacy"><div class="wrap split">
+<div><div class="kicker">Local-first</div><h2>Your PC, your models, your keys.</h2>
+<p>Speech recognition and the voice run on your graphics card. The language model can too, through Ollama. If you prefer a cloud model, paste your own key for any OpenAI-compatible provider; it's encrypted on disk and never sent anywhere else.</p>
+<ul>
+<li>The app's server only accepts requests from ATLAS itself, on this computer.</li>
+<li>Release builds are checked for known vulnerabilities and ship SHA-256 checksums.</li>
+<li>Open source, so you can read exactly what it does.</li></ul></div>
+<picture><source srcset="img/local.webp" type="image/webp"><img src="img/local.jpg" alt="A desktop PC inside a glowing protective dome" loading="lazy"></picture>
+</div></section>
+
+<section id="requirements"><div class="wrap split rev">
+<div><div class="kicker">Requirements</div><h2>Honest about what it needs.</h2>
+<table>
+<tr><td>GPU</td><td>NVIDIA, required. The voice engine is CUDA-only.</td></tr>
+<tr><td>Fully local</td><td>12 GB VRAM minimum (8B model), 16 GB+ recommended (14B).</td></tr>
+<tr><td>With a cloud model</td><td>About 8 GB VRAM for speech and voice.</td></tr>
+<tr><td>OS</td><td>Windows 10/11 or Ubuntu 22.04+. No macOS yet.</td></tr>
+<tr><td>Installer</td><td>Not code-signed yet, so Windows SmartScreen will warn. Checksums are on every release.</td></tr>
+</table></div>
+<picture><source srcset="img/setup.webp" type="image/webp"><img src="img/setup.jpg" alt="Glowing stepping stones leading upward" loading="lazy"></picture>
+</div></section>
+
+<section><div class="wrap" style="text-align:center">
+<h2>Try it in your next call.</h2>
+<p class="lede" style="margin:0 auto 26px">Free and open source. Bring your own voice, your own personality, your own model.</p>
+<div class="cta" style="justify-content:center"><a class="btn primary" href="https://github.com/Relic-Studios/atlas/releases/latest">Download ATLAS</a><a class="btn" href="https://github.com/Relic-Studios/atlas">Read the code</a></div>
+<p class="fine">Only use voices you have the rights to.</p>
+</div></section>
+
+<footer><div class="wrap">ATLAS by Relic Studios · <a href="https://github.com/Relic-Studios/atlas/blob/main/SECURITY.md">Security</a> · <a href="https://github.com/Relic-Studios/atlas/blob/main/CHANGELOG.md">Changelog</a></div></footer>
+</body></html>

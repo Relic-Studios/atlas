@@ -1,5 +1,5 @@
 """Build the one-file Windows installer: fresh public export -> leak check -> Inno Setup.
-Usage: python tools/build_installer.py [--version 0.2.0] [--iscc PATH]
+Usage: python tools/build_installer.py [--version 0.2.1] [--iscc PATH]
 Output: dist/ATLAS-Setup-<version>.exe. Never writes inside the dev tree except dist/."""
 import argparse, os, shutil, subprocess, sys, tempfile
 
@@ -11,7 +11,7 @@ ISCC_GUESSES = [r"E:\AstraRelease-buildtools\InnoSetup\ISCC.exe",
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--version", default="0.2.0")
+    ap.add_argument("--version", default="0.2.1")
     ap.add_argument("--iscc", default=next((p for p in ISCC_GUESSES if os.path.exists(p)), None))
     ap.add_argument("--ref", default="HEAD", help="git ref to package (public repo: a release tag)")
     a = ap.parse_args()

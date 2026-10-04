@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.1 — fix: agent goes silent after being talked over
+
+- If someone talked over the agent at the exact moment its reply was being sent, the audio sender
+  could stop for good. The agent kept listening and generating replies, but nobody heard them until
+  ATLAS was restarted. The sender now survives that moment and plays the next reply. Covered by a
+  regression test that lands the interruption at every point in the send step.
+- Project website (`site/`) with a GitHub Pages deploy workflow.
+
 ## 0.2.0 — memory, privacy and audio quality
 
 **Memory**

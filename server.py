@@ -955,8 +955,10 @@ async def send_tts_chunks(app: FastAPI, message_queue: asyncio.Queue, callbacks:
         last_quick_answer_chunk = 0
         last_chunk_sent = 0
         prev_status = None
+        _sender_err_t = 0.0
 
         while True:
+          try:
             await asyncio.sleep(0.001) # Yield control
 
             # Use connection-specific interruption_time via callbacks
@@ -965,7 +967,8 @@ async def send_tts_chunks(app: FastAPI, message_queue: asyncio.Queue, callbacks:
                 callbacks.interruption_time = 0 # Reset via callbacks
                 logger.info(Colors.apply("🖥️🎙️ interruption flag reset after 2 seconds").cyan)
 
-            is_tts_finished = app.state.SpeechPipelineManager.is_valid_gen() and app.state.SpeechPipelineManager.running_generation.audio_quick_finished
+            _g0 = app.state.SpeechPipelineManager.running_generation
+            is_tts_finished = bool(app.state.SpeechPipelineManager.is_valid_gen() and _g0 is not None and _g0.audio_quick_finished)
 
             def log_status():
                 nonlocal prev_status
@@ -1024,7 +1027,7 @@ async def send_tts_chunks(app: FastAPI, message_queue: asyncio.Queue, callbacks:
                 _g.tts_quick_allowed_event.set()
 
             # A silent response has no first audio chunk to wait for.
-            gen = app.state.SpeechPipelineManager.running_generation
+            gen = _g
             if gen.response_held and gen.llm_finished and callbacks.user_history_committed:
                 logger.info("Model HOLD retired without audio or assistant history")
                 try:
@@ -1035,19 +1038,19 @@ async def send_tts_chunks(app: FastAPI, message_queue: asyncio.Queue, callbacks:
                 callbacks.reset_state()
                 continue
 
-            if not app.state.SpeechPipelineManager.running_generation.quick_answer_first_chunk_ready:
+            if not _g.quick_answer_first_chunk_ready:
                 await asyncio.sleep(0.001)
                 log_status()
                 continue
 
             chunk = None
             try:
-                chunk = app.state.SpeechPipelineManager.running_generation.audio_chunks.get_nowait()
+                chunk = _g.audio_chunks.get_nowait()
                 if chunk:
                     last_quick_answer_chunk = time.time()
             except Empty:
-                final_expected = app.state.SpeechPipelineManager.running_generation.quick_answer_provided
-                audio_final_finished = app.state.SpeechPipelineManager.running_generation.audio_final_finished
+                final_expected = _g.quick_answer_provided
+                audio_final_finished = _g.audio_final_finished
 
                 if not final_expected or audio_final_finished:
                     logger.info("🖥️🏁 Sending of TTS chunks and 'user request/assistant answer' cycle finished.")
@@ -1062,13 +1065,14 @@ async def send_tts_chunks(app: FastAPI, message_queue: asyncio.Queue, callbacks:
                             pass
                     callbacks.send_final_assistant_answer() # Callbacks method
                     try:
-                        _g = app.state.SpeechPipelineManager.running_generation
+                        # Use the snapshot: re-reading running_generation here could
+                        # return None after a barge-in and break the line below.
                         app.state.SpeechPipelineManager.threads.answered(
                             getattr(getattr(_g, "decision", None), "target", None))
                     except Exception:  # noqa: BLE001
                         pass
 
-                    assistant_answer = app.state.SpeechPipelineManager.running_generation.quick_answer + app.state.SpeechPipelineManager.running_generation.final_answer                    
+                    assistant_answer = _g.quick_answer + _g.final_answer                    
                     app.state.SpeechPipelineManager.running_generation = None
 
                     callbacks.tts_chunk_sent = False # Reset via callbacks
@@ -1103,6 +1107,17 @@ async def send_tts_chunks(app: FastAPI, message_queue: asyncio.Queue, callbacks:
                 asyncio.create_task(_reset_interrupt_flag_async(app, callbacks))
 
             callbacks.tts_chunk_sent = True # Set via callbacks
+          except (asyncio.CancelledError, WebSocketDisconnect):
+            raise
+          except Exception as e:  # noqa: BLE001
+            # 10-04 live call: a barge-in cleared running_generation mid-step, the
+            # AttributeError ended this task, and every later reply was synthesized
+            # but never played (Fae silent for 12+ min). Log loudly, keep sending.
+            _now = time.time()
+            if _now - _sender_err_t > 5.0:
+                _sender_err_t = _now
+                logger.exception(f"🖥️💥 send_tts_chunks step failed (sender kept alive): {e!r}")
+            await asyncio.sleep(0.05)
 
     except asyncio.CancelledError:
         pass # Task cancellation is expected on disconnect
