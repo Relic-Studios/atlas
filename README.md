@@ -4,7 +4,8 @@
   <a href="https://github.com/Relic-Studios/atlas/releases/latest"><b>Download for Windows</b></a> ·
   <a href="#linux">Linux</a> ·
   <a href="#requirements">Requirements</a> ·
-  <a href="CHANGELOG.md">Changelog</a>
+  <a href="CHANGELOG.md">Changelog</a> ·
+  <a href="https://discord.gg/dWvcu3yG6s">Community Discord</a>
 </p>
 
 # ATLAS
@@ -83,6 +84,11 @@ You can change all of this later from the dashboard.
 | 16 GB+ (e.g. RTX 4080, 4090, 5090) | Fully local with Qwen3 14B (recommended) |
 
 Smaller local models (4B and under) were benchmarked and can't keep up with a group call.
+
+## Community
+
+Questions, install help, persona and voice tips, clips: join the [ATLAS community Discord](https://discord.gg/dWvcu3yG6s).
+Bugs can also go in [GitHub issues](https://github.com/Relic-Studios/atlas/issues); security reports go through [SECURITY.md](SECURITY.md), not public channels.
 
 ## Privacy
 

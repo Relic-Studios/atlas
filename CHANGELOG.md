@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.2 — community, guide strip, group framing
+
+- New: community Discord for install help, personas, voices and clips: https://discord.gg/dWvcu3yG6s
+- New: "Your loop" guide strip on the dashboard (Set up -> Make an agent -> Start a conversation ->
+  Review) that shows the next useful step, such as memory suggestions waiting for review.
+- Agents now describe themselves as voice agents for group conversation, not tied to one app.
+
 ## 0.2.1 — fix: agent goes silent after being talked over
 
 - If someone talked over the agent at the exact moment its reply was being sent, the audio sender
