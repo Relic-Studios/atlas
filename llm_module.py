@@ -1107,6 +1107,13 @@ class LLM:
             if images:
                 result += ("\n[This screenshot was taken just now, for this turn. Describe only "
                            "what is in THIS image; anything you said about the screen before is out of date.]")
+            # Live sim 10-05: after a prefetched tool the model skipped the routing header
+            # (-> INVALID, agent silent) and read out a long file list. Remind it of the
+            # reply shape it would normally have produced before calling the tool itself.
+            _who = re.findall(r"\[(S\d+)\]", _last_user_text(working) or "")
+            _hdr = f"[SPEAK to={_who[-1]}]" if _who else "[SPEAK to=...]"
+            result += ("\n[Now reply out loud: start with the header " + _hdr + ", then "
+                       "one to three short spoken sentences in your own words. No lists.]")
             working.append({"role": "assistant", "content": "", "tool_calls": calls})
             msg = {"role": "tool", "content": result}
             if images:

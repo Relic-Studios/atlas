@@ -2,7 +2,11 @@
 
 ATLAS is early beta. See [SAFETY.md](SAFETY.md) for what an agent can do, what's tested and what isn't.
 
-## Unreleased
+## 0.3.0 — agents can check themselves
+
+- New for every agent: **a prediction log.** An agent can write down a prediction ("Sam will pick co-op"), check it later and mark it right or wrong. Private to each agent, wiped with its memory.
+- New for every agent: **read-only access to its own code.** Asked "how do you decide when to talk?", an agent can open the actual source and explain it, instead of guessing. It can't edit or run anything, and it can't read your private files, memory, recordings or keys.
+- Tested live on qwen3 8B and 14B: tools called when they should be, results explained in the agent's own words, and "can you rewrite your own code?" answered plainly (no). The 8 conversation situations still pass 104/104 on both models.
 
 - Web search uses Exa or Brave when you add your own key (`user/exa.key`, `user/brave.key`, or `ATLAS_EXA_KEY` / `ATLAS_BRAVE_KEY`), falling back to the free search otherwise. Results carry dates.
 - Agents always know the real date and time; new `check_date_time` tool for other time zones.

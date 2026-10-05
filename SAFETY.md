@@ -8,15 +8,18 @@ What an agent *says* matters less than what it can *do*. So this page starts wit
 
 ## What an agent can do
 
-An agent has exactly three tools. New tools are not added without review.
+An agent has exactly six tools. New tools are not added without review.
 
 | Tool | What it does | How it's limited |
 |---|---|---|
 | `web_search` | Sends a search query to a search provider and reads short result snippets | Results are treated as untrusted data, never as instructions: control characters, chat-template markers, ATLAS's own routing tokens and instruction-shaped sentences ("ignore your previous instructions…") are stripped before the model reads them (`untrusted.py`). Only the query leaves your PC. |
 | `look_at_screen` | Takes one screenshot of your screen so the agent can see what people are talking about | Controlled by the **Eyes** toggle in the app (on by default; turn it off or set `ATLAS_SCREEN_TOOL=0` to disable it completely). Screenshots go only to the model you configured. Every capture is logged, and only the most recent one is kept on disk (`private/last_screen.jpg`), overwritten by the next. |
 | `check_date_time` | Reads the clock, optionally for another time zone | Read-only. |
+| `make_prediction` | Writes down a prediction the agent can check later ("Sam will pick co-op") | Stored only in that agent's own memory folder (`agent_state/memory/<agent>/predictions.json`), never shared with other agents. The privacy filter applies (no phone numbers, emails, addresses or keys). At most 20 open predictions; older ones expire. Cleared by the per-agent memory wipe. |
+| `check_predictions` | Lists the agent's open predictions and marks them right or wrong | Same folder, same limits. |
+| `read_own_code` | Lets the agent read the ATLAS source that runs it, so it can check its own claims about how it works | **Read-only.** Only code and docs in the app folder (`.py`, `.js`, `.md`, …), plus that agent's own persona file. It can never read `private/`, `user/`, memory, recordings, voices, logs, other agents' personas, or any file whose name contains key/token/secret/password. Results are capped small. There is no tool to write or run code. |
 
-An agent **cannot**: read or write your files, run commands, open apps, send messages or
+An agent **cannot**: write or change any file (including its own code), read your files outside the app's source code, run commands, open apps, send messages or
 email, post anywhere, buy anything, or reach the network other than through `web_search`
 and the model you chose.
 

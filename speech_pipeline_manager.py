@@ -86,8 +86,9 @@ BOARD_TOOLS = [
         {"minutes": {"type": "number", "description": "0.5 to 5"}}),
 ]
 import clock as _clock
+import self_tools as _self_tools
 AGENT_TOOLS = (list(WEB_SEARCH_TOOLS) + READ_PAGE_TOOLS + list(SCREEN_TOOLS) + BOARD_TOOLS
-               + [_clock.TOOL])
+               + [_clock.TOOL] + list(_self_tools.TOOLS))
 SEARCH_WAIT_S = 9.0   # how long a reply waits for its search before handing it to the board
 
 
@@ -859,6 +860,11 @@ class SpeechPipelineManager:
             if name == "clear_note":
                 ok = self.board().clear(int(args.get("id") or 0))
                 return "Cleared." if ok else "No such note."
+            if name in _self_tools.NAMES:
+                out = _self_tools.execute(name, args, getattr(self, "current_persona", "") or "")
+                logger.info("🗣️🔎 %s %s(%s) -> %d chars", self.current_persona, name,
+                            ", ".join(f"{k}={str(v)[:40]!r}" for k, v in args.items()), len(out))
+                return out
             if name == "step_back":
                 mins = self.floor.step_back(args.get("minutes") or 2.0)
                 logger.info(f"🗣️🤫 {self.current_persona} chose to step back for {mins:g} min")
@@ -893,6 +899,30 @@ class SpeechPipelineManager:
             return ('look_at_screen', {'reason': f"{speaker or 'someone'} asked me to look at the screen"})
         except Exception as e:  # noqa: BLE001 - never block a turn
             logger.warning('look prefetch check failed: %s', e)
+            return None
+
+    def _code_prefetch(self, txt: str, is_cue: bool = False):
+        """('read_own_code', args) when a line aimed at this agent asks it to read its code."""
+        try:
+            import self_tools as _st
+            if is_cue:
+                return None
+            pf = _st.code_prefetch(txt)
+            if pf is None:
+                return None
+            from floor import names_agent
+            m = re.match(r'^\s*\[(S\d+)\]', txt or '')
+            speaker = m[1] if m else None
+            agent = getattr(self, 'agent', None)
+            names = tuple(getattr(getattr(agent, 'profile', None), 'names', ()) or ()) \
+                or (getattr(self, 'current_persona', '') or '',)
+            floor = getattr(self, 'floor', None)
+            partner = floor.active_partner() if floor is not None else None
+            if not (names_agent(txt, names) or speaker is None or (partner and speaker == partner)):
+                return None
+            return pf
+        except Exception as e:  # noqa: BLE001 - never block a turn
+            logger.warning('code prefetch check failed: %s', e)
             return None
 
     def _lookup_note(self) -> str:
@@ -1039,6 +1069,15 @@ class SpeechPipelineManager:
             eyes_on = bool(_screen is not None and _screen.status().get("enabled"))
             ctx = getattr(self, "_ctx_text", "")
             room = (room + chr(10) + _cap.abilities_note(eyes_on, bool(WEB_SEARCH_TOOLS), getattr(self, 'current_persona', '') or '')).strip()
+            try:
+                pn = _self_tools.context_note(getattr(self, "current_persona", "") or "")
+                if pn:
+                    room = (room + chr(10) + pn).strip()
+                cn = _self_tools.change_note(ctx)
+                if cn:
+                    room = (room + chr(10) + cn).strip()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("prediction note failed: %s", e)
             try:
                 import call_memory as _cmem
                 memn = _cmem.memory_note(getattr(self, "current_persona", ""))
@@ -1558,7 +1597,7 @@ class SpeechPipelineManager:
             # TODO: Update history management if needed
             # self.history.append({"role": "user", "content": txt}) # Example history update
             mem_ctx = self._memory_context(txt)
-            look = self._look_prefetch(txt, is_cue)
+            look = self._look_prefetch(txt, is_cue) or self._code_prefetch(txt, is_cue)
 
             def _gen(text_in, _h=history, _r=room, _m=mem_ctx, _l=look):
                 return self.llm.generate(

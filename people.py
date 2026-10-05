@@ -368,9 +368,10 @@ class NameBook:
         if p.probable:
             return (f"If you answer {current}, you can casually check whether they're "
                     f"{p.probable} - in your own voice, only if it fits.")
-        return (f"You don't know who {current} is yet. If you answer them, work in a quick "
-                "ask for their name in your own style (e.g. 'wait, who's this?'), once, "
-                "after actually responding.")
+        # sim_self_tools 10-05: 8B copied the quoted example ("wait, who's this?") as its
+        # WHOLE reply and dropped the answer. No quoted example; answer comes first.
+        return (f"You don't know who {current} is yet. Answer what they said first; then, "
+                "only if it fits, add a short ask for their name in your own words (once).")
 
     def sanitize(self, text: str, target: str | None = None) -> str:
         """Replace any spoken S-tag with a name, 'you', or 'someone'."""

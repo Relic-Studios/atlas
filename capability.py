@@ -123,6 +123,9 @@ def abilities_note(eyes_on: bool, search_on: bool = True, persona: str = "") -> 
                    "- just look, like glancing over")
     can.append("check the real date and time")
     can.append("leave notes for yourself")
+    can.append("log predictions that could turn out wrong and check your track record later")
+    can.append("read (not change) the actual source code that runs you, to see where your "
+               "limits are drawn")
     try:
         import clock as _clock
         now = _clock.now_note() + " "
