@@ -407,6 +407,12 @@ class SpeechPipelineManager:
         # Voice tag -> human name. Survives persona switches (same people in the call).
         from people import NameBook
         self.people = NameBook(agent_names=tuple(PERSONAS))
+        try:
+            import name_hearing
+            name_hearing.set_names([display_name(getattr(self, 'current_persona', '') or DEFAULT_PERSONA)])
+            name_hearing.set_protect(lambda: [p.name for p in list(self.people.people.values()) if p.name])
+        except Exception as e:  # noqa: BLE001
+            logger.warning('name_hearing init failed: %s', e)
         # Per-agent semantic hypergraph memory (Hebbian strengthening + decay).
         # Embeds on CPU in a background writer; the reply path only reads, with a time budget.
         self.hgmem = None
@@ -1428,7 +1434,16 @@ class SpeechPipelineManager:
         id_in_spec = self.generation_counter + 1 # Prospective ID for logging
         aborted = self.check_abort(txt, wait_for_finish=True, abort_reason=f"process_prepare_generation for new id {id_in_spec}")
 
-        # --- State is now guaranteed to be clean (running_generation is None) ---
+        # check_abort declined (same utterance refined): the running generation stays
+        # the owner. Replacing it here orphaned a reply that was already speaking --
+        # its audio played to nobody and the turn ended "empty" (demo 10-04, Riley intro).
+        keep = self.running_generation
+        if not aborted and keep is not None and not keep.abortion_started:
+            logger.info(f"🗣️✨🙅 [Gen {keep.id}] Keeping running generation for refined text: '{txt[:50]}...'")
+            keep.text = txt
+            return
+
+        # --- No live generation remains (none existed, or it was aborted) ---
         self.generation_counter += 1
         new_gen_id = self.generation_counter
         logger.info(f"🗣️✨🔄 [Gen {new_gen_id}] Preparing new generation for: '{txt[:50]}...'")
@@ -1874,6 +1889,11 @@ class SpeechPipelineManager:
         self.current_persona = name
         from identity import note as _id_note
         self.system_prompt = f"Your name is {display_name(name)}. {_id_note(name, display_name(name))} " + PERSONAS[name]
+        try:
+            import name_hearing
+            name_hearing.set_names([display_name(name)])
+        except Exception as e:  # noqa: BLE001
+            logger.warning('name_hearing set failed: %s', e)
         self.dynamics.agent_names = (display_name(name).lower(),)
         # Update the LLM's cached system prompt message in place.
         if self.llm is not None:

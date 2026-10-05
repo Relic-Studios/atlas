@@ -4,6 +4,15 @@ logger = logging.getLogger(__name__)
 from turndetect import strip_ending_punctuation
 from difflib import SequenceMatcher
 from colors import Colors
+
+
+def _name_fix(text):
+    # Agent name misheard in a direct address ('Hey Ran,' -> 'Hey Wren,'); see name_hearing.py.
+    try:
+        import name_hearing
+        return name_hearing.fix(text)
+    except Exception:  # noqa: BLE001 - never block transcription
+        return text
 from text_similarity import TextSimilarity
 from scipy import signal
 import numpy as np
@@ -361,6 +370,7 @@ class TranscriptionProcessor:
                 logger.warning("👂❓ Final transcription received None or empty string.")
                 return
 
+            text = _name_fix(text)
             self.final_transcription = text
             logger.info(f"👂✅ {Colors.apply('Final user text: ').green} {Colors.apply(text).yellow}")
             self.sentence_end_cache.clear()
@@ -737,6 +747,7 @@ class TranscriptionProcessor:
             if text is None:
                 # logger.warning(f"👂❓ {Colors.RED}Partial text received None{Colors.RESET}") # Can be noisy
                 return
+            text = _name_fix(text)
             self.realtime_text = text # Update the latest realtime text
 
             # Detect potential sentence ends based on punctuation stability
