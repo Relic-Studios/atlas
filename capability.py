@@ -113,7 +113,8 @@ def look_note(text: str, eyes_on: bool) -> str:
             "right now. Say you can't look at the moment; don't pretend you saw anything.")
 
 
-def abilities_note(eyes_on: bool, search_on: bool = True, persona: str = "") -> str:
+def abilities_note(eyes_on: bool, search_on: bool = True, persona: str = "", off=frozenset()) -> str:
+    """off: plugin ids the owner switched off (plugins.py); those abilities aren't claimed."""
     can = []
     if search_on:
         can.append("search the web")
@@ -121,11 +122,14 @@ def abilities_note(eyes_on: bool, search_on: bool = True, persona: str = "") -> 
         can.append("look at the owner's screen whenever someone shows you something or the room "
                    "is reacting to something on screen you can't see yet (a game, a clip, a picture) "
                    "- just look, like glancing over")
-    can.append("check the real date and time")
-    can.append("leave notes for yourself")
-    can.append("log predictions that could turn out wrong and check your track record later")
-    can.append("read (not change) the actual source code that runs you, to see where your "
-               "limits are drawn")
+    if "clock" not in off:
+        can.append("check the real date and time")
+    if "notes" not in off:
+        can.append("leave notes for yourself")
+    if "self_check" not in off:
+        can.append("log predictions that could turn out wrong and check your track record later")
+        can.append("read (not change) the actual source code that runs you, to see where your "
+                   "limits are drawn")
     try:
         import clock as _clock
         now = _clock.now_note() + " "

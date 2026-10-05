@@ -262,6 +262,8 @@ from setup_api import router as _setup_router  # noqa: E402  first-run setup (pu
 app.include_router(_setup_router)
 from memory_api import router as _memory_router  # noqa: E402  per-agent memory panel (owner only)
 app.include_router(_memory_router)
+from plugins_api import router as _plugins_router  # noqa: E402  plugins page (owner only)
+app.include_router(_plugins_router)
 
 
 @app.post("/api/setup/restart")

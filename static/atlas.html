@@ -69,6 +69,7 @@ select.persona-sel{font-weight:700;letter-spacing:1px;color:var(--accent);min-wi
 #eyeMeta{font-size:10.5px;letter-spacing:.3px;color:var(--muted);margin-top:6px;white-space:normal;line-height:1.4}
 .pill.flash{animation:eyeflash 1.2s ease-out}@keyframes eyeflash{0%{box-shadow:0 0 0 0 rgba(94,234,212,.8)}100%{box-shadow:0 0 0 12px rgba(94,234,212,0)}}
 .pill.warn i{background:var(--warn);box-shadow:0 0 8px var(--warn)}
+.pill.plug{text-decoration:none;cursor:pointer}.pill.plug:hover{color:var(--text);border-color:rgba(var(--accent-rgb),.5)}
 .clock{font-family:var(--mono);font-size:12px;color:var(--muted);min-width:64px;text-align:right}
 
 /* core column */
@@ -291,6 +292,7 @@ input[type=range]{accent-color:var(--accent);width:120px}
       <div class="pill eyes" id="pEyes" title="Let agents look at your screen when asked. Click to toggle."><i></i>EYES<div class="eyepop" id="eyePop"><img id="eyeImg" alt=""><div id="eyeMeta">No looks yet</div></div></div>
       <div class="pill brain hidden" id="pBrain" title="Where the LLM runs. Click to switch."><i></i><span id="brainLbl">LOCAL</span><div class="eyepop"><div id="brainMeta">…</div></div></div>
       <div class="pill" id="pWs"><i></i>LINK</div>
+      <a class="pill plug" id="pPlugins" href="/static/plugins.html" title="Plugins: switch agent abilities on and off, add keys"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v5M15 3v5M7 8h10v3a5 5 0 01-10 0zM12 16v5"/></svg>PLUGINS</a>
       <div class="clock" id="uptime">--:--:--</div>
     </div>
   </header>

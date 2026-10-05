@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ATLAS · Plugins</title>
+<link rel="icon" href="/static/favicon.ico">
+<style>
+:root{
+  --bg:#06080c; --glass:rgba(16,20,28,.72); --glass-2:rgba(22,27,37,.86);
+  --line:rgba(120,140,170,.14); --line-2:rgba(120,140,170,.26);
+  --text:#e3e8f0; --muted:#8792a4; --faint:#4d5768;
+  --accent:#22d3ee; --accent-rgb:34,211,238;
+  --ok:#34d399; --warn:#fbbf24; --bad:#f87171;
+  --font:'Inter','Segoe UI Variable','Segoe UI',system-ui,sans-serif;
+  --mono:'Cascadia Code','JetBrains Mono',ui-monospace,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%;background:var(--bg);color:var(--text);font-family:var(--font);-webkit-font-smoothing:antialiased}
+body{background:radial-gradient(1200px 600px at 15% -10%,rgba(var(--accent-rgb),.07),transparent 60%),radial-gradient(900px 500px at 100% 0,rgba(99,102,241,.06),transparent 60%),var(--bg)}
+a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+button{font-family:var(--font)}
+:focus-visible{outline:2px solid rgba(var(--accent-rgb),.8);outline-offset:2px;border-radius:8px}
+
+.wrap{max-width:1180px;margin:0 auto;padding:22px 26px 60px}
+.top{display:flex;align-items:center;gap:16px;margin-bottom:26px}
+.back{display:inline-flex;align-items:center;gap:8px;color:var(--muted);font-size:13px;padding:7px 12px 7px 9px;border:1px solid var(--line);border-radius:10px;background:var(--glass)}
+.back:hover{color:var(--text);border-color:var(--line-2);text-decoration:none}
+.title h1{margin:0;font-size:22px;font-weight:650;letter-spacing:.2px}
+.title p{margin:3px 0 0;color:var(--muted);font-size:13px}
+.tabs{margin-left:auto;display:flex;gap:4px;padding:4px;border:1px solid var(--line);border-radius:12px;background:var(--glass)}
+.tab{border:0;background:none;color:var(--muted);font-size:13px;padding:7px 14px;border-radius:9px;cursor:pointer}
+.tab:hover{color:var(--text)}
+.tab.on{background:rgba(var(--accent-rgb),.12);color:var(--text);box-shadow:inset 0 0 0 1px rgba(var(--accent-rgb),.35)}
+.tab .n{font-family:var(--mono);font-size:11px;color:var(--faint);margin-left:6px}
+
+.bar{display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap}
+.cats{display:flex;gap:6px;flex-wrap:wrap}
+.cat{border:1px solid var(--line);background:transparent;color:var(--muted);font-size:12px;padding:5px 11px;border-radius:20px;cursor:pointer}
+.cat:hover{color:var(--text);border-color:var(--line-2)}
+.cat.on{color:var(--text);border-color:rgba(var(--accent-rgb),.5);background:rgba(var(--accent-rgb),.08)}
+.summary{margin-left:auto;font-family:var(--mono);font-size:11.5px;color:var(--faint)}
+
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:14px}
+.card{position:relative;display:flex;flex-direction:column;gap:12px;padding:18px;border:1px solid var(--line);border-radius:16px;background:var(--glass);
+  backdrop-filter:blur(14px);transition:border-color .2s,transform .2s,box-shadow .2s;animation:rise .35s ease both}
+.card:hover{border-color:var(--line-2);box-shadow:0 14px 40px rgba(0,0,0,.35)}
+.card.off{opacity:.62}.card.off:hover{opacity:.85}
+@keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.ch{display:flex;align-items:flex-start;gap:12px}
+.ico{flex:none;width:40px;height:40px;border-radius:11px;display:grid;place-items:center;
+  background:linear-gradient(160deg,rgba(var(--accent-rgb),.18),rgba(99,102,241,.10));border:1px solid rgba(var(--accent-rgb),.25);color:var(--accent)}
+.card.off .ico{filter:grayscale(1);opacity:.7}
+.ico svg{width:20px;height:20px}
+.nm{font-weight:620;font-size:15px}
+.cg{font-size:10.5px;letter-spacing:1.4px;text-transform:uppercase;color:var(--faint);margin-top:3px}
+.desc{color:var(--muted);font-size:13px;line-height:1.5;margin:0}
+.tools{display:flex;gap:6px;flex-wrap:wrap}
+.tl{font-family:var(--mono);font-size:10.5px;color:var(--muted);padding:2px 7px;border-radius:6px;border:1px solid var(--line);background:rgba(0,0,0,.2)}
+.cf{display:flex;align-items:center;gap:10px;margin-top:auto;padding-top:4px}
+.st{font-size:11.5px;color:var(--muted);display:flex;align-items:center;gap:6px}
+.st i{width:7px;height:7px;border-radius:50%;background:var(--faint)}
+.st.ok i{background:var(--ok);box-shadow:0 0 8px var(--ok)}.st.warn i{background:var(--warn);box-shadow:0 0 8px var(--warn)}
+.cf .sp{margin-left:auto}
+.btn{border:1px solid var(--line-2);background:rgba(10,13,19,.6);color:var(--text);font-size:12.5px;padding:7px 13px;border-radius:9px;cursor:pointer;transition:border-color .2s,background .2s}
+.btn:hover{border-color:rgba(var(--accent-rgb),.55)}
+.btn.primary{background:rgba(var(--accent-rgb),.16);border-color:rgba(var(--accent-rgb),.55)}
+.btn.primary:hover{background:rgba(var(--accent-rgb),.24)}
+.btn.ghost{border-color:transparent;background:none;color:var(--muted)}.btn.ghost:hover{color:var(--text)}
+.btn.danger:hover{border-color:rgba(248,113,113,.6);color:var(--bad)}
+.btn[disabled]{opacity:.45;cursor:default}
+
+/* switch */
+.sw{position:relative;width:42px;height:24px;flex:none}
+.sw input{position:absolute;inset:0;opacity:0;margin:0;cursor:pointer;z-index:1}
+.sw span{position:absolute;inset:0;border-radius:20px;background:rgba(120,140,170,.18);border:1px solid var(--line-2);transition:background .2s,border-color .2s}
+.sw span::after{content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#c5cdd9;transition:transform .2s,background .2s}
+.sw input:checked+span{background:rgba(var(--accent-rgb),.35);border-color:rgba(var(--accent-rgb),.7)}
+.sw input:checked+span::after{transform:translateX(18px);background:#fff}
+.sw input:focus-visible+span{outline:2px solid rgba(var(--accent-rgb),.8);outline-offset:2px}
+
+/* marketplace */
+.badge{font-family:var(--mono);font-size:10px;letter-spacing:.8px;text-transform:uppercase;padding:3px 8px;border-radius:20px;border:1px solid var(--line-2);color:var(--muted)}
+.badge.inst{color:var(--ok);border-color:rgba(52,211,153,.4)}
+.mnote{margin:0 0 16px;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--glass);color:var(--muted);font-size:12.5px;line-height:1.55}
+
+/* modal */
+.scrim{position:fixed;inset:0;background:rgba(2,4,8,.66);backdrop-filter:blur(4px);display:none;align-items:center;justify-content:center;z-index:100;padding:20px}
+.scrim.on{display:flex;animation:fade .15s}
+@keyframes fade{from{opacity:0}to{opacity:1}}
+.win{width:min(560px,100%);max-height:calc(100vh - 40px);overflow:auto;border:1px solid var(--line-2);border-radius:18px;background:var(--glass-2);
+  box-shadow:0 30px 80px rgba(0,0,0,.6);animation:pop .18s ease}
+@keyframes pop{from{opacity:0;transform:translateY(8px) scale(.985)}to{opacity:1;transform:none}}
+.wh{display:flex;align-items:center;gap:12px;padding:18px 20px 14px;border-bottom:1px solid var(--line)}
+.wh .x{margin-left:auto}
+.wb{padding:16px 20px 6px}
+.wb .lead{color:var(--muted);font-size:13px;line-height:1.55;margin:0 0 16px}
+.fieldset{display:flex;flex-direction:column;gap:16px}
+.f label{display:block;font-size:12px;font-weight:600;margin-bottom:6px}
+.f .help{font-size:11.5px;color:var(--muted);margin-top:6px;line-height:1.45}
+.inp,.f select{width:100%;background:rgba(6,8,12,.7);color:var(--text);border:1px solid var(--line-2);border-radius:9px;padding:9px 11px;font-size:13px;font-family:var(--font);outline:none;transition:border-color .2s,box-shadow .2s}
+.f select{appearance:none;cursor:pointer;background:rgba(6,8,12,.7) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%238792a4'/%3E%3C/svg%3E") no-repeat right 12px center;padding-right:30px}
+.inp:focus,.f select:focus{border-color:rgba(var(--accent-rgb),.65);box-shadow:0 0 0 3px rgba(var(--accent-rgb),.12)}
+.inp.mono{font-family:var(--mono);font-size:12.5px}
+.f.err .inp,.f.err select{border-color:rgba(248,113,113,.7)}
+.f .emsg{color:var(--bad);font-size:11.5px;margin-top:6px}
+.keyrow{display:flex;gap:8px;align-items:center}
+.keyrow .inp{flex:1}
+.keystate{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);padding:9px 11px;border:1px dashed var(--line-2);border-radius:9px;flex:1}
+.keystate b{font-family:var(--mono);color:var(--text);font-weight:500}
+.keystate i{width:7px;height:7px;border-radius:50%;background:var(--ok);box-shadow:0 0 8px var(--ok)}
+.res{font-size:12px;margin-top:8px;display:none;align-items:flex-start;gap:7px;line-height:1.45}
+.res.on{display:flex}.res.ok{color:var(--ok)}.res.bad{color:var(--bad)}.res.wait{color:var(--muted)}
+.wf{display:flex;align-items:center;gap:8px;padding:16px 20px 18px}
+.wf .sp{margin-left:auto}
+.spin{width:12px;height:12px;border-radius:50%;border:2px solid rgba(255,255,255,.2);border-top-color:var(--accent);animation:rot .8s linear infinite;flex:none;margin-top:2px}
+@keyframes rot{to{transform:rotate(360deg)}}
+
+.toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%) translateY(20px);opacity:0;pointer-events:none;
+  padding:10px 16px;border-radius:11px;border:1px solid var(--line-2);background:rgba(10,13,19,.95);font-size:13px;transition:all .25s;z-index:200}
+.toast.on{opacity:1;transform:translateX(-50%)}
+.toast.bad{border-color:rgba(248,113,113,.6)}
+.empty{color:var(--muted);font-size:13px;padding:40px;text-align:center;border:1px dashed var(--line-2);border-radius:16px}
+.skel{height:190px;border-radius:16px;border:1px solid var(--line);background:linear-gradient(90deg,rgba(255,255,255,.02),rgba(255,255,255,.05),rgba(255,255,255,.02));background-size:200% 100%;animation:sh 1.4s infinite}
+@keyframes sh{0%{background-position:200% 0}100%{background-position:-200% 0}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <a class="back" href="/static/atlas.html" title="Back to ATLAS">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>ATLAS</a>
+    <div class="title"><h1>Plugins</h1><p>Abilities your agents can use. Switch any of them off and every agent stops using it on the next turn.</p></div>
+    <div class="tabs" role="tablist">
+      <button class="tab on" role="tab" aria-selected="true" data-tab="installed">Installed<span class="n" id="nInst"></span></button>
+      <button class="tab" role="tab" aria-selected="false" data-tab="market">Marketplace<span class="n" id="nMarket"></span></button>
+    </div>
+  </div>
+
+  <section id="installed">
+    <div class="bar"><div class="cats" id="cats"></div><div class="summary" id="summary"></div></div>
+    <div class="grid" id="grid"><div class="skel"></div><div class="skel"></div><div class="skel"></div></div>
+  </section>
+
+  <section id="market" hidden>
+    <p class="mnote">The marketplace is just getting started. Everything here today is built into ATLAS and runs on your PC.
+      Plugins from other people will need signing and review before ATLAS runs them; see <a href="https://github.com/Relic-Studios/atlas/blob/main/SAFETY.md" target="_blank" rel="noopener">SAFETY.md</a>.</p>
+    <div class="grid" id="mgrid"></div>
+  </section>
+</div>
+
+<div class="scrim" id="scrim" aria-hidden="true">
+  <div class="win" role="dialog" aria-modal="true" aria-labelledby="wTitle" id="win">
+    <div class="wh"><div class="ico" id="wIco"></div><div><div class="nm" id="wTitle"></div><div class="cg" id="wCat"></div></div>
+      <button class="btn ghost x" id="wClose" aria-label="Close">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg></button></div>
+    <div class="wb"><p class="lead" id="wLead"></p><div class="fieldset" id="wFields"></div>
+      <div class="res" id="wRes"></div></div>
+    <div class="wf"><button class="btn" id="wTest">Test connection</button><span class="sp"></span>
+      <button class="btn ghost" id="wCancel">Cancel</button><button class="btn primary" id="wSave">Save</button></div>
+  </div>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+'use strict';
+const ICONS = {
+  search:'<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>',
+  eye:'<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+  clock:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  note:'<path d="M5 4h10l4 4v12H5z"/><path d="M15 4v4h4M8 12h8M8 16h5"/>',
+  pause:'<circle cx="12" cy="12" r="9"/><path d="M10 9v6M14 9v6"/>',
+  code:'<path d="M8 8l-4 4 4 4M16 8l4 4-4 4M13.5 6l-3 12"/>',
+  plug:'<path d="M9 3v5M15 3v5M7 8h10v3a5 5 0 01-10 0zM12 16v5"/>',
+};
+const icon = (n) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICONS[n] || ICONS.plug}</svg>`;
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const $ = (id) => document.getElementById(id);
+
+let plugins = [], market = [], cat = 'All', current = null;
+
+async function api(path, body) {
+  const r = await fetch(path, body === undefined ? {} : {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  let d = {}; try { d = await r.json(); } catch (_) {}
+  if (!r.ok) { const e = new Error(d.error || `HTTP ${r.status}`); e.data = d; throw e; }
+  return d;
+}
+function toast(msg, bad) {
+  const t = $('toast'); t.textContent = msg; t.className = 'toast on' + (bad ? ' bad' : '');
+  clearTimeout(toast._t); toast._t = setTimeout(() => t.className = 'toast', 2600);
+}
+
+function status(p) {
+  if (!p.enabled) return {cls:'', text:'Off'};
+  const secrets = (p.settings || []).filter((f) => f.type === 'secret');
+  if (secrets.length && !secrets.some((f) => f.secret && f.secret.set))
+    return {cls:'warn', text:'On · using the free fallback (no key)'};
+  if (secrets.length) {
+    const set = secrets.filter((f) => f.secret && f.secret.set).map((f) => f.label.replace(/ API key| Search API key/, ''));
+    return {cls:'ok', text:'On · ' + set.join(' + ')};
+  }
+  return {cls:'ok', text:'On'};
+}
+
+function renderCats() {
+  const cs = ['All', ...new Set(plugins.map((p) => p.category))];
+  $('cats').innerHTML = cs.map((c) => `<button class="cat${c === cat ? ' on' : ''}" data-cat="${esc(c)}">${esc(c)}</button>`).join('');
+  const on = plugins.filter((p) => p.enabled).length;
+  $('summary').textContent = `${on} of ${plugins.length} on`;
+  $('nInst').textContent = plugins.length;
+}
+
+function renderGrid() {
+  const list = plugins.filter((p) => cat === 'All' || p.category === cat);
+  if (!list.length) { $('grid').innerHTML = '<div class="empty">Nothing in this category.</div>'; return; }
+  $('grid').innerHTML = list.map((p, i) => {
+    const s = status(p);
+    const cfg = (p.settings || []).length || p.testable;
+    return `<article class="card${p.enabled ? '' : ' off'}" style="animation-delay:${i * 35}ms" data-id="${esc(p.id)}">
+      <div class="ch"><div class="ico">${icon(p.icon)}</div>
+        <div><div class="nm">${esc(p.name)}</div><div class="cg">${esc(p.category)}</div></div>
+        <label class="sw" style="margin-left:auto" title="${p.enabled ? 'Switch off' : 'Switch on'}">
+          <input type="checkbox" data-toggle="${esc(p.id)}" ${p.enabled ? 'checked' : ''} aria-label="${esc(p.name)} on/off"><span></span></label></div>
+      <p class="desc">${esc(p.summary)}</p>
+      ${p.tools && p.tools.length ? `<div class="tools">${p.tools.map((t) => `<span class="tl">${esc(t)}</span>`).join('')}</div>` : ''}
+      <div class="cf"><div class="st ${s.cls}"><i></i>${esc(s.text)}</div><span class="sp"></span>
+        ${cfg ? `<button class="btn" data-open="${esc(p.id)}">Configure</button>` : `<button class="btn ghost" data-open="${esc(p.id)}">Details</button>`}</div>
+    </article>`;
+  }).join('');
+}
+
+function renderMarket() {
+  $('nMarket').textContent = market.length;
+  $('mgrid').innerHTML = market.map((m, i) => `<article class="card" style="animation-delay:${i * 30}ms">
+    <div class="ch"><div class="ico">${icon(m.icon)}</div><div><div class="nm">${esc(m.name)}</div><div class="cg">${esc(m.category)} · ${esc(m.author || 'ATLAS')}</div></div>
+      <span class="badge${m.status === 'installed' ? ' inst' : ''}" style="margin-left:auto">${m.status === 'installed' ? 'Installed' : 'Coming soon'}</span></div>
+    <p class="desc">${esc(m.summary)}</p>
+    <div class="cf"><span class="sp"></span>${m.status === 'installed'
+      ? `<button class="btn" data-goto="${esc(m.id)}">Open</button>` : `<button class="btn" disabled>Not available yet</button>`}</div>
+  </article>`).join('') || '<div class="empty">No plugins listed yet.</div>';
+}
+
+async function load() {
+  try {
+    const [a, b] = await Promise.all([api('/api/plugins'), api('/api/plugins/marketplace')]);
+    plugins = a.plugins || []; market = b.plugins || [];
+    renderCats(); renderGrid(); renderMarket();
+  } catch (e) {
+    $('grid').innerHTML = `<div class="empty">Couldn't load plugins: ${esc(e.message)}. Is ATLAS running?</div>`;
+  }
+}
+
+async function toggle(id, on, el) {
+  el.disabled = true;
+  try {
+    const d = await api(`/api/plugins/${encodeURIComponent(id)}/enabled`, {enabled:on});
+    plugins = plugins.map((p) => p.id === id ? d.plugin : p);
+    renderCats(); renderGrid();
+    toast(`${d.plugin.name} ${on ? 'on' : 'off'} for every agent`);
+  } catch (e) { el.checked = !on; el.disabled = false; toast(`Couldn't change it: ${e.message}`, true); }
+}
+
+/* ---------- settings window ---------- */
+function fieldHtml(f, v) {
+  const id = `f_${f.key}`;
+  const help = f.help ? `<div class="help">${esc(f.help)}${f.link ? ` <a href="${esc(f.link)}" target="_blank" rel="noopener">Get a key ↗</a>` : ''}</div>` : '';
+  if (f.type === 'select') {
+    return `<div class="f" data-f="${esc(f.key)}"><label for="${id}">${esc(f.label)}</label>
+      <select id="${id}">${(f.options || []).map((o) => `<option value="${esc(o.value)}"${String(o.value) === String(v) ? ' selected' : ''}>${esc(o.label)}</option>`).join('')}</select>${help}</div>`;
+  }
+  if (f.type === 'toggle') {
+    return `<div class="f" data-f="${esc(f.key)}" style="display:flex;align-items:center;gap:12px"><label for="${id}" style="margin:0">${esc(f.label)}</label>
+      <label class="sw" style="margin-left:auto"><input type="checkbox" id="${id}"${v ? ' checked' : ''}><span></span></label></div>${help}`;
+  }
+  if (f.type === 'secret') {
+    const s = f.secret || {};
+    const state = s.set
+      ? `<div class="keystate" id="${id}_state"><i></i>Key set <b>${s.last4 ? '••••' + esc(s.last4) : ''}</b>${s.source ? ` · ${esc(s.source)}` : ''}</div>
+         <button class="btn" type="button" data-replace="${esc(f.key)}">Replace</button>${s.source === 'saved here' ? `<button class="btn danger" type="button" data-clear="${esc(f.key)}">Remove</button>` : ''}`
+      : '';
+    return `<div class="f" data-f="${esc(f.key)}"><label for="${id}">${esc(f.label)}</label>
+      <div class="keyrow">${state}<input class="inp mono" id="${id}" type="password" autocomplete="off" spellcheck="false"
+        placeholder="Paste key" ${s.set ? 'hidden' : ''}>${f.testable ? `<button class="btn" type="button" data-testkey="${esc(f.key)}">Test key</button>` : ''}</div>
+      <div class="res" id="${id}_res"></div>${help}</div>`;
+  }
+  const t = f.type === 'number' ? 'number' : (f.type === 'url' ? 'url' : 'text');
+  return `<div class="f" data-f="${esc(f.key)}"><label for="${id}">${esc(f.label)}</label>
+    <input class="inp" id="${id}" type="${t}" value="${esc(v ?? '')}" ${f.min != null ? `min="${f.min}"` : ''} ${f.max != null ? `max="${f.max}"` : ''} placeholder="${esc(f.placeholder || '')}">${help}</div>`;
+}
+
+let lastFocus = null;
+function openWin(id) {
+  current = plugins.find((p) => p.id === id); if (!current) return;
+  lastFocus = document.activeElement;
+  $('wIco').innerHTML = icon(current.icon);
+  $('wTitle').textContent = current.name;
+  $('wCat').textContent = current.category + ' · ' + (current.enabled ? 'on' : 'off');
+  $('wLead').textContent = [current.summary, current.detail].filter(Boolean).join(' ');
+  const fs = current.settings || [];
+  $('wFields').innerHTML = fs.length ? fs.map((f) => fieldHtml(f, (current.values || {})[f.key])).join('')
+    : '<div class="help" style="color:var(--muted);font-size:12.5px">Nothing to set up. Use the switch on the card to turn it on or off.</div>';
+  $('wTest').hidden = !current.testable;
+  $('wSave').hidden = !fs.length;
+  setRes($('wRes'));
+  $('scrim').classList.add('on'); $('scrim').setAttribute('aria-hidden', 'false');
+  const first = $('win').querySelector('select,input:not([hidden]),button.primary') || $('wClose');
+  setTimeout(() => first.focus(), 30);
+}
+function closeWin() {
+  $('scrim').classList.remove('on'); $('scrim').setAttribute('aria-hidden', 'true'); current = null;
+  if (lastFocus) lastFocus.focus();
+}
+function setRes(el, kind, msg) {
+  if (!kind) { el.className = 'res'; el.innerHTML = ''; return; }
+  el.className = `res on ${kind}`;
+  el.innerHTML = (kind === 'wait' ? '<span class="spin"></span>' : (kind === 'ok' ? '✓' : '✕')) + `<span>${esc(msg)}</span>`;
+}
+function collect() {
+  const vals = {};
+  for (const f of current.settings || []) {
+    const el = $(`f_${f.key}`); if (!el) continue;
+    if (f.type === 'secret') { if (!el.hidden && el.value.trim()) vals[f.key] = el.value.trim(); continue; }
+    vals[f.key] = f.type === 'toggle' ? el.checked : el.value;
+  }
+  return vals;
+}
+async function save() {
+  const btn = $('wSave'); btn.disabled = true;
+  $('wFields').querySelectorAll('.f').forEach((n) => { n.classList.remove('err'); n.querySelector('.emsg')?.remove(); });
+  try {
+    const d = await api(`/api/plugins/${encodeURIComponent(current.id)}/settings`, {values:collect()});
+    plugins = plugins.map((p) => p.id === current.id ? d.plugin : p);
+    renderGrid(); toast(`${current.name} saved`); closeWin();
+  } catch (e) {
+    const errs = (e.data && e.data.errors) || {};
+    for (const [k, m] of Object.entries(errs)) {
+      const n = $('wFields').querySelector(`[data-f="${CSS.escape(k)}"]`);
+      if (n) { n.classList.add('err'); n.insertAdjacentHTML('beforeend', `<div class="emsg">${esc(m)}</div>`); }
+    }
+    if (!Object.keys(errs).length) toast(`Couldn't save: ${e.message}`, true);
+  } finally { btn.disabled = false; }
+}
+async function testConn() {
+  const el = $('wRes'), btn = $('wTest'); btn.disabled = true;
+  setRes(el, 'wait', 'Testing…');
+  try {
+    const d = await api(`/api/plugins/${encodeURIComponent(current.id)}/test`, {});
+    setRes(el, d.ok ? 'ok' : 'bad', d.message || (d.ok ? 'Works.' : 'Failed.'));
+  } catch (e) { setRes(el, 'bad', e.message); } finally { btn.disabled = false; }
+}
+async function testKey(key) {
+  const inp = $(`f_${key}`), el = $(`f_${key}_res`);
+  setRes(el, 'wait', 'Checking the key…');
+  try {
+    const d = await api(`/api/plugins/${encodeURIComponent(current.id)}/test`, {field:key, value:inp.hidden ? '' : inp.value});
+    setRes(el, d.ok ? 'ok' : 'bad', d.message);
+  } catch (e) { setRes(el, 'bad', e.message); }
+}
+async function clearKey(key) {
+  if (!confirm('Remove this saved key? The plugin falls back to the next provider.')) return;
+  try {
+    const d = await api(`/api/plugins/${encodeURIComponent(current.id)}/settings`, {values:{[key]:''}});
+    plugins = plugins.map((p) => p.id === current.id ? d.plugin : p);
+    renderGrid(); openWin(current.id); toast('Key removed');
+  } catch (e) { toast(`Couldn't remove it: ${e.message}`, true); }
+}
+
+/* ---------- events ---------- */
+document.addEventListener('click', (ev) => {
+  const t = ev.target.closest('button,[data-cat]'); if (!t) { if (ev.target === $('scrim')) closeWin(); return; }
+  if (t.dataset.tab) {
+    document.querySelectorAll('.tab').forEach((b) => { const on = b === t; b.classList.toggle('on', on); b.setAttribute('aria-selected', on); });
+    $('installed').hidden = t.dataset.tab !== 'installed'; $('market').hidden = t.dataset.tab !== 'market';
+  } else if (t.dataset.cat) { cat = t.dataset.cat; renderCats(); renderGrid(); }
+  else if (t.dataset.open) openWin(t.dataset.open);
+  else if (t.dataset.goto) { document.querySelector('[data-tab="installed"]').click(); cat = 'All'; renderCats(); renderGrid(); openWin(t.dataset.goto); }
+  else if (t.dataset.replace) { const k = t.dataset.replace; $(`f_${k}_state`).remove(); t.remove(); $('wFields').querySelector(`[data-clear="${CSS.escape(k)}"]`)?.remove(); const i = $(`f_${k}`); i.hidden = false; i.focus(); }
+  else if (t.dataset.clear) clearKey(t.dataset.clear);
+  else if (t.dataset.testkey) testKey(t.dataset.testkey);
+  else if (t.id === 'wClose' || t.id === 'wCancel') closeWin();
+  else if (t.id === 'wSave') save();
+  else if (t.id === 'wTest') testConn();
+});
+document.addEventListener('change', (ev) => { const t = ev.target; if (t.dataset && t.dataset.toggle) toggle(t.dataset.toggle, t.checked, t); });
+document.addEventListener('keydown', (ev) => {
+  if (!$('scrim').classList.contains('on')) return;
+  if (ev.key === 'Escape') closeWin();
+  else if (ev.key === 'Enter' && ev.target.tagName === 'INPUT' && !$('wSave').hidden) { ev.preventDefault(); save(); }
+  else if (ev.key === 'Tab') {   // keep focus inside the window
+    const f = [...$('win').querySelectorAll('button:not([disabled]):not([hidden]),select,input:not([hidden]),a[href]')];
+    if (!f.length) return; const i = f.indexOf(document.activeElement);
+    if (ev.shiftKey && i <= 0) { ev.preventDefault(); f[f.length - 1].focus(); }
+    else if (!ev.shiftKey && i === f.length - 1) { ev.preventDefault(); f[0].focus(); }
+  }
+});
+load();
+</script>
+</body>
+</html>

@@ -141,13 +141,15 @@ from pathlib import Path as _Path
 
 _HERE = _Path(__file__).resolve().parent
 PROVIDER_TIMEOUT_S = 6.0
+PREFERRED = "auto"   # plugins.py: auto | exa | brave | free
+MAX_RESULTS = 4
 
 
 def _key(name: str) -> str:
     env = _os.environ.get(f"ATLAS_{name.upper()}_KEY", "").strip()
     if env:
         return env
-    for d in ("private", "user"):
+    for d in ("user", "private"):   # user/ first: keys saved from the Plugins page win
         f = _HERE / d / f"{name}.key"
         try:
             k = f.read_text(encoding="utf-8-sig").strip()
@@ -200,7 +202,9 @@ def providers() -> List[str]:
 
 def _run_chain(query: str, max_results: int):
     tried = []
-    for name in ("exa", "brave"):
+    keyed = {"auto": ("exa", "brave"), "exa": ("exa",), "brave": ("brave",),
+             "free": ()}.get(PREFERRED, ("exa", "brave"))
+    for name in keyed:
         k = _key(name)
         if not k:
             continue
@@ -241,7 +245,7 @@ def search(query: str, max_results: int = 4) -> Dict:
         return {"ok": False, "query": query, "results": [], "text": ""}
 
     try:
-        results, backend = _run_chain(query, max_results)
+        results, backend = _run_chain(query, max_results if max_results != 4 else MAX_RESULTS)
     except Exception as e:  # noqa: BLE001
         logger.warning("web search failed: %s", e)
         return {"ok": False, "query": query, "results": [], "text": f"search error: {e}"}

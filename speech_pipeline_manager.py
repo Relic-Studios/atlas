@@ -385,6 +385,12 @@ class SpeechPipelineManager:
         self.boards = Boards(root="memory_db", searcher=_board_search)
         if AGENT_TOOLS:
             self.llm.tool_executor = self._run_tool
+        # Plugins (plugins.py): the owner switches abilities on/off; the model is only
+        # offered tools whose plugin is on, and _run_tool refuses the rest.
+        import plugins as _plugins
+        _plugins.apply_all()
+        self._refresh_plugin_tools()
+        _plugins.on_change(self._refresh_plugin_tools)
         # A fresh install may have no model yet (setup wizard pulls it, or the
         # user picked a cloud provider): boot anyway, never crash on prewarm.
         samples = []
@@ -820,9 +826,17 @@ class SpeechPipelineManager:
             logger.warning("task board attach failed: %s", e)
         return False
 
+    def _refresh_plugin_tools(self):
+        import plugins as _plugins
+        self.llm.tools = _plugins.filter_tools(AGENT_TOOLS)
+        logger.info("🧩 agent tools: %s", ", ".join(t['function']['name'] for t in self.llm.tools) or "none")
+
     def _run_tool(self, name, args):
         """Instance tool executor: board-backed tools, then the module ones."""
         args = args if isinstance(args, dict) else {}
+        import plugins as _plugins
+        if name in _plugins.tool_names_disabled():
+            return "That ability is switched off by the owner right now. Answer without it."
         gen = self.running_generation
         m = re.match(r'^\s*\[(S\d+)\]', getattr(gen, "text", "") or "")
         asker = m[1] if m else ""
@@ -1066,9 +1080,13 @@ class SpeechPipelineManager:
             logger.warning("search note failed: %s", e)
         try:
             import capability as _cap
-            eyes_on = bool(_screen is not None and _screen.status().get("enabled"))
+            import plugins as _plugins
+            _off = {p for p in ('web_search', 'eyes', 'clock', 'notes', 'step_back', 'self_check')
+                    if not _plugins.is_enabled(p)}
+            eyes_on = bool(_screen is not None and _screen.status().get("enabled")) and 'eyes' not in _off
             ctx = getattr(self, "_ctx_text", "")
-            room = (room + chr(10) + _cap.abilities_note(eyes_on, bool(WEB_SEARCH_TOOLS), getattr(self, 'current_persona', '') or '')).strip()
+            room = (room + chr(10) + _cap.abilities_note(eyes_on, bool(WEB_SEARCH_TOOLS) and 'web_search' not in _off,
+                                                      getattr(self, 'current_persona', '') or '', _off)).strip()
             try:
                 pn = _self_tools.context_note(getattr(self, "current_persona", "") or "")
                 if pn:
@@ -1598,6 +1616,12 @@ class SpeechPipelineManager:
             # self.history.append({"role": "user", "content": txt}) # Example history update
             mem_ctx = self._memory_context(txt)
             look = self._look_prefetch(txt, is_cue) or self._code_prefetch(txt, is_cue)
+            try:   # a switched-off plugin's tool is never prefetched (plugins.py)
+                import plugins as _plugins
+                if look and look[0] in _plugins.tool_names_disabled():
+                    look = None
+            except Exception:  # noqa: BLE001
+                pass
 
             def _gen(text_in, _h=history, _r=room, _m=mem_ctx, _l=look):
                 return self.llm.generate(

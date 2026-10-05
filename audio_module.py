@@ -239,6 +239,9 @@ class AudioProcessor:
             )
             self.engine = QwenEngine(voice=voice, warmup=True)
             _cap_runaway_frames(self.engine)
+            # stutter loops ("r-r-r-r", owner 10-05): cut the sentence once audio repeats
+            import tts_loop_guard
+            tts_loop_guard.install(self.engine)
         else:
             raise ValueError(f"Unsupported engine: {engine}")
 

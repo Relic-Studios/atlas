@@ -1,0 +1,13 @@
+{
+  "note": "Marketplace catalog. Built-in plugins are listed from plugins.py; entries here are announced, not installable. Third-party code needs signing + review first (SAFETY.md).",
+  "plugins": [
+    {"id": "calendar", "name": "Calendar", "icon": "clock", "category": "Productivity", "author": "ATLAS",
+     "summary": "Read your upcoming events so agents can remind the room what's next.", "status": "coming_soon"},
+    {"id": "music", "name": "Music now playing", "icon": "plug", "category": "Media", "author": "ATLAS",
+     "summary": "Know what song is playing and talk about it.", "status": "coming_soon"},
+    {"id": "game_state", "name": "Game companion", "icon": "eye", "category": "Games", "author": "ATLAS",
+     "summary": "Follow a supported game's state for callouts and banter.", "status": "coming_soon"},
+    {"id": "local_docs", "name": "Your documents", "icon": "note", "category": "Knowledge", "author": "ATLAS",
+     "summary": "Answer from a folder of your own notes, read-only, on this PC.", "status": "coming_soon"}
+  ]
+}

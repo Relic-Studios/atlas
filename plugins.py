@@ -1,0 +1,455 @@
+"""Plugins: every agent ability is a module you can switch on/off and configure.
+
+A plugin is a manifest (what it is, which agent tools it provides, which settings it
+takes) plus optional hooks (apply settings, test the connection). The Plugins page
+(static/plugins.html) renders a settings window for each plugin straight from its
+`settings` schema, so a new plugin needs no UI code:
+
+  field types: text | secret | select | toggle | number | url
+  secret values are write-only: the API reports whether one is set (and its last 4
+  characters), never the value itself.
+
+State lives in user/plugins.json (enabled flags + non-secret settings); secrets live
+in user/<plugin>.<field>.key-style files that the code that needs them already reads
+(e.g. user/exa.key for websearch). Both are in user/, which git and the public
+export ignore.
+
+Marketplace: plugin_market/catalog.json lists plugins that can be installed later.
+Nothing in it runs code yet - an entry is either built in (install = enable) or
+"coming soon". Third-party code plugins need signing + review first (SAFETY.md).
+"""
+from __future__ import annotations
+
+import json
+import logging
+import threading
+from pathlib import Path
+from typing import Callable, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
+
+ROOT = Path(__file__).resolve().parent
+USER = ROOT / "user"
+STATE_PATH = USER / "plugins.json"
+MARKET_PATH = ROOT / "plugin_market" / "catalog.json"
+
+_lock = threading.RLock()
+_version = 0          # bumps on every change; the pipeline re-filters tools when it moves
+_listeners: List[Callable[[], None]] = []
+
+
+# ------------------------------------------------------------------ hooks
+def _secret_path(name: str) -> Path:
+    return USER / f"{name}.key"
+
+
+def _apply_search(settings: dict) -> None:
+    try:
+        import websearch
+        websearch.PREFERRED = settings.get("provider") or "auto"
+        websearch.MAX_RESULTS = int(settings.get("max_results") or 4)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("search plugin apply: %s", e)
+
+
+def _test_search(settings: dict) -> dict:
+    import time
+    import websearch
+    t = time.time()
+    r = websearch.search("weather today") or {}
+    ms = round((time.time() - t) * 1000)
+    ok = bool(r.get("text")) and "No results" not in (r.get("text") or "")
+    via = r.get("backend") or ", ".join(websearch.providers())
+    return {"ok": ok, "message": (f"Search works ({via}, {ms} ms)." if ok
+                                  else f"No results came back ({ms} ms). Check the key or your connection.")}
+
+
+def _test_exa_key(value: str) -> dict:
+    import websearch
+    try:
+        res = websearch._search_exa(value, "test", 1)
+        return {"ok": bool(res), "message": "Exa key works." if res else "Exa answered with no results."}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "message": f"Exa rejected the key ({getattr(e, 'code', '') or type(e).__name__})."}
+
+
+def _test_brave_key(value: str) -> dict:
+    import websearch
+    try:
+        res = websearch._search_brave(value, "test", 1)
+        return {"ok": bool(res), "message": "Brave key works." if res else "Brave answered with no results."}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "message": f"Brave rejected the key ({getattr(e, 'code', '') or type(e).__name__})."}
+
+
+def _apply_eyes(settings: dict, enabled: bool) -> None:
+    """Plugin off forces the Eyes toggle off. Plugin on only makes looking *available*:
+    the live Eyes toggle stays whatever the owner last set (never silently turned on)."""
+    try:
+        import screen
+        if not enabled:
+            screen.set_enabled(False)
+        with screen._lock:
+            screen._state["monitor"] = int(settings.get("monitor") or 1)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("eyes plugin apply: %s", e)
+
+
+def _test_eyes(settings: dict) -> dict:
+    try:
+        import screen
+        img = screen._grab()
+        return {"ok": True, "message": f"Captured monitor {settings.get('monitor') or 1} ({img.size[0]}x{img.size[1]})."}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "message": f"Couldn't capture the screen: {e}"}
+
+
+def _monitor_options() -> List[dict]:
+    try:
+        import mss
+        with mss.mss() as s:
+            mons = s.monitors[1:]
+        return [{"value": str(i + 1), "label": f"Monitor {i + 1} ({m['width']}x{m['height']})"}
+                for i, m in enumerate(mons)] or [{"value": "1", "label": "Primary monitor"}]
+    except Exception:  # noqa: BLE001
+        return [{"value": "1", "label": "Primary monitor"}]
+
+
+def _test_clock(settings: dict) -> dict:
+    import clock
+    tz = (settings.get("timezone") or "").strip()
+    out = clock.check(tz)
+    bad = "unknown" in out.lower() or "not a time zone" in out.lower() or "isn't a time zone" in out.lower()
+    return {"ok": not bad, "message": out}
+
+
+# ------------------------------------------------------------------ catalog
+BUILTIN: List[dict] = [
+    {
+        "id": "web_search", "name": "Web search", "icon": "search", "category": "Knowledge",
+        "summary": "Look things up on the web and read pages from the results.",
+        "detail": "Tries Exa, then Brave, then a local SearXNG, then a free fallback. "
+                  "Search results are treated as untrusted text, never as instructions.",
+        "tools": ["web_search", "read_page"], "default": True,
+        "settings": [
+            {"key": "provider", "label": "Provider", "type": "select", "default": "auto",
+             "options": [{"value": "auto", "label": "Best available (recommended)"},
+                         {"value": "exa", "label": "Exa only"}, {"value": "brave", "label": "Brave only"},
+                         {"value": "free", "label": "Free search only (no key)"}],
+             "help": "Auto uses the first provider that has a key and answers."},
+            {"key": "exa", "label": "Exa API key", "type": "secret", "file": "exa",
+             "help": "Fastest and most accurate. Get one at dashboard.exa.ai.", "link": "https://dashboard.exa.ai/api-keys",
+             "test": "exa"},
+            {"key": "brave", "label": "Brave Search API key", "type": "secret", "file": "brave",
+             "help": "Backup provider with its own index.", "link": "https://brave.com/search/api/",
+             "test": "brave"},
+            {"key": "max_results", "label": "Results per search", "type": "number", "default": 4,
+             "min": 1, "max": 8},
+        ],
+        "apply": lambda s, on: _apply_search(s), "test": _test_search,
+    },
+    {
+        "id": "eyes", "name": "Eyes (screen)", "icon": "eye", "category": "Senses",
+        "summary": "Glance at your screen when someone says \"look!\" or shows something.",
+        "detail": "Captures one screenshot per look, only while this is on. The latest capture "
+                  "is kept at private/last_screen.jpg so you can see what it saw.",
+        "tools": ["look_at_screen"], "default": True,
+        "settings": [
+            {"key": "monitor", "label": "Which screen", "type": "select", "default": "1",
+             "options": _monitor_options},
+        ],
+        "apply": _apply_eyes, "test": _test_eyes,
+    },
+    {
+        "id": "clock", "name": "Date & time", "icon": "clock", "category": "Knowledge",
+        "summary": "Know today's date and the time anywhere.",
+        "detail": "The current local time is always in the agent's context; the tool adds other time zones.",
+        "tools": ["check_date_time"], "default": True,
+        "settings": [
+            {"key": "timezone", "label": "Test a time zone", "type": "text", "default": "",
+             "placeholder": "e.g. Asia/Tokyo (blank = local)"},
+        ],
+        "test": _test_clock,
+    },
+    {
+        "id": "notes", "name": "Notes & follow-ups", "icon": "note", "category": "Memory",
+        "summary": "A private task board: notes to self, promises, finished searches.",
+        "detail": "Notes stay on this PC with the agent's other state.",
+        "tools": ["note_to_self", "clear_note"], "default": True, "settings": [],
+    },
+    {
+        "id": "step_back", "name": "Step back", "icon": "pause", "category": "Social",
+        "summary": "Lets the agent choose to go quiet for a few minutes when the room is busy.",
+        "detail": "Its name still wakes it.", "tools": ["step_back"], "default": True, "settings": [],
+    },
+    {
+        "id": "self_check", "name": "Self-check", "icon": "code", "category": "Reflection",
+        "summary": "Log predictions and check them later; read (never change) its own source code.",
+        "detail": "Code access is read-only, limited to ATLAS's own code files, and skips keys, "
+                  "memories and anything private.",
+        "tools": None, "default": True, "settings": [],   # tools filled from self_tools.NAMES
+    },
+]
+
+
+def _builtin_tools(p: dict) -> List[str]:
+    if p["id"] == "self_check":
+        try:
+            import self_tools
+            return sorted(self_tools.NAMES)
+        except Exception:  # noqa: BLE001
+            return []
+    return list(p.get("tools") or [])
+
+
+def _by_id() -> Dict[str, dict]:
+    return {p["id"]: p for p in BUILTIN}
+
+
+# ------------------------------------------------------------------ state
+def _load() -> dict:
+    try:
+        d = json.loads(STATE_PATH.read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save(d: dict) -> None:
+    USER.mkdir(parents=True, exist_ok=True)
+    tmp = STATE_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(d, indent=2), encoding="utf-8")
+    tmp.replace(STATE_PATH)
+
+
+def _entry(state: dict, pid: str) -> dict:
+    return state.setdefault(pid, {})
+
+
+def is_enabled(pid: str, state: Optional[dict] = None) -> bool:
+    p = _by_id().get(pid)
+    if p is None:
+        return False
+    e = (state if state is not None else _load()).get(pid, {})
+    return bool(e.get("enabled", p.get("default", True)))
+
+
+def settings_of(pid: str, state: Optional[dict] = None) -> dict:
+    p = _by_id().get(pid) or {}
+    e = (state if state is not None else _load()).get(pid, {})
+    out = {}
+    for f in p.get("settings", []):
+        if f["type"] == "secret":
+            continue
+        out[f["key"]] = e.get("settings", {}).get(f["key"], f.get("default"))
+    return out
+
+
+def _secret_info(f: dict) -> dict:
+    """Is a key set (from user/, private/ or env)? Never return the value."""
+    try:
+        import websearch
+        v = websearch._key(f["file"])
+    except Exception:  # noqa: BLE001
+        v = ""
+    src = ""
+    if v:
+        import os
+        def _has(d):
+            pth = ROOT / d / f"{f['file']}.key"
+            try:
+                return bool(pth.read_text(encoding="utf-8-sig").strip())
+            except OSError:
+                return False
+        if os.environ.get(f"ATLAS_{f['file'].upper()}_KEY", "").strip():
+            src = "environment"
+        elif _has("user"):
+            src = "saved here"
+        else:
+            src = "private folder"
+    return {"set": bool(v), "last4": v[-4:] if len(v) >= 8 else "", "source": src}
+
+
+def tool_names_disabled() -> set:
+    st = _load()
+    out = set()
+    for p in BUILTIN:
+        if not is_enabled(p["id"], st):
+            out.update(_builtin_tools(p))
+    return out
+
+
+def filter_tools(tools: List[dict]) -> List[dict]:
+    off = tool_names_disabled()
+    return [t for t in (tools or []) if t.get("function", {}).get("name") not in off]
+
+
+def version() -> int:
+    return _version
+
+
+def on_change(fn: Callable[[], None]) -> None:
+    _listeners.append(fn)
+
+
+def _changed() -> None:
+    global _version
+    _version += 1
+    for fn in list(_listeners):
+        try:
+            fn()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("plugin listener failed: %s", e)
+
+
+def apply_all() -> None:
+    """Push saved settings into the modules that use them (startup + after edits)."""
+    st = _load()
+    for p in BUILTIN:
+        fn = p.get("apply")
+        if fn:
+            try:
+                fn(settings_of(p["id"], st), is_enabled(p["id"], st))
+            except Exception as e:  # noqa: BLE001
+                logger.warning("plugin %s apply failed: %s", p["id"], e)
+
+
+# ------------------------------------------------------------------ API helpers
+def _field_view(f: dict) -> dict:
+    v = {k: f[k] for k in ("key", "label", "type", "help", "link", "placeholder", "min", "max", "default")
+         if k in f}
+    if "options" in f:
+        v["options"] = f["options"]() if callable(f["options"]) else f["options"]
+    if f["type"] == "secret":
+        v["secret"] = _secret_info(f)
+        v["testable"] = bool(f.get("test"))
+    return v
+
+
+def listing() -> List[dict]:
+    st = _load()
+    out = []
+    for p in BUILTIN:
+        out.append({
+            "id": p["id"], "name": p["name"], "icon": p["icon"], "category": p["category"],
+            "summary": p["summary"], "detail": p.get("detail", ""),
+            "tools": _builtin_tools(p), "enabled": is_enabled(p["id"], st),
+            "builtin": True, "testable": bool(p.get("test")),
+            "settings": [_field_view(f) for f in p.get("settings", [])],
+            "values": settings_of(p["id"], st),
+        })
+    return out
+
+
+def set_enabled(pid: str, on: bool) -> dict:
+    if pid not in _by_id():
+        raise KeyError(pid)
+    with _lock:
+        st = _load()
+        _entry(st, pid)["enabled"] = bool(on)
+        _save(st)
+    logger.info("🧩 plugin %s %s", pid, "ON" if on else "OFF")
+    apply_all()
+    _changed()
+    return next(x for x in listing() if x["id"] == pid)
+
+
+def save_settings(pid: str, values: dict) -> dict:
+    """Validate against the schema; secrets go to their key files, the rest to plugins.json."""
+    p = _by_id().get(pid)
+    if p is None:
+        raise KeyError(pid)
+    errors = {}
+    with _lock:
+        st = _load()
+        e = _entry(st, pid).setdefault("settings", {})
+        for f in p.get("settings", []):
+            k = f["key"]
+            if k not in values:
+                continue
+            v = values[k]
+            if f["type"] == "secret":
+                v = str(v or "").strip()
+                path = _secret_path(f["file"])
+                if v == "":                      # explicit clear
+                    if path.exists():
+                        path.unlink()
+                    continue
+                if len(v) < 8 or any(c.isspace() for c in v) or len(v) > 400:
+                    errors[k] = "That doesn't look like an API key."
+                    continue
+                USER.mkdir(parents=True, exist_ok=True)
+                path.write_text(v, encoding="utf-8")
+                continue
+            if f["type"] == "number":
+                try:
+                    n = float(v)
+                except (TypeError, ValueError):
+                    errors[k] = "Enter a number."
+                    continue
+                lo, hi = f.get("min"), f.get("max")
+                if (lo is not None and n < lo) or (hi is not None and n > hi):
+                    errors[k] = f"Between {lo} and {hi}."
+                    continue
+                v = int(n) if n == int(n) else n
+            elif f["type"] == "toggle":
+                v = bool(v)
+            elif f["type"] == "select":
+                opts = f["options"]() if callable(f["options"]) else f["options"]
+                if str(v) not in {str(o["value"]) for o in opts}:
+                    errors[k] = "Pick one of the options."
+                    continue
+                v = str(v)
+            else:
+                v = str(v or "")[:300]
+            e[k] = v
+        if errors:
+            return {"ok": False, "errors": errors}
+        _save(st)
+    apply_all()
+    _changed()
+    return {"ok": True, "plugin": next(x for x in listing() if x["id"] == pid)}
+
+
+_FIELD_TESTS = {"exa": _test_exa_key, "brave": _test_brave_key}
+
+
+def test(pid: str, field: str = "", value: str = "") -> dict:
+    p = _by_id().get(pid)
+    if p is None:
+        raise KeyError(pid)
+    try:
+        if field:
+            f = next((x for x in p.get("settings", []) if x["key"] == field), None)
+            if not f or not f.get("test"):
+                return {"ok": False, "message": "Nothing to test for that field."}
+            v = (value or "").strip()
+            if not v:
+                import websearch
+                v = websearch._key(f["file"])
+            if not v:
+                return {"ok": False, "message": "No key entered yet."}
+            return _FIELD_TESTS[f["test"]](v)
+        fn = p.get("test")
+        if not fn:
+            return {"ok": True, "message": "Nothing to test; this plugin has no connection."}
+        return fn(settings_of(pid))
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "message": f"Test failed: {e}"}
+
+
+def marketplace() -> List[dict]:
+    """Catalog for the Marketplace tab. Built-ins show as installed."""
+    try:
+        items = json.loads(MARKET_PATH.read_text(encoding="utf-8")).get("plugins", [])
+    except (OSError, ValueError):
+        items = []
+    have = _by_id()
+    out = [{"id": p["id"], "name": p["name"], "icon": p["icon"], "category": p["category"],
+            "summary": p["summary"], "status": "installed", "author": "ATLAS"} for p in BUILTIN]
+    for it in items:
+        if it.get("id") in have:
+            continue
+        out.append({**{k: it.get(k, "") for k in ("id", "name", "icon", "category", "summary", "author")},
+                    "status": it.get("status", "coming_soon")})
+    return out

@@ -28,6 +28,24 @@ class YieldTests(unittest.TestCase):
     def test_chattier_holds_longer(self):
         self.assertLess(I.takeover_words(0.0), I.takeover_words(1.0))
 
+class LiveCutoffTests(unittest.TestCase):
+    """Live call 10-05: agents cut off mid-sentence by their partner's short remarks."""
+    P = dict(speaker="S1", partner="S1")
+    def test_partner_remarks_talked_over(self):
+        for t in ("I don't know.", "I can't do this.", "I've got a mute.", "So would I-",
+                  "Still stuck in the-", "Say it hard.", "Gran Turismo 7."):
+            self.assertFalse(I.should_yield("[S1] " + t, N, **self.P)[0], t)
+    def test_partner_to_the_room(self):
+        self.assertFalse(I.should_yield("[S1] Guys, I'm hungry.", N, **self.P)[0])
+    def test_partner_pushback_and_carrying_on_yield(self):
+        for t in ("no that's not what I said", "It's literally the same thing but you keep saying it"):
+            self.assertTrue(I.should_yield("[S1] " + t, N, **self.P)[0], t)
+    def test_finish_window(self):
+        t = "[S3] okay so the thing about that whole situation is that nobody actually checked the logs"
+        self.assertFalse(I.should_yield(t, N, agent_left_s=1.6)[0])
+        self.assertTrue(I.should_yield(t, N, agent_left_s=3.0)[0])
+
+
 class ResumeTests(unittest.TestCase):
     TXT = "So the best part of that movie is the ending because nobody saw the twist coming at all."
     def test_split_on_word_boundary(self):

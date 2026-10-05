@@ -18,11 +18,18 @@ import time
 from dataclasses import dataclass, field
 
 RESUME_TTL_S = 30.0         # after this the thought is stale; drop it
-FINISH_S = 1.2              # this close to the end of her line: just finish it
+FINISH_S = 2.0              # this close to the end of her line: just finish it
+                            # (live 10-05: 1.3-1.7s left still got cut; a 2s overlap
+                            #  is normal in a group, a half-sentence is not)
 DEFAULT_CPS = 14.0          # spoken chars/second when synthesis isn't done yet
 MIN_UNSAID_WORDS = 4        # less left than this = she basically finished
 
 RESUME_CUE_RE = re.compile(r"\(RESUME CUE\)")
+
+
+PARTNER_KEEP_GOING = 6      # content words before the partner counts as taking over
+_PUSHBACK = {"wait", "no", "nah", "nope", "but", "actually", "hold", "stop", "hang"}
+_GROUP_VOCATIVE = {"guys", "everyone", "everybody", "yall", "y'all", "chat", "people"}
 
 
 def _body(text: str) -> str:
@@ -68,10 +75,20 @@ def should_yield(text: str, names: tuple[str, ...] = (), *, speaker: str | None 
     if to_other:
         return False, "side chatter"
     if speaker and partner and speaker == partner:
-        # The person she's talking with pushes back or asks something: let them.
-        if len(content) >= 3 or ("?" in body and len(content) >= 2):
-            return True, "partner took the floor"
-        return False, "partner backchannel"
+        # Live call 10-05: 23 of 37 cut-offs were "partner took the floor" on any
+        # 3 words -- "I don't know.", "I can't do this.", "Guys, I'm hungry.",
+        # "So would I-". Those are remarks, not a bid for the floor. Yield only to
+        # a question, a pushback opener, or the partner clearly carrying on.
+        # (Called on every partial, so a remark that keeps growing still yields.)
+        if w[0] in _GROUP_VOCATIVE and len(content) < PARTNER_KEEP_GOING + 2:
+            return False, "partner to the room"
+        if "?" in body and len(content) >= 2:
+            return True, "partner asked"
+        if w[0] in _PUSHBACK and len(content) >= 2:
+            return True, "partner pushback"
+        if len(content) >= PARTNER_KEEP_GOING:
+            return True, "partner kept going"
+        return False, "partner remark"
     if len(w) >= takeover_words(talkativeness) and len(content) >= 5:
         return True, "takeover"
     return False, "talk over"
