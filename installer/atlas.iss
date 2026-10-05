@@ -27,7 +27,7 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 
 [Files]
-Source: "{#SrcDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion; Excludes: ".venv\*,__pycache__\*,logs\*,user\*,*.log,*.out,boot.pid,desktop\node_modules\*"
+Source: "{#SrcDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion; Excludes: ".venv\*,__pycache__\*,logs\*,user\*,*.log,*.out,boot.pid,desktop\node_modules\*,site\*,docs\media\*,marketing\*,brand\*,tools\demo\*,.github\*"
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\.venv"
