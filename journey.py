@@ -90,6 +90,10 @@ def state(settings: dict | None = None, rec_dir: Path = REC_DIR) -> dict:
         "calls": calls,
         "pending_memories": pending,
         "hidden": bool(s.get("journey_hidden")),
+        # Owner 10-04: the card is first-run help only. Once set up, with an agent
+        # and a first conversation, it never shows again: no progress recap, no
+        # call count, no review nag.
+        "show": not s.get("journey_hidden") and not (done["setup"] and done["agent"] and done["call"]),
         "public": public,
     }
 

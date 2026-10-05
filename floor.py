@@ -350,7 +350,9 @@ class ConversationFloor:
                     "things out loud -- a stray line, even with 'you' in it, is usually NOT "
                     "for you. Default [HOLD]. Speak only if it's plainly a question to you, "
                     "or it's squarely about something you genuinely love and one short "
-                    "remark would be welcome." + loves)
+                    "remark would be welcome. Gripes about lag, internet, downloads or "
+                    "stepping away (brb) are not requests: let them pass, don't offer "
+                    "fixes, and never claim the same problem yourself." + loves)
         if current == partner:
             return (f"ROOM: you are mid-conversation with {partner} and this is {partner} "
                     "talking. Keep the thread going.")

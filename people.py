@@ -226,8 +226,15 @@ class NameBook:
                     return self._assign(p, name, "intro")
             words = body.split()
             asked = p.asked_at is not None and now - p.asked_at <= self.answer_window_s
-            core = _INTRO_TAIL.sub("", body).split()  # "I'm Dana, nice to meet you" is still 2 words of intro
-            m = _IM_GREETED.search(body) or ((_IM_BARE.search(body) if asked or len(core) <= 3 else None))
+            # Intros usually lead the turn: "I'm Sam. how's it going", "hey Max, I'm Sam".
+            # Judge the first sentence, with a leading "hey <agent>," vocative dropped.
+            first = re.split(r"(?<=[.!?])\s+", body, maxsplit=1)[0]
+            v = re.match(r"^\W*((?:hey|hi|hello|yo|sup)\W+)?([A-Za-z]+),\s*", first, re.I)
+            if v and v[2].lower() in self.agent_names:
+                first = (v[1] or "") + first[v.end():]
+            core = _INTRO_TAIL.sub("", first).split()  # "I'm Dana, nice to meet you" is still 2 words of intro
+            m = (_IM_GREETED.search(body) or _IM_GREETED.search(first)
+                 or ((_IM_BARE.search(first) if asked or len(core) <= 3 else None)))
             name = _clean_name(m[1], need_cap=True) if m else None
             if name and name.lower() not in self.agent_names:
                 return self._assign(p, name, "intro")

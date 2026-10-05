@@ -891,22 +891,13 @@ async function refreshGuide(action) {
     const opt = action ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action }) } : {};
     const r = await fetch('/api/journey', opt); if (!r.ok) return;
     const j = await r.json();
-    guideEl.classList.toggle('hidden', !!j.hidden);
-    const steps = document.getElementById('guideSteps'); steps.textContent = '';
-    for (const s of j.steps) {
-      const d = document.createElement('div');
-      d.className = 'gs' + (s.done ? ' done' : '') + (s.id === j.current && !s.done ? ' cur' : '');
-      d.appendChild(document.createElement('i'));
-      d.appendChild(document.createTextNode(s.label));
-      steps.appendChild(d);
-    }
+    // First-run help only: hidden for good once there's a first conversation.
+    guideEl.classList.toggle('hidden', !j.show);
+    if (!j.show) return;
+    const cur = j.steps.find(s => s.id === j.current);
+    document.getElementById('guideTitle').textContent = 'Next: ' + (cur ? cur.label : '');
     document.getElementById('guideHint').textContent = j.hint;
-    document.getElementById('guideCalls').textContent = j.calls ? `${j.calls} call${j.calls === 1 ? '' : 's'}` : '';
-    document.getElementById('guideDone').classList.toggle('hidden', j.current !== 'review');
   } catch (e) { /* backend down: leave the strip as it was */ }
 }
-document.getElementById('guideDone').onclick = () => refreshGuide('reviewed');
 document.getElementById('guideHide').onclick = () => refreshGuide('hide');
 refreshGuide(); setInterval(refreshGuide, 30000);
-document.querySelector('.brand').title = 'Click to show the guide';
-document.querySelector('.brand').onclick = () => refreshGuide('show');

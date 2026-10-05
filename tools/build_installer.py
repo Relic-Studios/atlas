@@ -11,7 +11,7 @@ ISCC_GUESSES = [r"E:\AstraRelease-buildtools\InnoSetup\ISCC.exe",
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--version", default="0.2.2")
+    ap.add_argument("--version", default="0.2.3")
     ap.add_argument("--iscc", default=next((p for p in ISCC_GUESSES if os.path.exists(p)), None))
     ap.add_argument("--ref", default="HEAD", help="git ref to package (public repo: a release tag)")
     a = ap.parse_args()

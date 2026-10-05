@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.3 — names, quieter agents, simpler dashboard
+
+- Names are now learned when someone introduces themselves inside a greeting or before a
+  follow-up ("hey, I'm Sam", "I'm Sam. how's it going"), not only from a bare "I'm Sam".
+- Agents no longer chime in on passing gripes like "my internet's lagging" or "brb", which
+  made them offer unasked-for fixes or claim the same problem themselves.
+- The dashboard guide is now first-run help only: one "Next:" step with a hint and a Dismiss
+  button. It disappears for good after your first conversation (replaces the 0.2.2 guide strip).
+- Agents asked to say something on command answer in their own words instead of mocking the asker.
+
 ## 0.2.2 — community, guide strip, group framing
 
 - New: community Discord for install help, personas, voices and clips: https://discord.gg/dWvcu3yG6s
