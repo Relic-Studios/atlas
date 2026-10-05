@@ -410,7 +410,7 @@ def directly_named(text: str, names: tuple) -> bool:
     return lead or tail
 
 
-def retry_named_hold(first, again, enabled: bool, max_header: int = 48):
+def retry_named_hold(first, again, enabled: bool, max_header: int = 48, cancelled=None):
     """Pass raw LLM chunks through; if the line named the agent (enabled) and the
     header is [HOLD], malformed, missing, or the stream is empty, drop it and stream
     `again()` instead (one retry). Header-only buffering.
@@ -422,6 +422,16 @@ def retry_named_hold(first, again, enabled: bool, max_header: int = 48):
     hold = re.compile(r"\s*\[\s*HOLD\s*\]", re.I)
 
     def _retry(it, why):
+        # Demo take 6 (10-05): the first stream came back empty because the turn was
+        # ABORTED by a newer partial; the retry then started a fresh LLM call the abort
+        # could not reach and spoke a stale reply. Never retry a cancelled turn.
+        if cancelled is not None:
+            try:
+                if cancelled():
+                    logger.info("named %s but turn was cancelled -> no retry", why)
+                    return
+            except Exception:  # noqa: BLE001
+                pass
         close = getattr(it, 'close', None)
         if close:
             try:

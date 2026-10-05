@@ -1560,7 +1560,9 @@ class SpeechPipelineManager:
                 raw_stream = retry_named_hold(
                     raw_stream,
                     lambda: _gen(trimmed + chr(10) + NAMED_NUDGE.format(who=who)),
-                    named)
+                    named,
+                    cancelled=lambda g=gen: bool(g.abortion_started or g.llm_aborted
+                                                 or self.stop_llm_request_event.is_set()))
             gen.llm_generator = filter_response(
                 raw_stream,
                 gen.decision,
