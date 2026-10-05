@@ -1,5 +1,15 @@
 # Changelog
 
+ATLAS is early beta. See [SAFETY.md](SAFETY.md) for what an agent can do, what's tested and what isn't.
+
+## Unreleased
+
+- Web search uses Exa or Brave when you add your own key (`user/exa.key`, `user/brave.key`, or `ATLAS_EXA_KEY` / `ATLAS_BRAVE_KEY`), falling back to the free search otherwise. Results carry dates.
+- Agents always know the real date and time; new `check_date_time` tool for other time zones.
+- Search fixes: no silent reuse of old results, new requests replace stale ones, a stray past year added by the model is removed, and merely mentioning search no longer starts one.
+- "Look!", "check this out" and similar now take a screenshot right away (when Eyes is on).
+- New SAFETY.md.
+
 ## 0.2.4 — better conversations on basic local models
 
 Tested on qwen3 8B (minimum) and 14B (recommended) across eight scripted situations

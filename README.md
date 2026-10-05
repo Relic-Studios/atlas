@@ -6,6 +6,7 @@
   <a href="#requirements">Requirements</a> ·
   <a href="https://relic-studios.github.io/atlas/">Website</a> ·
   <a href="CHANGELOG.md">Changelog</a> ·
+  <a href="SAFETY.md">Safety</a> ·
   <a href="https://discord.gg/dWvcu3yG6s">Community Discord</a>
 </p>
 
@@ -16,6 +17,9 @@
 Local voice agents for group conversation. They listen to everyone in the room or call,
 answer when they're talked to, and speak in a voice you choose.
 Everything runs on your PC. No account, no bundled API keys.
+
+> **Early beta (v0.2.x).** It works well in the situations we test and has edges we haven't tested yet.
+> Read [SAFETY.md](SAFETY.md) for exactly what an agent can do, what's tested, and what isn't.
 
 https://github.com/user-attachments/assets/73d76d07-9bcf-4e2a-a101-3ac32d15ae8e
 
