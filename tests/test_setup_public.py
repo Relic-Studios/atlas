@@ -86,8 +86,17 @@ class SetupApiTests(unittest.TestCase):
         r = self.c.post("/api/setup/llm", json={"mode": "local", "model": "qwen3:8b"})
         self.assertEqual(r.status_code, 403)
         self.SA._owner = lambda req: True
-        r = self.c.post("/api/setup/llm", json={"mode": "local", "model": "qwen3:8b"})
-        self.assertEqual(r.status_code, 200)
+        # Hermetic: no live Ollama in CI (this passed locally only because Ollama was up).
+        real = self.SA.test_local
+        try:
+            self.SA.test_local = lambda url, model, timeout=120.0: {"ok": False, "error": "format"}
+            r = self.c.post("/api/setup/llm", json={"mode": "local", "model": "qwen3:4b"})
+            self.assertEqual(r.status_code, 400)      # failed probe -> not saved
+            self.SA.test_local = lambda url, model, timeout=120.0: {"ok": True}
+            r = self.c.post("/api/setup/llm", json={"mode": "local", "model": "qwen3:8b"})
+            self.assertEqual(r.status_code, 200)
+        finally:
+            self.SA.test_local = real
         import user_settings as US
         self.assertEqual(US.local_llm()["model"], "qwen3:8b")
 
