@@ -17,9 +17,10 @@ Local voice agents for group conversation. They listen to everyone in the room o
 answer when they're talked to, and speak in a voice you choose.
 Everything runs on your PC. No account, no bundled API keys.
 
-<p align="center"><a href="https://relic-studios.github.io/atlas/#demo"><img src="docs/media/demo.gif" width="80%" alt="ATLAS demo: two people and an agent named Wren"></a></p>
+https://github.com/user-attachments/assets/73d76d07-9bcf-4e2a-a101-3ac32d15ae8e
+
 <p align="center"><sub>Unedited run on a local 14B model. Human lines are scripted text-to-speech; every agent reply and every silence is live.
-<a href="https://relic-studios.github.io/atlas/#demo">Watch the full minute with sound.</a></sub></p>
+Also on the <a href="https://relic-studios.github.io/atlas/#demo">website</a>.</sub></p>
 
 <p align="center">
   <img src="docs/images/voices.jpg" width="100%" alt="Four voices over a real one-minute conversation, the agent in teal">
