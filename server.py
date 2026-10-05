@@ -741,6 +741,12 @@ def _audio_devices_info(app: FastAPI) -> dict:
             info["current"]["output"], _ = resolve_device("output", bridge.output_device)
         except Exception:  # noqa: BLE001
             pass
+    try:  # demo/sim calls run on a virtual device: say so instead of naming real hardware
+        import demo_call
+        if demo_call.enabled():
+            info["virtual"] = "Virtual call (demo)"
+    except Exception:  # noqa: BLE001
+        pass
     return {"type": "devices", **info}
 
 

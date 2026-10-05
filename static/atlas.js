@@ -438,6 +438,7 @@ function renderDevices(info) {
   const fill = (sel, list, cur) => { sel.innerHTML = ''; list.forEach((d) => { const o = document.createElement('option'); o.value = d.index; o.textContent = `${d.index} · ${d.name}`; o.selected = d.index === cur; sel.appendChild(o); }); };
   fill($('devIn'), info.devices.inputs, info.current.input); fill($('devOut'), info.devices.outputs, info.current.output);
   const inN = info.devices.inputs.find((d) => d.index === info.current.input), outN = info.devices.outputs.find((d) => d.index === info.current.output);
+  if (info.virtual) { $('devLabel').textContent = info.virtual; return; }
   $('devLabel').textContent = `${(inN?.name || '?').replace(/\(.*$/, '').trim()} → ${(outN?.name || '?').replace(/\(.*$/, '').trim()}`;
 }
 const pushDevices = () => { send({ type: 'set_audio_devices', input: +$('devIn').value, output: +$('devOut').value }); toast('audio routing updated'); };
