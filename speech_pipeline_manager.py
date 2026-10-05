@@ -1097,6 +1097,13 @@ class SpeechPipelineManager:
             except Exception as e:  # noqa: BLE001
                 logger.warning("prediction note failed: %s", e)
             try:
+                import languages as _langs
+                ln = _langs.ROOM.note()
+                if ln:
+                    room = (room + chr(10) + ln).strip()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("language note failed: %s", e)
+            try:
                 import call_memory as _cmem
                 memn = _cmem.memory_note(getattr(self, "current_persona", ""))
                 if memn:

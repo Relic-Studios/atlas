@@ -503,6 +503,12 @@ class TurnDetection:
 
             # Combine pauses: weighted average giving more importance to punctuation pause
             weight_towards_whisper = 0.65
+            try:  # the completion classifier is English-only DistilBERT; in another
+                import languages as _L  # language trust Whisper's punctuation alone
+                if _L.ROOM.current() != "en":
+                    weight_towards_whisper = 1.0
+            except Exception:  # noqa: BLE001
+                pass
             weighted_pause = (weight_towards_whisper * whisper_suggested_pause +
                              (1 - weight_towards_whisper) * sentence_finished_model_pause)
 

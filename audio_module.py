@@ -328,7 +328,8 @@ class AudioProcessor:
         from RealtimeTTS import QwenVoice
         from voices import voice_wav
         try:
-            voice = QwenVoice(name=name, ref_audio=voice_wav(name), ref_text=voice_ref_text(name), language="english")
+            voice = QwenVoice(name=name, ref_audio=voice_wav(name), ref_text=voice_ref_text(name),
+                              language=getattr(self, "_tts_lang", "english"))
             self.engine.set_voice(voice)
             self.current_voice = name
             logger.info(f"👄🔁 Switched TTS voice to '{name}'")
@@ -336,6 +337,28 @@ class AudioProcessor:
         except Exception as e:  # noqa: BLE001
             logger.warning(f"👄⚠️ set_voice failed for '{name}': {e}")
             return False
+
+    def _set_tts_language(self, lang: str, why: str = "") -> None:
+        """Multilingual replies (owner 10-05): voice each reply with the Qwen3-TTS
+        language it is written in. Cheap (a field on the current voice); must run
+        before the text is fed, never mid-synthesis."""
+        if self.engine_name != "qwen" or not lang:
+            return
+        if lang == getattr(self, "_tts_lang", "english"):
+            return
+        try:
+            self.engine.set_voice_parameters(language=lang)
+            self._tts_lang = lang
+            logger.info(f"👄🌐 TTS language -> {lang} {why}")
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"👄🌐 TTS language {lang!r} rejected: {e}")
+
+    def _lang_hint(self) -> str:
+        try:
+            import languages as _L
+            return _L.ROOM.current()
+        except Exception:  # noqa: BLE001
+            return "en"
 
     def on_audio_stream_stop(self) -> None:
         """
@@ -429,6 +452,13 @@ class AudioProcessor:
             logger.info(f"👄⚙️ {generation_string} Setting Coqui stream chunk size to {QUICK_ANSWER_STREAM_CHUNK_SIZE} for quick synthesis.")
             self.engine.set_stream_chunk_size(QUICK_ANSWER_STREAM_CHUNK_SIZE)
             self.current_stream_chunk_size = QUICK_ANSWER_STREAM_CHUNK_SIZE
+
+        try:
+            import languages as _L
+            self._set_tts_language(_L.tts_language(text, self._lang_hint()), "(quick answer)")
+            self._tts_lang_at = time.time()
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"👄🌐 language pick failed: {e}")
 
         # Canonical voice cues (e.g. Fae's real "Hey! Listen!"): leading cue
         # words play from the game recording, the rest goes to TTS.
@@ -622,6 +652,13 @@ class AudioProcessor:
             logger.info(f"👄⚙️ {generation_string} Setting Coqui stream chunk size to {FINAL_ANSWER_STREAM_CHUNK_SIZE} for generator synthesis.")
             self.engine.set_stream_chunk_size(FINAL_ANSWER_STREAM_CHUNK_SIZE)
             self.current_stream_chunk_size = FINAL_ANSWER_STREAM_CHUNK_SIZE
+
+        if time.time() - getattr(self, "_tts_lang_at", 0.0) > 6.0:  # quick answer of this same turn wins
+            try:
+                import languages as _L
+                self._set_tts_language(_L.TTS_NAMES.get(self._lang_hint(), "english"), "(room)")
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"👄🌐 language pick failed: {e}")
 
         # Canonical voice cues on the first words of the final segment.
         if self._cue_voice_ok():

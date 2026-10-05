@@ -171,6 +171,16 @@ class TranscriptionProcessor:
         # Use provided config or default
         self.recorder_config = copy.deepcopy(recorder_config if recorder_config else DEFAULT_RECORDER_CONFIG)
         self.recorder_config['language'] = self.source_language # Ensure language is set
+        # Multilingual (owner 10-05): transcribe what people actually say. "auto" ->
+        # Whisper detects per turn ("" = auto in RealtimeSTT) instead of forcing English,
+        # which turned Spanish/Japanese speech into anglicised English text.
+        try:
+            import languages as _L
+            _lang = _L.setting()
+            self.recorder_config['language'] = "" if _lang == "auto" else _lang
+            logger.info(f"👂🌐 STT language: {_lang}")
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"👂🌐 language setting unavailable ({e}); keeping {self.source_language}")
 
         if USE_TURN_DETECTION:
             logger.info(f"👂🔄 {Colors.YELLOW}Turn detection enabled{Colors.RESET}")
@@ -819,6 +829,7 @@ class TranscriptionProcessor:
                     self.recorder = AudioToTextRecorder(**active_config)
                 finally:
                     done.set()
+                _wrap_language_retry(self.recorder)
                 # Ensure wake words are disabled if needed (double check via param setting)
                 self._set_recorder_param("use_wake_words", False) # Uses the helper method
 
@@ -895,6 +906,60 @@ class TranscriptionProcessor:
 # Fail loudly with the exit code instead of hanging. Not a respawn: the cause
 # must be found, so we stop the process and say why.
 STT_SPAWN_TIMEOUT_S = float(os.environ.get("ATLAS_STT_SPAWN_TIMEOUT_S", "180"))
+
+
+def _wrap_language_retry(recorder) -> None:
+    """Auto-detect guard: Whisper's language ID on a short or noisy turn ("yeah",
+    "mm-hm") is unreliable and can produce a line in the wrong language. When the
+    detection is low-confidence AND disagrees with the language the room is
+    speaking, re-run the same audio once with that language forced. Confident
+    switches (someone really starts speaking Spanish) go through untouched."""
+    if recorder is None or getattr(recorder, "_atlas_lang_wrapped", False):
+        return
+    import languages as L
+    orig = recorder.perform_final_transcription
+
+    def guarded(audio_bytes=None, use_prompt=True):
+        # Follow the Languages plugin live (no restart): auto -> "" (Whisper detects),
+        # otherwise the fixed code. Partials pick it up from the next turn on.
+        try:
+            want = L.setting()
+            recorder.language = "" if want == "auto" else want
+        except Exception:  # noqa: BLE001
+            pass
+        if recorder.language not in ("", None):
+            text = orig(audio_bytes, use_prompt)
+            if text:
+                L.ROOM.observe(recorder.language, 1.0, text)
+            return text
+        text = orig(audio_bytes, use_prompt)
+        det = getattr(recorder, "detected_language", None)
+        prob = float(getattr(recorder, "detected_language_probability", 0) or 0)
+        retry = L.ROOM.needs_retry(det, prob, text or "")
+        if text and retry:
+            audio = getattr(recorder, "last_transcription_bytes", None)
+            if audio is not None and len(audio):
+                saved = recorder.language
+                try:
+                    recorder.language = retry
+                    t0 = time.time()
+                    again = orig(audio, use_prompt)
+                    logger.info(f"👂🌐 low-confidence '{det}' ({prob:.2f}) -> retried as "
+                                f"'{retry}' in {int((time.time()-t0)*1000)} ms: {again!r}")
+                    if again:
+                        text = again
+                        det, prob = retry, 1.0
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(f"👂🌐 language retry failed: {e}")
+                finally:
+                    recorder.language = saved
+        if text:
+            used = L.ROOM.observe(det, prob, text)
+            logger.info(f"👂🌐 turn language: detected={det} p={prob:.2f} -> {used}")
+        return text
+
+    recorder.perform_final_transcription = guarded
+    recorder._atlas_lang_wrapped = True
 
 
 def _watch_stt_spawn(done, timeout_s=None, poll_s=1.0, exit_fn=None):

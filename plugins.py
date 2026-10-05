@@ -124,6 +124,12 @@ def _test_clock(settings: dict) -> dict:
 
 
 # ------------------------------------------------------------------ catalog
+# Shared by the Languages plugin selects ("listen" adds Auto; "primary" is a real language).
+_LANG_OPTIONS = [{"value": c, "label": n} for c, n in (("en", "English"), ("es", "Spanish"), ("fr", "French"),
+                ("de", "German"), ("it", "Italian"), ("pt", "Portuguese"), ("ru", "Russian"),
+                ("zh", "Chinese"), ("ja", "Japanese"), ("ko", "Korean"), ("nl", "Dutch"),
+                ("pl", "Polish"), ("tr", "Turkish"), ("ar", "Arabic"), ("hi", "Hindi"))]
+
 BUILTIN: List[dict] = [
     {
         "id": "web_search", "name": "Web search", "icon": "search", "category": "Knowledge",
@@ -170,6 +176,23 @@ BUILTIN: List[dict] = [
              "placeholder": "e.g. Asia/Tokyo (blank = local)"},
         ],
         "test": _test_clock,
+    },
+    {
+        "id": "languages", "name": "Languages", "icon": "globe", "category": "Senses",
+        "summary": "Hear people in their own language and answer in it.",
+        "detail": "Whisper detects each speaker's language and writes down what they actually said, "
+                  "not an English translation. The agent replies in that language, and its voice "
+                  "switches to match (English, Spanish, French, German, Italian, Portuguese, Russian, "
+                  "Chinese, Japanese, Korean). Off = everything is treated as your main language.",
+        "tools": [], "default": True,
+        "settings": [
+            {"key": "listen", "label": "Listen for", "type": "select", "default": "auto",
+             "options": [{"value": "auto", "label": "Detect automatically (recommended)"}] + _LANG_OPTIONS,
+             "help": "Pick one language only if detection keeps guessing wrong in your room."},
+            {"key": "primary", "label": "Main language", "type": "select", "default": "en",
+             "options": list(_LANG_OPTIONS),
+             "help": "Used for short or unclear lines and when this plugin is off."},
+        ],
     },
     {
         "id": "notes", "name": "Notes & follow-ups", "icon": "note", "category": "Memory",
