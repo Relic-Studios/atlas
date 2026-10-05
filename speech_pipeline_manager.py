@@ -85,7 +85,9 @@ BOARD_TOOLS = [
         "Your name still wakes you. After calling it, output only [HOLD].",
         {"minutes": {"type": "number", "description": "0.5 to 5"}}),
 ]
-AGENT_TOOLS = list(WEB_SEARCH_TOOLS) + READ_PAGE_TOOLS + list(SCREEN_TOOLS) + BOARD_TOOLS
+import clock as _clock
+AGENT_TOOLS = (list(WEB_SEARCH_TOOLS) + READ_PAGE_TOOLS + list(SCREEN_TOOLS) + BOARD_TOOLS
+               + [_clock.TOOL])
 SEARCH_WAIT_S = 9.0   # how long a reply waits for its search before handing it to the board
 
 
@@ -103,6 +105,9 @@ def _execute_tool(name: str, args):
         return _screen.capture(reason)
     if name == "web_search" and _execute_web_search is not None:
         return _execute_web_search(name, args)
+    if name == "check_date_time":
+        tz = args.get("timezone", "") if isinstance(args, dict) else ""
+        return _clock.check(str(tz or ""))
     return f"unknown tool: {name}"
 
 # (Logging setup)

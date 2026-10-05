@@ -277,7 +277,7 @@ def _is_participation(body) -> bool:
 # "search X" / "google X" / "look up X" said TO the agent: a clear command, so
 # the greedy decision must be the tool call, not a "[SPEAK] On it." header.
 _EXPLICIT_SEARCH = re.compile(
-    r"\b(?:search(?:\s+up)?|google|look\s+(?:it\s+)?up|look\s+up|lookup|check\s+online|"
+    r"\b(?:(?:can|could|would|will)\s+you\s+(?:go\s+)?research|(?:please|go)\s+research|\w+,\s*research\b|research\s+(?:this|that|it)\b|search(?:\s+up)?|google|look\s+(?:it\s+)?up|look\s+up|lookup|check\s+online|"
     r"find\s+out\s+online|search\s+the\s+(?:web|internet))\b", re.I)
 
 
@@ -392,7 +392,13 @@ class RemoteSession:
         Returns None to fall back to the ordinary single sampled stream."""
         read_t = timeout[1] if isinstance(timeout, tuple) else 600.0
         s1 = dict(body, stream=False, temperature=0.0, max_tokens=16, stop=["]"])
-        if _offers_tool(body, "web_search") and _EXPLICIT_SEARCH.search(_last_user_text(body)):
+        _lu = _last_user_text(body)
+        try:
+            from backchannels import mention_only as _mention_only
+        except Exception:  # noqa: BLE001
+            def _mention_only(_t):
+                return False
+        if _offers_tool(body, "web_search") and _EXPLICIT_SEARCH.search(_lu) and not _mention_only(_lu):
             s1 = dict(body, stream=False, temperature=0.0, max_tokens=256,
                       tool_choice={"type": "function", "function": {"name": "web_search"}})
         if HOLD_THRESH > 0:

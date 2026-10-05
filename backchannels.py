@@ -73,7 +73,7 @@ VOICE_LINES = _VoiceLines()
 # Deterministic "this turn will need the web" cue: lets us speak the filler at
 # generation start instead of waiting ~5s for the model's tool-call round.
 _SEARCH_INTENT_RE = re.compile(
-    r"\b(search|google|look\s*(?:it|that|this)?\s*up|look\s+into|check\s+online|"
+    r"\b((?:can|could|would|will)\s+you\s+(?:go\s+)?research|(?:please|go)\s+research|\w+,\s*research\b|research\s+(?:this|that|it)\b|search|google|look\s*(?:it|that|this)?\s*up|look\s+into|check\s+online|"
     r"what'?s\s+the\s+latest|latest\s+news|news\s+(?:on|about)|who\s+won|"
     r"what\s+time\s+is\s+it\s+in|weather\s+in|how\s+much\s+(?:is|does|are)|"
     r"release\s+date|when\s+(?:does|did|is)\s+.+\s+(?:come\s+out|release|drop))\b",
@@ -81,8 +81,27 @@ _SEARCH_INTENT_RE = re.compile(
 )
 
 
+# Live call 10-05: "I can ask Fae to search the internet" forced a junk search. Lines that
+# only TALK ABOUT searching (third person / ability statements) aren't requests.
+_SEARCH_MENTION_RE = re.compile(
+    r"\b(?:(?:i|we|you|u|they|people|anyone|someone)\s+(?:can|could|should|might)\s+(?:just\s+)?ask\s+\w+\s+to"
+    r"|(?:she|he|it|they|fae|\w+)\s+(?:can|could|is\s+able\s+to|knows\s+how\s+to)\s+(?:also\s+)?(?:search|google|look)"
+    r"|(?:able|ability)\s+to\s+(?:search|google|look)"
+    r"|(?:she|he|it|they)\s+(?:searches|googles|looks\s+(?:stuff|things)\s+up)"
+    r"|searching\s+(?:is|was)\b)",
+    re.IGNORECASE,
+)
+_DIRECT_ASK_RE = re.compile(r"\b(?:can|could|would|will)\s+you\b|^\W*(?:\[\w+\]\s*)?(?:\w+,\s*)?(?:please\s+)?(?:search|google|look)", re.I)
+
+
+def mention_only(text: str) -> bool:
+    """True when a line merely mentions searching rather than asking for one."""
+    t = text or ""
+    return bool(_SEARCH_MENTION_RE.search(t)) and not _DIRECT_ASK_RE.search(t)
+
+
 def wants_search(text: str) -> bool:
-    return bool(text and _SEARCH_INTENT_RE.search(text))
+    return bool(text and _SEARCH_INTENT_RE.search(text) and not mention_only(text))
 
 
 class Backchannels:

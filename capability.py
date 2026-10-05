@@ -121,8 +121,14 @@ def abilities_note(eyes_on: bool, search_on: bool = True, persona: str = "") -> 
         can.append("look at the owner's screen whenever someone shows you something or the room "
                    "is reacting to something on screen you can't see yet (a game, a clip, a picture) "
                    "- just look, like glancing over")
+    can.append("check the real date and time")
     can.append("leave notes for yourself")
-    return ("Your abilities right now (use them when they help, never deny having them): "
+    try:
+        import clock as _clock
+        now = _clock.now_note() + " "
+    except Exception:  # noqa: BLE001
+        now = ""
+    return (now + "Your abilities right now (use them when they help, never deny having them): "
             + ", ".join(can) + ". " + identity_truth(persona))
 
 
