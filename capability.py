@@ -46,8 +46,60 @@ _REFUSAL_RE = {
 }
 
 
+# Owner 10-05: "Fae, look!" / "watch this" / "did you see that?" should work like
+# "take a screenshot". Only 2 of 22 natural phrasings matched _LOOK_RE.
+# Show-and-tell phrasings, checked per sentence (some are end-anchored so
+# "watch that movie later" or "did you see the game last night" don't fire).
+_SHOW_RE = re.compile(
+    r"\blook\s+at\s+(?!(?:it|this|that)\s+from\b|(?:the\s+)?(?:bright\s+side|big\s+picture|"
+    r"facts?|numbers|data|history|situation|way|time|clock)\b)"
+    r"(?:this|that|these|those|it|him|her|them|my|the|his|their|our|what|how)\b|"
+    r"\blook\s+(?:what|how|who)\s+(?:i|he|she|they|we|it|this|that|you)\b|"
+    r"\bcheck\s+(?:this|that|it)\s+out\b(?!.*\b(?:later|tomorrow|sometime|tonight|next\s+time|when\s+you)\b)|"
+    r"\bwhat\s+am\s+i\s+looking\s+at\b|"
+    r"\b(?:peep|watch)\s+(?:this|that)\s*[.!?]*$|"
+    r"\b(?:did|do|can|could)\s+you\s+see\s+(?:this|that|it|him|her|them)\s*[.!?]*$|"
+    r"^\W*(?:[a-z'’-]+[,\s]+)?see\s+(?:this|that)\s*\?+\s*$",
+    re.IGNORECASE,
+)
+# A sentence that is ONLY "look" (plus a greeting / name / "here" / "at this"):
+# "Fae, look!", "Hey Fae, LOOK!", "look look look". "Look, I'm just saying..."
+# has more words, so the discourse marker never fires.
+_NOT_NAME = r"(?:i|you|we|they|he|she|it|just|dont|don't|don’t|never|not|cant|can't|to|and|so|but|we'll|i'll)"
+_BARE_LOOK_RE = re.compile(
+    r"^\W*(?:(?:hey|yo|oh|oi|ok|okay|wait)[,\s]+)?"
+    r"(?:(?!" + _NOT_NAME + r"\b)[a-z'’-]+[,\s]+)?"
+    r"look(?:[,!\s]+look)*"
+    r"(?:[,\s]+(?:here|at\s+(?:this|that|it)))?"
+    r"(?:[,\s]+(?!(?:away|up|down|out|forward|into|ahead|alive|around|back|sharp)\b)[a-z'’-]+)?"
+    r"[\s.!?]*$",
+    re.IGNORECASE,
+)
+
+
+_VOICE_PERSON_RE = re.compile(
+    r"\b(?:guy|dude|man|bro|girl|kid|him|her|them)\b.*\b(?:talk(?:ing|s)?|speaking|saying|"
+    r"yapping|rambling|chatting|sounds?)\b",
+    re.IGNORECASE,
+)
+
+
 def wants_look(text: str) -> bool:
-    return bool(text and _LOOK_RE.search(text))
+    if not text:
+        return False
+    if _LOOK_RE.search(text):
+        return True
+    body = re.sub(r"^\s*\[S\d+\]\s*", "", text)
+    for sent in re.split(r"(?<=[.!?])\s+", body):
+        sent = sent.strip()
+        if not sent:
+            continue
+        if _BARE_LOOK_RE.match(sent):
+            return True
+        # "look at this guy talking lol" is about someone in the voice chat, not the screen.
+        if _SHOW_RE.search(sent) and not _VOICE_PERSON_RE.search(sent):
+            return True
+    return False
 
 
 def look_note(text: str, eyes_on: bool) -> str:
@@ -66,7 +118,9 @@ def abilities_note(eyes_on: bool, search_on: bool = True, persona: str = "") -> 
     if search_on:
         can.append("search the web")
     if eyes_on:
-        can.append("look at the owner's screen when asked")
+        can.append("look at the owner's screen whenever someone shows you something or the room "
+                   "is reacting to something on screen you can't see yet (a game, a clip, a picture) "
+                   "- just look, like glancing over")
     can.append("leave notes for yourself")
     return ("Your abilities right now (use them when they help, never deny having them): "
             + ", ".join(can) + ". " + identity_truth(persona))

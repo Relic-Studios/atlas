@@ -39,8 +39,10 @@ SCREEN_TOOL = {
         "name": "look_at_screen",
         "description": (
             "Take a screenshot of the owner's computer screen and look at it. Call this when "
-            "someone asks you to look at, check, read, or react to what's on the screen "
-            "(an error, a game, a picture, a video, a website). Don't call it otherwise."
+            "someone says 'look!', shows you something, or asks you to check, read, or react to "
+            "what's on screen (an error, a game, a picture, a video, a website), or when people are "
+            "reacting to something on screen and you'd need to see it to join in. Don't call it "
+            "for things that were only said out loud."
         ),
         "parameters": {
             "type": "object",
