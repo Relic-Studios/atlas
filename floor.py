@@ -455,6 +455,13 @@ def steering_note(text: str, current: str | None, floor: ConversationFloor,
     """Per-turn guidance appended to the routing protocol (kept short)."""
     parts = []
     from tasks import CUE_RE
+    try:
+        from room_tools import cue_note as _room_cue
+        rc = _room_cue(text)
+    except Exception:  # noqa: BLE001
+        rc = ""
+    if rc:
+        return rc + ("\n" + VIBE if vibe else "")
     if CUE_RE.search(text or ""):
         # Our own "your search finished" cue: not a user line, no passivity HOLD.
         parts.append("DELIVERY: this turn is your own cue, not someone speaking. Tell the "

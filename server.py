@@ -1658,6 +1658,7 @@ class TranscriptionCallbacks:
                     user_request_content)),
                 ("name_learning", lambda: mgr.people.learn(speaker, user_request_content)),
                 ("remember", lambda: mgr.remember(user_request_content)),
+                ("room_vote", lambda: _passive_vote(speaker, user_request_content, mgr)),
             )
             for name, step in steps:
                 try:
@@ -2071,6 +2072,52 @@ def start_delivery(mgr, callbacks) -> Optional[int]:
     return t["id"]
 
 
+def _passive_vote(speaker, text: str, mgr) -> None:
+    """Count 'put me down for tacos' while a poll is open even if the floor keeps the
+    agent quiet on that line (Dice & polls plugin). One vote per person, so the
+    model's own cast_vote on the same line can't double-count."""
+    import room_tools
+    import plugins as _plugins
+    if not _plugins.is_enabled("dice_polls"):
+        return
+    pf = room_tools.intent(text)
+    if pf and pf[0] == "cast_vote":
+        who = mgr.people.name_of(speaker) or speaker or ""
+        logger.info("🗳️ %s", room_tools.cast_vote(pf[1]["choice"], who)[:80])
+
+
+TIMER_GAP_S = float(os.environ.get("ATLAS_TIMER_GAP_S", "1.0"))
+TIMER_OVERDUE_GAP_S = 0.5    # once a reminder is 20 s late, any short pause will do
+
+
+def start_timer(mgr, callbacks, bridge, now: float) -> Optional[int]:
+    """Announce a timer that went off, at the first real gap (room_tools / Timers plugin)."""
+    try:
+        import room_tools
+        import plugins as _plugins
+        if not _plugins.is_enabled("timers"):
+            return None
+        t = room_tools.due()
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"⏲️ timer check failed: {e}")
+        return None
+    if not t:
+        return None
+    gap = TIMER_OVERDUE_GAP_S if now - t["due"] > 20 else TIMER_GAP_S
+    if not delivery_ready(mgr, callbacks, bridge, now, gap):
+        return None
+    cue = room_tools.claim(t["id"])
+    if not cue:
+        return None
+    callbacks.reset_state()
+    callbacks.tts_to_client = True
+    callbacks.user_finished_turn = True
+    callbacks.user_history_committed = True
+    logger.info(f"🖥️⏲️ timer #{t['id']} went off ({t['message'][:50]!r}); announcing")
+    mgr.prepare_generation(cue)
+    return t["id"]
+
+
 async def _task_delivery(app: FastAPI, callbacks) -> None:
     """Bring finished background searches up when the call has an opening."""
     while True:
@@ -2079,6 +2126,8 @@ async def _task_delivery(app: FastAPI, callbacks) -> None:
             mgr = app.state.SpeechPipelineManager
             bridge = getattr(app.state, "CallBridge", None)
             now = time.time()
+            if start_timer(mgr, callbacks, bridge, now) is not None:
+                continue
             if delivery_ready(mgr, callbacks, bridge, now, RESUME_GAP_S) and start_resume(mgr, callbacks):
                 continue
             if delivery_ready(mgr, callbacks, bridge, now):

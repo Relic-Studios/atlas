@@ -87,8 +87,9 @@ BOARD_TOOLS = [
 ]
 import clock as _clock
 import self_tools as _self_tools
+import room_tools as _room
 AGENT_TOOLS = (list(WEB_SEARCH_TOOLS) + READ_PAGE_TOOLS + list(SCREEN_TOOLS) + BOARD_TOOLS
-               + [_clock.TOOL] + list(_self_tools.TOOLS))
+               + [_clock.TOOL] + list(_self_tools.TOOLS) + list(_room.TOOLS))
 SEARCH_WAIT_S = 9.0   # how long a reply waits for its search before handing it to the board
 
 
@@ -813,6 +814,8 @@ class SpeechPipelineManager:
         try:
             from tasks import CUE_RE
             b = self.board()
+            if _room.ROOM_CUE_RE.search(txt or ""):
+                return True
             mc = CUE_RE.search(txt or "")
             if mc:
                 b.attach_gen(int(mc[1]), gen_id)
@@ -874,6 +877,15 @@ class SpeechPipelineManager:
             if name == "clear_note":
                 ok = self.board().clear(int(args.get("id") or 0))
                 return "Cleared." if ok else "No such note."
+            if name in _room.NAMES:
+                who = ""
+                try:
+                    who = self.people.name_of(asker) or ""
+                except Exception:  # noqa: BLE001
+                    pass
+                out = _room.execute(name, args, asker, who, settings=_plugins.settings_of)
+                logger.info("🎲 %s(%s) -> %s", name, ", ".join(f"{k}={str(v)[:40]!r}" for k, v in args.items()), out[:120])
+                return out
             if name in _self_tools.NAMES:
                 out = _self_tools.execute(name, args, getattr(self, "current_persona", "") or "")
                 logger.info("🗣️🔎 %s %s(%s) -> %d chars", self.current_persona, name,
@@ -937,6 +949,35 @@ class SpeechPipelineManager:
             return pf
         except Exception as e:  # noqa: BLE001 - never block a turn
             logger.warning('code prefetch check failed: %s', e)
+            return None
+
+    def _room_prefetch(self, txt: str, is_cue: bool = False):
+        """(tool, args) for a clear dice/coin/poll/timer/weather request aimed at this agent.
+
+        Live sim 10-05: models invented rolls, flips and 'timer set' without calling
+        the tool, so clear requests run the real tool first. A vote counts from anyone
+        while a poll is open (that's the point of a room poll)."""
+        try:
+            if is_cue:
+                return None
+            pf = _room.intent(txt)
+            if pf is None:
+                return None
+            if pf[0] == "cast_vote":
+                return pf
+            from floor import names_agent
+            m = re.match(r'^\s*\[(S\d+)\]', txt or '')
+            speaker = m[1] if m else None
+            agent = getattr(self, 'agent', None)
+            names = tuple(getattr(getattr(agent, 'profile', None), 'names', ()) or ()) \
+                or (getattr(self, 'current_persona', '') or '',)
+            floor = getattr(self, 'floor', None)
+            partner = floor.active_partner() if floor is not None else None
+            if not (names_agent(txt, names) or speaker is None or (partner and speaker == partner)):
+                return None
+            return pf
+        except Exception as e:  # noqa: BLE001 - never block a turn
+            logger.warning('room prefetch check failed: %s', e)
             return None
 
     def _lookup_note(self) -> str:
@@ -1622,7 +1663,8 @@ class SpeechPipelineManager:
             # TODO: Update history management if needed
             # self.history.append({"role": "user", "content": txt}) # Example history update
             mem_ctx = self._memory_context(txt)
-            look = self._look_prefetch(txt, is_cue) or self._code_prefetch(txt, is_cue)
+            look = (self._look_prefetch(txt, is_cue) or self._code_prefetch(txt, is_cue)
+                    or self._room_prefetch(txt, is_cue))
             try:   # a switched-off plugin's tool is never prefetched (plugins.py)
                 import plugins as _plugins
                 if look and look[0] in _plugins.tool_names_disabled():

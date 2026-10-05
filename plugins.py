@@ -130,6 +130,18 @@ _LANG_OPTIONS = [{"value": c, "label": n} for c, n in (("en", "English"), ("es",
                 ("zh", "Chinese"), ("ja", "Japanese"), ("ko", "Korean"), ("nl", "Dutch"),
                 ("pl", "Polish"), ("tr", "Turkish"), ("ar", "Arabic"), ("hi", "Hindi"))]
 
+def _test_dice(settings: dict) -> dict:
+    import room_tools
+    return {"ok": True, "message": room_tools.roll_dice("d20").split(" Announce")[0]}
+
+
+def _test_weather(settings: dict) -> dict:
+    import room_tools
+    out = room_tools.check_weather(settings.get("home") or "London", settings.get("units", "auto"))
+    ok = out.startswith("Now in ")
+    return {"ok": ok, "message": out.split(" Today:")[0] if ok else out}
+
+
 BUILTIN: List[dict] = [
     {
         "id": "web_search", "name": "Web search", "icon": "search", "category": "Knowledge",
@@ -193,6 +205,36 @@ BUILTIN: List[dict] = [
              "options": list(_LANG_OPTIONS),
              "help": "Used for short or unclear lines and when this plugin is off."},
         ],
+    },
+    {
+        "id": "dice_polls", "name": "Dice, coins & polls", "icon": "dice", "category": "Games",
+        "summary": "Fair dice rolls, coin flips, random picks and quick room votes.",
+        "detail": "'Roll a d20', 'settle it with a coin flip', 'let's vote: pizza or tacos'. "
+                  "Results come from your PC's secure random source, never from the model. Nothing leaves this PC.",
+        "tools": ["roll_dice", "flip_coin", "pick_one", "start_poll", "cast_vote", "poll_results"],
+        "default": True, "settings": [], "test": _test_dice,
+    },
+    {
+        "id": "timers", "name": "Timers & reminders", "icon": "timer", "category": "Productivity",
+        "summary": "'Remind us in 10 minutes to start the raid.' The agent speaks up when it goes off.",
+        "detail": "Timers are shared by all agents and survive a restart. A reminder waits for a gap "
+                  "in the talk (at most a few seconds) before it's announced. Nothing leaves this PC.",
+        "tools": ["set_timer", "list_timers", "cancel_timer"], "default": True, "settings": [],
+    },
+    {
+        "id": "weather", "name": "Weather", "icon": "cloud", "category": "Knowledge",
+        "summary": "Live weather and a 3-day forecast for any place.",
+        "detail": "Uses Open-Meteo: free, no account, no key. Only the place name is sent to open-meteo.com.",
+        "tools": ["check_weather"], "default": True,
+        "settings": [
+            {"key": "home", "label": "Default location", "type": "text", "default": "",
+             "placeholder": "e.g. Seattle", "help": "Used when someone just asks 'what's the weather?'."},
+            {"key": "units", "label": "Units", "type": "select", "default": "auto",
+             "options": [{"value": "auto", "label": "Automatic (by country)"},
+                         {"value": "metric", "label": "Metric (°C, km/h)"},
+                         {"value": "imperial", "label": "Imperial (°F, mph)"}]},
+        ],
+        "test": _test_weather,
     },
     {
         "id": "notes", "name": "Notes & follow-ups", "icon": "note", "category": "Memory",

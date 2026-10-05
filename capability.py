@@ -126,6 +126,12 @@ def abilities_note(eyes_on: bool, search_on: bool = True, persona: str = "", off
         can.append("check the real date and time")
     if "notes" not in off:
         can.append("leave notes for yourself")
+    if "dice_polls" not in off:
+        can.append("roll dice, flip coins, pick at random and run quick room polls (always with the tools, never invented)")
+    if "timers" not in off:
+        can.append("set timers and reminders for the room that go off on their own")
+    if "weather" not in off:
+        can.append("check live weather anywhere")
     if "self_check" not in off:
         can.append("log predictions that could turn out wrong and check your track record later")
         can.append("read (not change) the actual source code that runs you, to see where your "
