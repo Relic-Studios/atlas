@@ -21,7 +21,7 @@ def load_method(filename, classname, method, bindings=None):
 
 
 class RoutingTests(unittest.TestCase):
-    def test_followup_reaches_hemmingway_even_if_old_regex_holds(self):
+    def test_followup_reaches_model_even_if_old_regex_holds(self):
         prepared = []
         mgr = SimpleNamespace(should_speak=lambda *a, **k: False, prepare_generation=prepared.append, dynamics=SimpleNamespace(agent_names=('ivy',)), floor=ConversationFloor(), running_generation=None)
         callback = SimpleNamespace(_live_speaker=lambda: None, _text_echo=lambda t: False, _monologue_hold=lambda t, s: False, app=SimpleNamespace(state=SimpleNamespace(SpeechPipelineManager=mgr, CallBridge=None)))
