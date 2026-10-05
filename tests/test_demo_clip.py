@@ -115,3 +115,13 @@ class Render(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LateAgentText(__import__("unittest").TestCase):
+    """Reel 10-05: said_agent logged 1.5s after agent_start; the caption went to the next reply."""
+    def test_text_logged_during_reply(self):
+        ev = [dict(kind="agent_start", t=28.76), dict(kind="said_agent", t=30.3, text="Co-op."),
+              dict(kind="agent_end", t=33.0), dict(kind="agent_start", t=38.86),
+              dict(kind="said_agent", t=40.96, text="Ticket to Ride."), dict(kind="agent_end", t=44.34)]
+        turns, _ = C.load_turns(ev)
+        self.assertEqual([t.text for t in turns], ["Co-op.", "Ticket to Ride."])

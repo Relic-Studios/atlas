@@ -72,11 +72,15 @@ def load_turns(events: list[dict]) -> tuple[list[Turn], set]:
             agent_t0 = t
         elif k == "agent_end" and agent_t0 is not None:
             text, who = "", "agent"
-            for s in reversed(said):           # latest unused text finalised before speech
-                if not s[3] and s[0] <= agent_t0 + 1.0:
-                    s[3] = True
-                    text, who = s[1], s[2]
-                    break
+            # Text is finalised while the reply streams, so said_agent can land up to a
+            # couple of seconds AFTER agent_start (take 11: +1.5s). Prefer the earliest
+            # unused text logged during this reply; fall back to the latest one before it.
+            during = [s for s in said if not s[3] and agent_t0 - 0.5 <= s[0] <= t]
+            before = [s for s in said if not s[3] and s[0] < agent_t0 - 0.5]
+            pick = during[0] if during else (before[-1] if before else None)
+            if pick is not None:
+                pick[3] = True
+                text, who = pick[1], pick[2]
             turns.append(Turn(who, text, agent_t0, t, agent=True))
             agent_t0 = None
         elif k == "reply_timeout":

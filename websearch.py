@@ -1,6 +1,8 @@
 """Web search backend for the agent.
 
-Two backends, picked automatically:
+Provider chain (first with results wins): Exa -> Brave (each only if a key is
+present: ATLAS_EXA_KEY / ATLAS_BRAVE_KEY, or private|user/<name>.key) -> then the
+two keyless backends below, picked automatically:
 - SearXNG (self-hosted metasearch, zero per-call fee, nothing leaves the box) —
   preferred when reachable, since it keeps queries off third-party services.
 - DuckDuckGo via `ddgs` (already installed, no API key) — fallback so the agent
@@ -126,6 +128,108 @@ def freshen_query(query: str, user_text: str = "", today=None) -> str:
     return out or (query or "")
 
 
+# ---------------------------------------------------------------- keyed providers
+# Owner 10-05: "something PERFECT". Chain = Exa -> Brave -> SearXNG -> ddgs; the first
+# that returns results wins. Keys are never bundled: env var, or a one-line file in
+# private/ (dev) or user/ (public installs). No key -> that provider is skipped.
+import json as _json
+import os as _os
+import time as _time
+import urllib.parse as _uparse
+import urllib.request as _ureq
+from pathlib import Path as _Path
+
+_HERE = _Path(__file__).resolve().parent
+PROVIDER_TIMEOUT_S = 6.0
+
+
+def _key(name: str) -> str:
+    env = _os.environ.get(f"ATLAS_{name.upper()}_KEY", "").strip()
+    if env:
+        return env
+    for d in ("private", "user"):
+        f = _HERE / d / f"{name}.key"
+        try:
+            k = f.read_text(encoding="utf-8-sig").strip()
+            if k:
+                return k
+        except OSError:
+            pass
+    return ""
+
+
+_TAGS = re.compile(r"<[^>]+>")
+
+
+def _search_exa(key: str, query: str, max_results: int) -> List[Dict[str, str]]:
+    body = {"query": query, "numResults": max_results, "type": "fast",
+            "contents": {"highlights": {"numSentences": 3, "highlightsPerUrl": 1}}}
+    req = _ureq.Request("https://api.exa.ai/search", data=_json.dumps(body).encode(),
+                        headers={"x-api-key": key, "Content-Type": "application/json"})
+    d = _json.load(_ureq.urlopen(req, timeout=PROVIDER_TIMEOUT_S))
+    out = []
+    for r in d.get("results", [])[:max_results]:
+        hl = " ".join(r.get("highlights") or []) or (r.get("text") or "")[:400]
+        date = (r.get("publishedDate") or "")[:10]
+        out.append({"title": r.get("title") or "", "url": r.get("url") or "",
+                    "snippet": (f"[{date}] " if date else "") + " ".join(hl.split())[:500]})
+    return out
+
+
+def _search_brave(key: str, query: str, max_results: int) -> List[Dict[str, str]]:
+    url = "https://api.search.brave.com/res/v1/web/search?" + _uparse.urlencode(
+        {"q": query, "count": max_results})
+    req = _ureq.Request(url, headers={"X-Subscription-Token": key, "Accept": "application/json"})
+    d = _json.load(_ureq.urlopen(req, timeout=PROVIDER_TIMEOUT_S))
+    out = []
+    for r in d.get("web", {}).get("results", [])[:max_results]:
+        age = r.get("age") or ""
+        out.append({"title": _TAGS.sub("", r.get("title") or ""), "url": r.get("url") or "",
+                    "snippet": (f"[{age}] " if age else "") + _TAGS.sub("", r.get("description") or "")})
+    return out
+
+
+def providers() -> List[str]:
+    """Which providers would be tried, in order (for status/telemetry)."""
+    order = [n for n in ("exa", "brave") if _key(n)]
+    if _searxng_available():
+        order.append("searxng")
+    order.append("ddgs")
+    return order
+
+
+def _run_chain(query: str, max_results: int):
+    tried = []
+    for name in ("exa", "brave"):
+        k = _key(name)
+        if not k:
+            continue
+        t = _time.time()
+        try:
+            fn = _search_exa if name == "exa" else _search_brave
+            res = fn(k, query, max_results)
+            ms = (_time.time() - t) * 1000
+            if res:
+                logger.info("web search %r via %s: %d results in %.0f ms", query, name, len(res), ms)
+                return res, name
+            tried.append(f"{name}:empty")
+        except Exception as e:  # noqa: BLE001  network/quota/auth -> next provider
+            code = getattr(e, "code", "")
+            tried.append(f"{name}:{code or type(e).__name__}")
+            logger.warning("web search via %s failed (%s), falling back", name, code or e)
+    base = _searxng_available()
+    if base:
+        try:
+            res = _search_searxng(base, query, max_results)
+            if res:
+                return res, "searxng"
+        except Exception as e:  # noqa: BLE001
+            tried.append(f"searxng:{type(e).__name__}")
+    if tried:
+        logger.info("web search %r: keyed providers unavailable (%s), using ddgs", query, ", ".join(tried))
+    return _search_ddgs(query, max_results), "ddgs"
+
+
 def search(query: str, max_results: int = 4) -> Dict:
     """Run a web search and return a normalized result.
 
@@ -136,14 +240,8 @@ def search(query: str, max_results: int = 4) -> Dict:
     if not query:
         return {"ok": False, "query": query, "results": [], "text": ""}
 
-    base = _searxng_available()
     try:
-        if base:
-            results = _search_searxng(base, query, max_results)
-            backend = "searxng"
-        else:
-            results = _search_ddgs(query, max_results)
-            backend = "ddgs"
+        results, backend = _run_chain(query, max_results)
     except Exception as e:  # noqa: BLE001
         logger.warning("web search failed: %s", e)
         return {"ok": False, "query": query, "results": [], "text": f"search error: {e}"}
