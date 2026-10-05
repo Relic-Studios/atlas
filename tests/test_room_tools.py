@@ -161,7 +161,10 @@ class Wiring(Base):
         self.assertIn("REMINDER", note)
 
     def test_server_start_timer(self):
-        import server
+        try:
+            import server
+        except ImportError as e:   # light CI env has no speech stack (transformers, torch)
+            self.skipTest(f"server.py needs the full install: {e}")
         RT.set_timer(0.5, "stretch", "S1", clock=lambda: __import__("time").time() - 60)
         now = __import__("time").time() + 5
         started = []
