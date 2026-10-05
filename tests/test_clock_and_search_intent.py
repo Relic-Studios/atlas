@@ -7,14 +7,33 @@ import capability
 import clock
 
 
+def _has_zone(name):
+    try:
+        import zoneinfo
+        zoneinfo.ZoneInfo(name)
+        return True
+    except Exception:
+        return False
+
+
+def _has_pipeline():
+    try:
+        import speech_pipeline_manager  # noqa: F401  (needs the full install)
+        return True
+    except Exception:
+        return False
+
+
 class Clock(unittest.TestCase):
     NOW = dt.datetime(2026, 10, 5, 8, 24, tzinfo=dt.timezone(dt.timedelta(hours=-7)))
 
     def test_now_note_has_real_date(self):
         n = clock.now_note(self.NOW)
-        self.assertIn("Monday, 5 October 2026", n)
-        self.assertIn("8:24 AM", n)
+        # now_note shows the machine's local time, so compare against NOW in this
+        # machine's zone (CI runners are UTC; the dev box is Pacific).
+        self.assertIn(clock._fmt(self.NOW.astimezone()), n)
 
+    @unittest.skipUnless(_has_zone("Asia/Tokyo"), "no IANA time zone data (pip install tzdata)")
     def test_check_other_zone(self):
         self.assertIn("Tuesday, 6 October 2026", clock.check("Asia/Tokyo", self.NOW))
 
@@ -27,6 +46,7 @@ class Clock(unittest.TestCase):
             self.assertIn("Right now it is", note)
             self.assertIn("check the real date", note)
 
+    @unittest.skipUnless(_has_pipeline(), "needs the full install")
     def test_tool_registered_and_dispatched(self):
         import speech_pipeline_manager as S
         names = [t["function"]["name"] for t in S.AGENT_TOOLS]

@@ -6,4 +6,5 @@ fastapi
 uvicorn
 httpx
 requests
+tzdata
 pydantic
