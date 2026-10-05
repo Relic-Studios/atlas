@@ -539,8 +539,9 @@ _TAIL_VOCATIVE_RE = re.compile(r",\s*(S\d+|[A-Z][a-z]{1,15})\s*[?.!]*\s*$")
 # Comma-less lead vocative as Whisper often writes it: "Maya did you bring the
 # charger". Requires an aux/"you" right after the name AND a 2nd-person word.
 _LEAD_BARE_VOCATIVE_RE = re.compile(
-    r"^\s*(S\d+|[A-Z][a-z]{1,15})\s+(?:did|do|can|could|would|will|are|were|have|you|u)\b"
-    r"(?=.*\b(?:you|your|u|ya)\b)")
+    r"^\s*(S\d+|[A-Z][a-z]{1,15})\s+(?:(?:you|u|ya)\b|"
+    r"(?:did|do|can|could|would|will|are|were|have)\b(?=.*\b(?:you|your|u|ya)\b))")
+# ("Dana you still have my bottle?" has one 'you', and it IS the cue: first_run sim B 10-04.)
 
 
 def _is_agent_name(word: str, names: tuple[str, ...]) -> bool:

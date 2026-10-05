@@ -380,3 +380,67 @@ def _filter_response(source, decision):
         close = getattr(source, 'close', None)
         if close:
             close()
+
+
+# --------------------------------------------------------------------------
+# Named-HOLD retry (first_run sim 10-04): qwen3 8B answered "[HOLD]" to
+# "Wren, you joining us?" in 2/2 runs. A line that opens on (or ends with) the
+# agent's own name is a turn handed to it; one regeneration with a short note
+# fixes it without touching lines that merely mention the name.
+
+NAMED_NUDGE = ("(They just said your name: this line is to you. "
+               "Reply to {who} with [SPEAK to={who}] and a short answer.)")
+
+
+def directly_named(text: str, names: tuple) -> bool:
+    """Agent name in vocative position: first three words, or the last word."""
+    try:
+        from conversation_dynamics import _is_agent_name, reported_invocation
+        from echo_reply import strip_label
+    except Exception:  # noqa: BLE001
+        return False
+    body = strip_label(text or "")
+    words = re.findall(r"[A-Za-z']+", body)
+    if not words or not names:
+        return False
+    if reported_invocation(text, names):
+        return False
+    lead = any(_is_agent_name(w, names) for w in words[:3])
+    tail = _is_agent_name(words[-1], names) and len(words) > 1
+    return lead or tail
+
+
+def retry_named_hold(first, again, enabled: bool, max_header: int = 48):
+    """Pass raw LLM chunks through; if the header is [HOLD] and the line named the
+    agent (enabled), drop it and stream `again()` instead. Header-only buffering."""
+    if not enabled:
+        yield from first
+        return
+    buf = ''
+    it = iter(first)
+    for chunk in it:
+        buf += chunk
+        head = buf.lstrip()
+        if not head:
+            continue
+        if head.startswith('[') and ']' not in head and len(head) < max_header:
+            continue
+        if re.match(r"\[\s*HOLD\s*\]", head, re.I):
+            close = getattr(it, 'close', None)
+            if close:
+                try:
+                    close()
+                except Exception:  # noqa: BLE001
+                    pass
+            logger.info("named HOLD -> one retry with direct-address note")
+            yield from again()
+            return
+        yield buf
+        yield from it
+        return
+    if buf:
+        if re.match(r"\s*\[\s*HOLD\s*\]", buf, re.I):
+            logger.info("named HOLD -> one retry with direct-address note")
+            yield from again()
+            return
+        yield buf

@@ -275,6 +275,15 @@ class ConversationFloor:
             return f"addressed to {m.group(1)}"
         if not speaker or speaker in ("user", "self") or names_agent(text, names):
             return None
+        # Humans turned to each other AFTER the agent last spoke ("Sam did you bring
+        # the controller" -> "yeah it's in my bag"): their exchange is theirs even if
+        # the agent talked a moment ago, or this speaker is its partner (first_run sim 10-04: 14B narrated it).
+        if (self.side and now - self.side[2] <= self.SIDE_TTL_S
+                and self.side[2] > self.last_agent_at):
+            asker, target, _ = self.side
+            if speaker != asker and (target is None or speaker == target):
+                self.side = (asker, speaker, now)
+                return "side exchange"
         if speaker == self.active_partner():
             return None
         if now - self.last_agent_at <= self.AGENT_RECENT_S:

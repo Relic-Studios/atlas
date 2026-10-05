@@ -72,7 +72,7 @@ _STRONG = [
 ]
 # "I'm Jake" only when it is clearly an introduction.
 _IM_GREETED = re.compile(r"^\W*(?:hey|hi|hello|yo|sup)\W+(?:(?:guys|everyone|y'all|bro)\W+)?i'?m\s+" + _NAME_TOKEN, re.I)
-_IM_BARE = re.compile(r"^\W*(?:(?:no|nah|yeah|yo|actually|oh)\W+)?i'?m\s+" + _NAME_TOKEN + r"(?:\W+(?:by\s+the\s+way|btw|here|nice\s+to\s+meet\s+(?:you|y\'all|everyone)|pleasure|what\'s\s+up))*\W*$", re.I)
+_IM_BARE = re.compile(r"^\W*(?:(?:no|nah|yeah|yo|actually|oh|and|also|so|me)\W+){0,2}i'?m\s+" + _NAME_TOKEN + r"(?:\W+(?:by\s+the\s+way|btw|here|nice\s+to\s+meet\s+(?:you|y\'all|everyone)|pleasure|what\'s\s+up))*\W*$", re.I)
 _ANSWER_LEAD = re.compile(r"^\W*(?:(?:uh|um|oh|yeah|yo|bro|well|so|ok|okay)\W+)*(?:it's|its|it\s+is|i'?m|i\s+am|my\s+name(?:'s|\s+is)|name's|call\s+me|this\s+is)?\s*", re.I)
 # Closing-clause intro: 'Hey Wren, you there? It's Sam.' (demo 10-04). Capitalized name only.
 _CLAUSE_INTRO = re.compile(r"(?:^|[.,!?;]\s*)(?:this\s+is|it's|it\s+is)\s+" + _NAME_TOKEN + r"(?:\s+here)?\W*$", re.I)
@@ -239,6 +239,12 @@ class NameBook:
             v = re.match(r"^\W*((?:hey|hi|hello|yo|sup)\W+)?([A-Za-z]+),\s*", first, re.I)
             if v and v[2].lower() in self.agent_names:
                 first = (v[1] or "") + first[v.end():]
+            # "I'm Riley, hi Wren" / "and I'm Riley. hi Wren" (first_run sim 10-04): a trailing
+            # greeting to the agent is not part of the intro.
+            if len(re.split(r"(?<=[.!?])\s+", body)) <= 2:
+                g = re.search(r"[,.!]?\s*(?:hi|hey|hello|yo)\s+([A-Za-z]+)\W*$", body, re.I)
+                if g and g[1].lower() in self.agent_names:
+                    first = re.split(r"(?<=[.!?])\s+", body[:g.start()].strip(), maxsplit=1)[0]
             core = _INTRO_TAIL.sub("", first).split()  # "I'm Dana, nice to meet you" is still 2 words of intro
             m = (_IM_GREETED.search(body) or _IM_GREETED.search(first)
                  or ((_IM_BARE.search(first) if asked or len(core) <= 3 else None)))

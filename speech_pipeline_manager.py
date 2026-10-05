@@ -1503,16 +1503,37 @@ class SpeechPipelineManager:
                 room = (room + chr(10) + bait.note).strip()
             # TODO: Update history management if needed
             # self.history.append({"role": "user", "content": txt}) # Example history update
-            gen.llm_generator = filter_response(
-                self.llm.generate(
-                    text=self._trim_transcript(txt),
-                    history=history,
+            mem_ctx = self._memory_context(txt)
+            look = self._look_prefetch(txt, is_cue)
+
+            def _gen(text_in, _h=history, _r=room, _m=mem_ctx, _l=look):
+                return self.llm.generate(
+                    text=text_in,
+                    history=_h,
                     use_system_prompt=True,
                     participation=True,
-                    memory_context=self._memory_context(txt),
-                    room_context=room,
-                    prefetch_tool=self._look_prefetch(txt, is_cue),
-                ),
+                    memory_context=_m,
+                    room_context=_r,
+                    prefetch_tool=_l,
+                )
+            trimmed = self._trim_transcript(txt)
+            try:
+                from response_decision import directly_named, retry_named_hold, NAMED_NUDGE
+                names = tuple(getattr(getattr(self.agent, "profile", None), "names", ()) or ())
+                named = bool(names) and not is_cue and directly_named(txt, names)
+                who = gen.decision.expected_target or "them"
+            except Exception as e:  # noqa: BLE001
+                logger.warning("named-hold setup failed: %s", e)
+                named, who = False, "them"
+                retry_named_hold = None
+            raw_stream = _gen(trimmed)
+            if retry_named_hold is not None:
+                raw_stream = retry_named_hold(
+                    raw_stream,
+                    lambda: _gen(trimmed + chr(10) + NAMED_NUDGE.format(who=who)),
+                    named)
+            gen.llm_generator = filter_response(
+                raw_stream,
                 gen.decision,
             )
             logger.info(f"🗣️🧠✔️ [Gen {new_gen_id}] LLM generator created. Setting generator ready event.")
