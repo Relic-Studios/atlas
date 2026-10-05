@@ -1541,6 +1541,18 @@ class TranscriptionCallbacks:
             logger.warning(f"🖥️⚠️ diarization skipped: {e}")
             return None
 
+    def _speaker_name(self, speaker):
+        """Learned name for the UI label (never show raw S-tags to people); includes
+        a name introduced in this very turn ("Hey Wren, it's Sam")."""
+        if not speaker or speaker in ("self", "user", "you"):
+            return None
+        try:
+            book = self.app.state.SpeechPipelineManager.people
+            text = self.final_transcription or self.partial_transcription or ""
+            return book.name_of(speaker) or book.peek_intro(text)
+        except Exception:  # noqa: BLE001
+            return None
+
     def on_before_final(self, audio: bytes, txt: str):
         """
         Callback invoked just before the final STT result for a user turn is confirmed.
@@ -1593,6 +1605,7 @@ class TranscriptionCallbacks:
             "type": "final_user_request",
             "content": user_request_content,
             "speakerId": speaker if speaker and speaker != "self" else None,
+            "speakerName": self._speaker_name(speaker),
         })
 
         # Access global manager state

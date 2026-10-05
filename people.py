@@ -74,6 +74,8 @@ _STRONG = [
 _IM_GREETED = re.compile(r"^\W*(?:hey|hi|hello|yo|sup)\W+(?:(?:guys|everyone|y'all|bro)\W+)?i'?m\s+" + _NAME_TOKEN, re.I)
 _IM_BARE = re.compile(r"^\W*(?:(?:no|nah|yeah|yo|actually|oh)\W+)?i'?m\s+" + _NAME_TOKEN + r"(?:\W+(?:by\s+the\s+way|btw|here|nice\s+to\s+meet\s+(?:you|y\'all|everyone)|pleasure|what\'s\s+up))*\W*$", re.I)
 _ANSWER_LEAD = re.compile(r"^\W*(?:(?:uh|um|oh|yeah|yo|bro|well|so|ok|okay)\W+)*(?:it's|its|it\s+is|i'?m|i\s+am|my\s+name(?:'s|\s+is)|name's|call\s+me|this\s+is)?\s*", re.I)
+# Closing-clause intro: 'Hey Wren, you there? It's Sam.' (demo 10-04). Capitalized name only.
+_CLAUSE_INTRO = re.compile(r"(?:^|[.,!?;]\s*)(?:this\s+is|it's|it\s+is)\s+" + _NAME_TOKEN + r"(?:\s+here)?\W*$", re.I)
 _INTRO_TAIL = re.compile(r"(?:\W+(?:by\s+the\s+way|btw|here|nice\s+to\s+meet\s+(?:you|y'all|everyone)|pleasure|what's\s+up))+\W*$", re.I)
 _REFUSE = re.compile(r"\b(?:not\s+(?:telling|gonna\s+tell|saying)|none\s+of\s+your|why\s+do\s+you\s+(?:wanna|want\s+to)\s+know|guess|no\s+one|nobody|doesn'?t\s+matter)\b", re.I)
 _FORGET = re.compile(r"\b(?:don'?t|do\s+not|stop)\s+call(?:ing)?\s+me\s+([A-Za-z'\-]+)", re.I)
@@ -224,6 +226,11 @@ class NameBook:
                 name = _clean_name(m[1], need_cap=(i == 2)) if m else None
                 if name and name.lower() not in self.agent_names:
                     return self._assign(p, name, "intro")
+            # only in a greeting turn, so 'what are we playing? it's Minecraft.' never names anyone
+            m = _CLAUSE_INTRO.search(body) if re.match(r"^\W*(?:hey|hi|hello|yo|sup)\b", body, re.I) else None
+            name = _clean_name(m[1], need_cap=True) if m else None
+            if name and name.lower() not in self.agent_names:
+                return self._assign(p, name, "intro")
             words = body.split()
             asked = p.asked_at is not None and now - p.asked_at <= self.answer_window_s
             # Intros usually lead the turn: "I'm Sam. how's it going", "hey Max, I'm Sam".
@@ -252,6 +259,15 @@ class NameBook:
                         return self._assign(p, name, "answer")
             if p.probable and asked and re.match(r"^\W*(?:yeah|yes|yep|yup|that's\s+me|correct|mhm)\b", body, re.I):
                 return self._assign(p, p.probable, "confirmed")
+            return None
+
+    def peek_intro(self, text: str) -> str | None:
+        """Name a turn introduces, without changing this book (for UI labels)."""
+        scratch = NameBook()
+        scratch.agent_names = set(self.agent_names)
+        try:
+            return scratch.learn("S0", text)
+        except Exception:  # noqa: BLE001
             return None
 
     def _note_vocative(self, body: str) -> None:

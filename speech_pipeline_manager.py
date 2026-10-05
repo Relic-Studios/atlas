@@ -1449,24 +1449,27 @@ class SpeechPipelineManager:
         self.abort_block_event.set() # Ensure block is released if check_abort didn't run/clear it
 
         # --- Create new generation object ---
-        self.running_generation = RunningGeneration(id=new_gen_id)
-        self.running_generation.text = txt
+        # Local ref: a barge-in abort can set self.running_generation = None while we
+        # build this one (demo 10-04: AttributeError 'NoneType' .decision -> pipeline error).
+        gen = RunningGeneration(id=new_gen_id)
+        self.running_generation = gen
+        gen.text = txt
         from response_decision import expected_target_for
-        self.running_generation.decision.expected_target = expected_target_for(txt)
+        gen.decision.expected_target = expected_target_for(txt)
         try:
             from floor import recent_fillers, recent_templates, recent_content
-            self.running_generation.decision.recent_fillers = (
+            gen.decision.recent_fillers = (
                 recent_fillers(self.history) | recent_templates(self.history)
                 | recent_content(self.history))
         except Exception as e:  # noqa: BLE001
             logger.warning("recent_fillers failed: %s", e)
-        self.running_generation.decision.namebook = getattr(self, "people", None)
-        self.running_generation.decision.persona = getattr(self, "current_persona", "")
+        gen.decision.namebook = getattr(self, "people", None)
+        gen.decision.persona = getattr(self, "current_persona", "")
         try:
             from echo_reply import strip_label
             prev = next((m.get("content", "") for m in reversed(self.history)
                          if m.get("role") == "user" and m.get("content") != txt), "")
-            self.running_generation.decision.heard = (strip_label(prev) + " " + strip_label(txt)).strip()
+            gen.decision.heard = (strip_label(prev) + " " + strip_label(txt)).strip()
         except Exception as e:  # noqa: BLE001
             logger.warning("parrot heard failed: %s", e)
         is_cue = self._attach_board(txt, new_gen_id)
@@ -1476,7 +1479,7 @@ class SpeechPipelineManager:
             bait = None if is_cue else self._check_bait(txt)
             if bait is not None and bait.action == 'hold':
                 logger.info(f"🗣️🪤 [Gen {new_gen_id}] Loop bait continued after roast ({bait.kind}: {bait.line[:50]!r}) -> HOLD, no LLM call")
-                self.running_generation.llm_generator = filter_response(iter(['[HOLD]']), self.running_generation.decision)
+                gen.llm_generator = filter_response(iter(['[HOLD]']), gen.decision)
                 self.generator_ready_event.set()
                 return
             history, room = self._llm_context(txt)
@@ -1485,7 +1488,7 @@ class SpeechPipelineManager:
                 room = (room + chr(10) + bait.note).strip()
             # TODO: Update history management if needed
             # self.history.append({"role": "user", "content": txt}) # Example history update
-            self.running_generation.llm_generator = filter_response(
+            gen.llm_generator = filter_response(
                 self.llm.generate(
                     text=self._trim_transcript(txt),
                     history=history,
@@ -1495,13 +1498,14 @@ class SpeechPipelineManager:
                     room_context=room,
                     prefetch_tool=self._look_prefetch(txt, is_cue),
                 ),
-                self.running_generation.decision,
+                gen.decision,
             )
             logger.info(f"🗣️🧠✔️ [Gen {new_gen_id}] LLM generator created. Setting generator ready event.")
             self.generator_ready_event.set() # Signal LLM worker
         except Exception as e:
             logger.exception(f"🗣️🧠💥 [Gen {new_gen_id}] Failed to create LLM generator: {e}")
-            self.running_generation = None # Clean up if generator creation failed
+            if self.running_generation is gen:
+                self.running_generation = None # Clean up if generator creation failed
 
 
     def process_abort_generation(self):

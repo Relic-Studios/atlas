@@ -1,14 +1,19 @@
 // Record the real ATLAS UI during a demo call: offscreen Electron, 30 fps paint
 // frames saved as JPEG with wall-clock timestamps (ms) in the file name.
-//   electron tools/demo/capture.js <url> <frames_dir> <done_file> [width] [height]
+//   CAP_URL=<url> CAP_DIR=<frames_dir> CAP_DONE=<done_file> electron tools/demo/capture.js
 // Stops when <done_file> exists (written by demo_call.py) or after 15 minutes.
 const { app, BrowserWindow } = require('electron');
 const fs = require('fs');
 const path = require('path');
 
-const [url, dir, doneFile, W = '1600', H = '900'] = process.argv.slice(2);
+// Settings come from the environment (CAP_URL, CAP_DIR, CAP_DONE, CAP_W, CAP_H):
+// Electron 41 exits 127 when a URL argument is combined with other arguments.
+const E = process.env;
+const url = E.CAP_URL, dir = E.CAP_DIR, doneFile = E.CAP_DONE, W = E.CAP_W || '1600', H = E.CAP_H || '900';
+if (!url || !dir || !doneFile) { console.error('set CAP_URL, CAP_DIR, CAP_DONE'); process.exit(2); }
 fs.mkdirSync(dir, { recursive: true });
 app.disableHardwareAcceleration();
+app.on('window-all-closed', () => {});
 
 app.whenReady().then(() => {
   const w = new BrowserWindow({

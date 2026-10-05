@@ -409,7 +409,8 @@ function onWs(m) {
   switch (m.type) {
     case 'partial_user_request': S.typingUser = c; S.typingUserSpk = m.speakerId || S.typingUserSpk; renderChat(); break;
     case 'final_user_request':
-      if (c.trim()) S.chat.push({ role: 'user', content: c, label: (m.speakerId && m.speakerId !== 'you') ? m.speakerId : 'YOU', time: hhmm() });
+      if (c.trim()) S.chat.push({ role: 'user', content: c, label: spkLabel(m), time: hhmm() });
+      if (guideEl && c.trim()) guideEl.classList.add('hidden'); // a live conversation needs no 'next step' card
       S.typingUser = ''; S.typingUserSpk = ''; renderChat(); break;
     case 'partial_assistant_answer': S.typingAssistant = c; renderChat(); break;
     case 'final_assistant_answer':
@@ -420,7 +421,7 @@ function onWs(m) {
     case 'chat_backlog': {
       const seen = new Set(S.chat.map((x) => x.role + '|' + x.content));
       const back = (m.items || []).map((x) => x.type === 'final_user_request'
-        ? { role: 'user', content: x.content || '', label: (x.speakerId && x.speakerId !== 'you') ? x.speakerId : 'YOU', time: hhmm(x.t) }
+        ? { role: 'user', content: x.content || '', label: spkLabel(x), time: hhmm(x.t) }
         : { role: 'assistant', content: x.content || '', persona: x.personaId || S.persona, time: hhmm(x.t) })
         .filter((x) => x.content.trim() && !seen.has(x.role + '|' + x.content));
       if (back.length) S.chat = back.concat(S.chat);
@@ -884,6 +885,16 @@ function renderOwner(o) {
   });
 })();
 
+// Speaker label: learned name, else 'Guest N' -- raw diarizer tags (S1) never shown.
+const _spkNames = {};
+function spkLabel(m) {
+  const id = m.speakerId;
+  if (!id || id === 'you') return 'YOU';
+  if (m.speakerName) _spkNames[id] = m.speakerName;
+  if (_spkNames[id]) return _spkNames[id].toUpperCase();
+  const n = /^S(\d+)$/.exec(id);
+  return n ? 'GUEST ' + n[1] : id;
+}
 // ---- guide strip: Set up -> Make an agent -> Join a call -> Review (journey.py)
 const guideEl = document.getElementById('guide');
 async function refreshGuide(action) {

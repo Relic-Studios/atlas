@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://relic-studios.github.io/atlas/sitemap.xml
