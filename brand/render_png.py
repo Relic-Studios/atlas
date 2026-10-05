@@ -1,6 +1,6 @@
 """Render the ATLAS brand set to PNG with PIL (no browser, no AI).
 
-Shapes mirror mark.svg / thomas_avatar.svg; drawn at 4x and downsampled.
+Shapes mirror mark.svg; drawn at 4x and downsampled.
 Text uses Inter (SIL OFL). Usage: python render_png.py
 """
 from pathlib import Path
