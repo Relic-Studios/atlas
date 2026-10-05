@@ -113,6 +113,13 @@ class ReadOwnCode(unittest.TestCase):
         finally:
             outside.unlink()
 
+    def test_dotdot_refused(self):
+        self.assertIn("Can't read", self.read(path="../secret.py"))
+
+    def test_absolute_path_inside_repo_reads(self):
+        out = self.read(path=str(Path(self.repo) / "floor.py"))
+        self.assertNotIn("Can't read", out)
+
 
 class Wiring(unittest.TestCase):
     def test_tools_offered_and_dispatched(self):

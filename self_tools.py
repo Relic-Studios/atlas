@@ -364,7 +364,17 @@ _ASK_WORDS = {"look", "code", "source", "your", "read", "check", "open", "tell",
 
 def read_own_code(path="", query="", start_line=1, agent="", repo: Path = None) -> str:
     repo = Path(repo or REPO).resolve()
-    path = str(path or "").strip().replace("\\", "/").lstrip("/")
+    path = str(path or "").strip().replace("\\", "/")
+    # CI 10-05 (Linux): '/tmp/x.py' had its slash stripped and fell through to a
+    # search. Absolute paths are only accepted when they point inside the repo;
+    # anything else (or any '..') is refused outright.
+    if path.startswith("/") or (len(path) > 1 and path[1] == ":"):
+        try:
+            path = Path(path).resolve().relative_to(repo).as_posix()
+        except (ValueError, OSError):
+            return f"Can't read {path!r}: outside ATLAS's own code."
+    if ".." in path.split("/"):
+        return f"Can't read {path!r}: outside ATLAS's own code."
     query = str(query or "").strip()[:80]
     if not path and not query:
         return _FRAME + _starter(repo, agent)

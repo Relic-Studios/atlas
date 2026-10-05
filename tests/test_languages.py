@@ -73,6 +73,9 @@ class RetryWrapper(unittest.TestCase):
         return rec
 
     def setUp(self):
+        import importlib.util
+        if importlib.util.find_spec("transformers") is None:
+            self.skipTest("transcribe.py needs transformers (not in the light CI deps)")
         self._room = L.ROOM
         L.ROOM = L.Room(fallback="en")
         os.environ["ATLAS_STT_LANGUAGE"] = "auto"

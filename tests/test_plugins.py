@@ -33,7 +33,10 @@ class Base(unittest.TestCase):
 
 class Registry(Base):
     def test_every_agent_tool_belongs_to_a_plugin(self):
-        import speech_pipeline_manager as S
+        try:
+            import speech_pipeline_manager as S
+        except ModuleNotFoundError as e:   # light CI deps (no transformers/torch)
+            self.skipTest(f"pipeline import needs {e.name}")
         owned = set()
         for p in P.BUILTIN:
             owned.update(P._builtin_tools(p))
