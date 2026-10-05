@@ -12,6 +12,7 @@ suitable for injecting into the LLM context.
 from __future__ import annotations
 
 import logging
+import re
 from typing import List, Dict
 
 logger = logging.getLogger(__name__)
@@ -106,6 +107,25 @@ def _search_ddgs(query: str, max_results: int = 5) -> List[Dict[str, str]]:
     return []
 
 
+_YEAR = re.compile(r"\b(20[0-9]{2})\b")
+
+
+def freshen_query(query: str, user_text: str = "", today=None) -> str:
+    """Live call 10-05: the model searched 'China fusion research progress 2025' in 2026
+    (its training cutoff leaks into queries), so results came back a year stale.
+    A RECENT past year (last 3) that nobody in the room said is dropped, so the engine
+    returns current results. Older years and years people actually said are kept
+    ('World Cup 2022 winner' still works)."""
+    import datetime as _dt
+    year = (today or _dt.date.today()).year
+    said = set(_YEAR.findall(user_text or ""))
+    def fix(m):
+        y = m.group(1)
+        return "" if (year - 3 <= int(y) < year and y not in said) else y
+    out = " ".join(_YEAR.sub(fix, query or "").split())
+    return out or (query or "")
+
+
 def search(query: str, max_results: int = 4) -> Dict:
     """Run a web search and return a normalized result.
 
@@ -141,7 +161,8 @@ def search(query: str, max_results: int = 4) -> Dict:
         flagged += f1 + f2
     if flagged:
         logger.warning("web search %r: neutralized %d injection/control fragment(s)", query, flagged)
-    lines = [f"Search for '{query}' ({backend}):"]
+    import datetime as _dt
+    lines = [f"Search for '{query}' ({backend}), run just now on {_dt.date.today().isoformat()}:"]
     for i, r in enumerate(results, 1):
         lines.append(f"({i}) {r['title']}\n    {r['url']}\n    {r['snippet']}")
     text = untrusted.wrap("\n".join(lines), "web search")

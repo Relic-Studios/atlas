@@ -25,12 +25,13 @@ from typing import Callable, Optional
 logger = logging.getLogger(__name__)
 
 RESULT_CHARS = 520          # per search result kept on the board / shown in prompt
-DELIVER_TTL_S = 10 * 60     # undelivered results older than this stop being offered
+DELIVER_TTL_S = 4 * 60      # undelivered results older than this stop being offered
+REUSE_DONE_S = 60           # a FINISHED search is only reused for the exact same query this soon
 SEARCH_KEEP_S = 30 * 60     # finished searches stay visible for follow-ups this long
 NOTE_KEEP_S = 24 * 3600     # notes to self expire after a day
 MAX_NOTES = 8
 MAX_SEARCHES = 6
-MAX_DELIVERY_ATTEMPTS = 2
+MAX_DELIVERY_ATTEMPTS = 1
 NOTE_CHARS = 200
 
 # Synthetic "your result is ready" cue: never a real user line. Recognised by the
@@ -132,7 +133,7 @@ class TaskBoard:
                 if t.get("kind") == "note":
                     if t.get("status") == "open" and now - t.get("created", 0) < NOTE_KEEP_S:
                         self.tasks.append(t)
-                elif t.get("kind") == "search" and t.get("status") in ("done", "delivered") \
+                elif t.get("kind") == "search" and t.get("status") in ("done", "delivered", "superseded") \
                         and now - t.get("updated", 0) < SEARCH_KEEP_S:
                     self.tasks.append(t)   # running ones died with the process
             for t in self.tasks:
@@ -192,12 +193,22 @@ class TaskBoard:
         q = " ".join((query or "").split())[:160]
         with self.lock:
             now = self.clock()
-            for t in reversed(self.tasks):   # same query recently: reuse, don't re-run
-                if t["kind"] == "search" and t["text"].lower() == q.lower() \
-                        and t["status"] in ("running", "done", "delivered") \
-                        and now - t["created"] < 5 * 60:
+            # Live call 10-05: a 5-minute exact-match reuse silently handed back an OLD
+            # result for a brand-new research request ("Shimmer! On it." -> nothing ran).
+            # Only a still-running search, or one that finished seconds ago, is reused.
+            for t in reversed(self.tasks):
+                if t["kind"] == "search" and t["text"].lower() == q.lower() and (
+                        t["status"] == "running"
+                        or (t["status"] in ("done", "delivered") and now - t["updated"] < REUSE_DONE_S)):
                     t["gen"] = gen if gen is not None else t["gen"]
+                    logger.info("📋 task #%d reused for %s: %s", t["id"], asker or "?", q)
                     return t
+            # A new search supersedes this asker's older finished-but-untold results:
+            # they stop being cued/attached, so an old answer can't ride on a new question.
+            for t in self.tasks:
+                if t["kind"] == "search" and t["status"] == "done" and (t["asker"] == (asker or "")):
+                    t["status"], t["updated"] = "superseded", now
+                    logger.info("📋 task #%d superseded by a newer search", t["id"])
             t = self._new("search", q, asker, gen=gen)
             t["status"] = "running"
             ev = threading.Event()
@@ -350,6 +361,9 @@ class TaskBoard:
                 elif t["status"] == "running":
                     lines.append(f"- #{t['id']} searching{who}: \"{t['text']}\" (still running; "
                                  "if asked, you're still on it)")
+                elif t["status"] == "superseded":
+                    lines.append(f"- #{t['id']} old search{who} ({ago}), replaced by a newer one; don't bring it up: "
+                                 f"\"{t['text']}\"")
                 elif t["status"] == "done" and now - t["updated"] < DELIVER_TTL_S:
                     lines.append(f"- #{t['id']} search{who} DONE {ago}, NOT told yet: \"{t['text']}\" "
                                  f"-> {t['result'][:RESULT_CHARS]}")

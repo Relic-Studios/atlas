@@ -827,6 +827,11 @@ class SpeechPipelineManager:
                 if not q:  # never run an empty search; use what they actually asked
                     q = re.sub(r'^\s*\[S\d+\]\s*', '', getattr(gen, "text", "") or "")[:160]
                     logger.warning("web_search called with no query; using the request text: %r", q)
+                said = re.sub(r'^\s*\[S\d+\]\s*', '', getattr(gen, "text", "") or "")
+                q2 = _websearch.freshen_query(q, said)
+                if q2 != q:
+                    logger.info("📋 stale year in query freshened: %r -> %r", q, q2)
+                    q = q2
                 t = b.start_search(q, asker, getattr(gen, "id", None))
 
                 def cancelled():
