@@ -235,7 +235,17 @@ class NameBook:
             asked = p.asked_at is not None and now - p.asked_at <= self.answer_window_s
             # Intros usually lead the turn: "I'm Sam. how's it going", "hey Max, I'm Sam".
             # Judge the first sentence, with a leading "hey <agent>," vocative dropped.
-            first = re.split(r"(?<=[.!?])\s+", body, maxsplit=1)[0]
+            parts = re.split(r"(?<=[.!?])\s+", body)
+            first = parts[0]
+            # "Hi, Wren. I'm Riley. ..." (demo take 5): a sentence that is only a greeting
+            # to the agent carries no intro, so judge the sentence after it.
+            g0 = re.match(r"^\W*(?:hey|hi|hello|yo|sup)\W+([A-Za-z]+)\W*$", first, re.I)
+            if g0 and g0[1].lower() in self.agent_names and len(parts) > 1:
+                parts = parts[1:]
+                body_rest = " ".join(parts)
+                first = parts[0]
+                if len(parts) <= 2:
+                    body = body_rest
             v = re.match(r"^\W*((?:hey|hi|hello|yo|sup)\W+)?([A-Za-z]+),\s*", first, re.I)
             if v and v[2].lower() in self.agent_names:
                 first = (v[1] or "") + first[v.end():]

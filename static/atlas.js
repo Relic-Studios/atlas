@@ -579,7 +579,7 @@ function renderSnap(s) {
   // room
   const fl = pl.floor || {};
   $('floorRow').innerHTML = [
-    `<span class="chip ${fl.partner ? 'on' : ''}">partner ${esc(fl.partner || 'none')}</span>`,
+    `<span class="chip ${fl.partner ? 'on' : ''}">partner ${esc((pl.names || {})[fl.partner] || _spkNames[fl.partner] || fl.partner || 'none')}</span>`,
     `<span class="chip ${fl.quiet ? 'q' : ''}">${fl.quiet ? `quiet ${Math.ceil(fl.quiet_left)}s` : 'open floor'}</span>`,
     `<span class="chip">room ${fl.room_size ?? 0}</span>`,
     `<span class="chip">history ${pl.history_len ?? 0}</span>`,
@@ -590,10 +590,11 @@ function renderSnap(s) {
   $('roomN').textContent = `${roster.length} people · ${(s.speakers || []).length} voices`;
   $('roster').innerHTML = roster.length ? roster.map((r) => {
     const col = spkColor(r.id), d = dz[r.id];
+    const nm = r.name || _spkNames[r.id] || '';
     const tags = [r.addressed ? `<span class="tag hot">called ${r.addressed}×</span>` : '', r.id === fl.partner ? '<span class="tag hot">partner</span>' : ''].join('');
     const muted = (s.owner?.muted_speakers || []).includes(String(r.id).toUpperCase());
-    return `<div class="spk ${r.id === liveSpk ? 'live' : ''} ${r.id === fl.partner ? 'partner' : ''} ${muted ? 'muted' : ''}"><div class="av" style="background:${col};box-shadow:0 0 ${r.idle_s < 10 ? 14 : 0}px ${col}">${esc(r.id)}</div>
-      <div style="min-width:0"><div style="font-size:11.5px;font-family:var(--mono)">${r.turns} turns · ${r.words} w${d ? ` · ${d.speech_s}s voice` : ''} · ${r.idle_s < 60 ? r.idle_s.toFixed(0) + 's ago' : Math.round(r.idle_s / 60) + 'm ago'}</div><div class="line">${esc(r.last)}</div></div><div>${tags}<span class="mutebtn ${muted ? 'on' : ''}" data-mute="${esc(r.id)}" title="${muted ? 'Unmute' : 'Ignore this speaker (agent never answers them)'}">${muted ? 'muted' : 'mute'}</span></div></div>`;
+    return `<div class="spk ${r.id === liveSpk ? 'live' : ''} ${r.id === fl.partner ? 'partner' : ''} ${muted ? 'muted' : ''}"><div class="av" style="background:${col};box-shadow:0 0 ${r.idle_s < 10 ? 14 : 0}px ${col}" title="${esc(r.id)}">${esc(nm ? nm.slice(0, 2) : r.id)}</div>
+      <div style="min-width:0"><div style="font-size:11.5px;font-family:var(--mono)">${nm ? `<b>${esc(nm)}</b> · ` : ''}${r.turns} turns · ${r.words} w${d ? ` · ${d.speech_s}s voice` : ''} · ${r.idle_s < 60 ? r.idle_s.toFixed(0) + 's ago' : Math.round(r.idle_s / 60) + 'm ago'}</div><div class="line">${esc(r.last)}</div></div><div>${tags}<span class="mutebtn ${muted ? 'on' : ''}" data-mute="${esc(r.id)}" title="${muted ? 'Unmute' : 'Ignore this speaker (agent never answers them)'}">${muted ? 'muted' : 'mute'}</span></div></div>`;
   }).join('') : `<div class="stats">${(s.speakers || []).map((x) => `${esc(x.label)} · ${x.speech_s}s`).join('<br>') || 'nobody has spoken yet'}</div>`;
 
   // threads
