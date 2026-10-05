@@ -15,7 +15,7 @@ ap.add_argument("demo"); ap.add_argument("frames"); ap.add_argument("out")
 ap.add_argument("--caption", default="")
 a = ap.parse_args()
 
-demo, frames = Path(a.demo), Path(a.frames)
+demo, frames = Path(a.demo).resolve(), Path(a.frames).resolve()  # ffmpeg concat resolves relative to the list file
 done = json.loads((demo / "DONE").read_text(encoding="utf-8"))
 t0, dur = done["wall_t0"] * 1000.0, done["seconds"]
 fs = sorted(frames.glob("*.jpg"), key=lambda p: int(p.stem))

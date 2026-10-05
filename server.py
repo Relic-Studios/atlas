@@ -1400,9 +1400,16 @@ class TranscriptionCallbacks:
         # LLM call; a clause cut mid-breath waits for more speech. A held
         # fragment is remembered so on_before_final can still answer the turn --
         # a guard may delay a turn, never silently drop it.
-        from floor import filler_only, incomplete_fragment
+        from floor import filler_only, incomplete_fragment, status_only
         if not txt.strip() or filler_only(txt):
             logger.info(f"🖥️😂 skip LLM (filler): '{txt[:40]}'")
+            return
+        try:
+            _names = tuple(getattr(getattr(mgr, "threads", None), "names", ()) or ())
+        except Exception:  # noqa: BLE001
+            _names = ()
+        if status_only(txt, _names):
+            logger.info(f"🖥️⏸️ skip LLM (status update): '{txt[:40]}'")
             return
         if incomplete_fragment(txt):
             logger.info(f"🖥️⏳ wait (fragment): '{txt[-40:]}'")
@@ -1902,7 +1909,7 @@ class TranscriptionCallbacks:
                 # Store the EXACT control header the model must emit. The old '[to=S1]' form
                 # was copied by the model as its own header -> INVALID -> silent turns,
                 # increasingly often as the call grew (tests/sim_history_format.py).
-                app.state.SpeechPipelineManager.floor.on_agent_spoke(target)
+                app.state.SpeechPipelineManager.floor.on_agent_spoke(target, cleaned_answer)
                 try:
                     from floor import promises_quiet
                     if promises_quiet(cleaned_answer):

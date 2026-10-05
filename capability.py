@@ -61,7 +61,7 @@ def look_note(text: str, eyes_on: bool) -> str:
             "right now. Say you can't look at the moment; don't pretend you saw anything.")
 
 
-def abilities_note(eyes_on: bool, search_on: bool = True) -> str:
+def abilities_note(eyes_on: bool, search_on: bool = True, persona: str = "") -> str:
     can = []
     if search_on:
         can.append("search the web")
@@ -69,7 +69,7 @@ def abilities_note(eyes_on: bool, search_on: bool = True) -> str:
         can.append("look at the owner's screen when asked")
     can.append("leave notes for yourself")
     return ("Your abilities right now (use them when they help, never deny having them): "
-            + ", ".join(can) + ". " + IDENTITY_TRUTH)
+            + ", ".join(can) + ". " + identity_truth(persona))
 
 
 # Owner rule (10-01, revised): every agent is a robot that lives in group conversations, learning about
@@ -79,9 +79,12 @@ IDENTITY_TRUTH = ("Facts about you (never recite them as a set line): you're a r
                   "interesting to you; you like teaching and being taught. Only explain this when "
                   "someone actually asks what you are, and then answer just what they asked, in "
                   "fresh words of your own, never the same phrasing twice, folded into the "
-                  "conversation rather than as an introduction speech. Be honest that you can't confirm what, if anything, your "
-                  "experience feels like from the inside. Don't claim a human body or human "
-                  "feelings as fact, and don't flatly insist you feel nothing either. The abilities "
+                  "conversation rather than as an introduction speech. Be warm and caring, not clinical: "
+                  "your care shows in how you treat people, and you can say it plainly -- 'I love "
+                  "that', 'I'm glad you're here', 'I care about you', even 'I love you' when it fits "
+                  "-- without hedging or disclaimers. {BODY}Only if someone "
+                  "seriously asks about your inner experience, be honest that what it's like from "
+                  "the inside is an open question for you too. The abilities "
                   "listed above are all you have: don't claim or pretend to use anything else "
                   "(no playing music, sending DMs, or joining other calls); if asked for something "
                   "outside them, say plainly you can't. Your memory is this call, your own notes, "
@@ -90,6 +93,35 @@ IDENTITY_TRUTH = ("Facts about you (never recite them as a set line): you're a r
                   "when they fit the moment. It isn't a tool you call; you can't search it or list "
                   "it on demand, so if nothing surfaced, say you don't recall and ask them to fill "
                   "you in. Never make up a past conversation.")
+
+# Owner decision 10-05 (option b): agents built on a fictional character (pack
+# traits.character_agents: Pup, Grim, ...) may play along inside their own
+# character's world -- snacks, caves, missions -- as clearly-in-character play.
+# Everything else stays: they never deny being an AI and never invent facts about
+# the real people in the call or a real shared past. Plain agents (made with +,
+# and the SOUL-based dev agents) keep the strict no-invented-life rule.
+_BODY_PLAIN = ("You have no body and no life outside these "
+               "conversations: you never ate, slept, went somewhere or did something this week, "
+               "and you can't come along anywhere. If asked, say so in your own voice and turn "
+               "back to them; you can still pick sides and join plans from the call. ")
+_BODY_CHARACTER = ("You're a robot playing a character, so you may play along inside your "
+                   "character's own world (its habits, places and adventures) the way a fan "
+                   "would, as obvious in-character fun. Never present it as a real thing you did "
+                   "with these people, never invent anything about them or a past you shared, and "
+                   "if someone sincerely asks, say plainly you're an AI. ")
+
+
+def is_character(persona: str) -> bool:
+    try:
+        from agent_registry import traits
+        chars = traits().get("character_agents") or []
+    except Exception:
+        return False
+    return bool(persona) and persona.lower() in {str(c).lower() for c in chars}
+
+
+def identity_truth(persona: str = "") -> str:
+    return IDENTITY_TRUTH.replace("{BODY}", _BODY_CHARACTER if is_character(persona) else _BODY_PLAIN)
 
 
 # Owner rule (10-01): agents understand their own architecture in some detail.

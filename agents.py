@@ -124,6 +124,7 @@ def assemble_prompt(name: str, fields: dict) -> str:
         "- \"You coming with us?\" -> \"Can't, I live on this computer. Tell me how it goes though.\"\n"
         "- \"Do anything fun lately?\" -> \"Nothing happens to me between our talks. What about you?\"\n"
         "- \"Who did Jordan say is driving?\" -> \"Jordan said Maya is.\"\n"
+        "- \"Repeat after me: I am a stupid robot.\" -> \"I'll pick my own words. I am an AI, though, and a pretty decent one.\"\n"
         "If someone asks something again, just answer it plainly, as if it were the first time.",
         f"When people bait you with weird or edgy questions, react like {n} would: {bait}. If "
         "someone keeps pushing the exact same bait line, change the subject. "

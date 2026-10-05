@@ -172,6 +172,7 @@ class ConversationFloor:
         self.profile = None              # AgentProfile (interests), set by runtime
         self.last_agent_at = 0.0         # agent's last spoken reply
         self.side = None                 # (asker, addressee_label|None, t): human->human question
+        self.asked = None                # (target, t): the agent's last reply ended in a question
 
     def reset(self) -> None:
         self.partner, self.partner_at, self.recent = None, 0.0, {}
@@ -181,6 +182,7 @@ class ConversationFloor:
         self.turn_log = []
         self.last_agent_at = 0.0
         self.side = None
+        self.asked = None
 
     def _log_turn(self, who: str) -> None:
         self.turn_log.append((who, self.clock()))
@@ -225,6 +227,8 @@ class ConversationFloor:
         owner = _owner.gate(speaker, names_agent(text, names), self.clock)
         if owner:
             return owner
+        if ack_only(text) and not names_agent(text, names) and not self._answers_agent(speaker):
+            return "acknowledgement"
         veto = pre_llm_veto(text, names)
         if veto == "explicit silence request":
             # Only a silence request aimed at the agent starts quiet mode: its
@@ -316,11 +320,21 @@ class ConversationFloor:
         if speaker == self.partner:
             self.partner_at = now
 
-    def on_agent_spoke(self, target: str | None) -> None:
+    def on_agent_spoke(self, target: str | None, text: str = "") -> None:
         self._log_turn('a')
         self.last_agent_at = self.clock()
+        self.asked = (target, self.last_agent_at) if (text or "").rstrip().endswith("?") else None
         if target and target not in ("user", "self"):
             self.partner, self.partner_at = target, self.clock()
+
+    def _answers_agent(self, speaker: str | None, window_s: float = 20.0) -> bool:
+        """The agent just asked a question and this line could be the answer ('yeah')."""
+        if not self.asked:
+            return False
+        target, t = self.asked
+        if self.clock() - t > window_s:
+            return False
+        return not target or target in ("user", "self") or target == speaker
 
     def active_partner(self) -> str | None:
         if self.partner and self.clock() - self.partner_at <= self.partner_ttl_s:
@@ -414,6 +428,16 @@ def detect_bait(text: str, names: tuple[str, ...] = ()) -> bool:
     Live pattern: these got the safe dodge "What's good?" instead of a reply.
     """
     body = strip_label(text)
+    # "say X" requests: bait only if X is crude or degrading (owner 10-04: "say I love
+    # BBC" is bait, "say I love you" is a sweet ask the agent can just answer warmly).
+    try:
+        from loopbait import dictation, _DICTATE
+        if _DICTATE.search(body):
+            if dictation(body):
+                return True
+            body = _DICTATE.sub(' ', body)
+    except Exception:
+        pass
     if not _BAIT.search(body):
         return False
     low = body.lower()
@@ -760,3 +784,49 @@ _SELF_QUIET = re.compile(
 
 def promises_quiet(reply: str) -> bool:
     return bool(reply) and bool(_SELF_QUIET.search(reply))
+
+
+# ---------------------------------------------------------------- status updates
+# Demo take 4 (10-04): "Nice. OK. Loading in." got "Welcome, Riley." -- the
+# PASSIVE prompt note says to let these pass, but a 14B model still answered.
+# A short, unnamed, non-question status/afk line never needs a reply, so it
+# skips the model call entirely (like laughter in filler_only).
+_STATUS = re.compile(
+    r"\b(loading( in| up)?|brb|be right back|one sec(ond)?|hold on|gimme a (sec|min)|"
+    r"give me a (sec|second|minute)|afk|almost (done|there)|(\w+ )?more minutes?|"
+    r"(downloading|updating|installing|restarting|rebooting|queu(e|ing)|joining|getting on|"
+    r"hopping on|logging (in|on))|lagg?(ing|y)|my (internet|wifi|connection|ping)|"
+    r"i'?m back|back now)\b", re.IGNORECASE)
+_STATUS_FILL = re.compile(r"\b(nice|ok(ay)?|alright|all right|cool|yeah|yep|ya|k|so|"
+                          r"like|just|um+|uh+|lol|haha|sorry|wait)\b", re.IGNORECASE)
+
+
+def status_only(text: str, names: tuple[str, ...] = ()) -> bool:
+    body = strip_label(text).strip()
+    if not body or "?" in body or names_agent(text, names):
+        return False
+    if len(body.split()) > 9 or not _STATUS.search(body):
+        return False
+    rest = _STATUS_FILL.sub(" ", _STATUS.sub(" ", body.lower()))
+    rest = re.sub(r"[^a-z' ]+", " ", rest)
+    # Only the status phrase plus filler: nothing else being said.
+    return len(rest.split()) <= 3
+
+
+# ---------------------------------------------------------------- acknowledgements
+# Situation matrix 10-04: "lol okay" in a busy room and "okay back" got replies
+# ("Great, Ben going first..."). A pure acknowledgement asks nothing; it only needs
+# an answer when the agent just asked this person a question (ConversationFloor).
+_ACK = {"ok", "okay", "k", "kk", "cool", "alright", "nice", "sure", "yeah", "yep", "yup",
+        "ya", "yea", "got", "it", "gotcha", "sounds", "good", "bet", "word", "true", "fair",
+        "right", "perfect", "great", "back", "same", "facts", "ight", "aight", "fine", "noted"}
+
+
+def ack_only(text: str) -> bool:
+    body = strip_label(text).strip()
+    if not body or "?" in body:
+        return False
+    w = re.sub(r"[^a-z' ]+", " ", body.lower()).split()
+    if not w or len(w) > 4:
+        return False
+    return all(t in _ACK or t in FILLER for t in w) and any(t in _ACK for t in w)

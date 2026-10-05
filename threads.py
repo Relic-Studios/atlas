@@ -121,6 +121,12 @@ class ThreadArbiter:
         a = self.active
         if a is None or new.speaker == a.speaker:
             return True  # same speaker: the normal refinement/abort logic decides
+        # Demo take 4 (10-04): Riley's unnamed "two more minutes" thread (partner +
+        # reply bonuses) beat Sam's "Okay Wren, settle it" by 0.05 under the
+        # margin, so a stale "take your time" played. Being called by name always
+        # outranks a thread that never named the agent.
+        if "named" in new.reasons and "named" not in a.reasons:
+            return True
         now = self.clock()
         return new.score(now) > a.score(now) + PREEMPT_MARGIN
 
@@ -136,6 +142,8 @@ class ThreadArbiter:
         b = self.best()
         if b is None or b is latest:
             return latest
+        if "named" in latest.reasons and "named" not in b.reasons:
+            return latest  # being called by name beats an older unnamed thread
         now = self.clock()
         return b if b.score(now) > latest.score(now) + PREEMPT_MARGIN else latest
 

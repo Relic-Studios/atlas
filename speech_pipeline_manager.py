@@ -337,6 +337,10 @@ class SpeechPipelineManager:
         self.orpheus_model = orpheus_model
 
         from identity import note as _id_note
+        try:
+            import response_decision as _rd_life; _rd_life.set_agent(DEFAULT_PERSONA)
+        except Exception:
+            pass
         self.system_prompt = f"Your name is {display_name(DEFAULT_PERSONA)}. {_id_note(DEFAULT_PERSONA, display_name(DEFAULT_PERSONA))} " + system_prompt
         self.current_persona = DEFAULT_PERSONA
         if tts_engine == "orpheus":
@@ -946,6 +950,30 @@ class SpeechPipelineManager:
             logger.warning("people note failed: %s", e)
             return room
 
+    def _guard_lines(self, txt: str):
+        """Lines the reply must not recite: dictations still in force (sticky) and the
+        room's recent lines (verbatim echo of what people said). Shared by the live path
+        and the sims so gating can't drift. Never raises."""
+        forbid, echo = [], []
+        try:
+            if getattr(self, '_dictations', None) is None:
+                from loopbait import DictationMemory
+                self._dictations = DictationMemory()
+            forbid = self._dictations.note(txt)
+        except Exception as e:  # noqa: BLE001
+            logger.warning('dictation check failed: %s', e)
+        try:
+            from collections import deque
+            if getattr(self, '_recent_heard', None) is None:
+                self._recent_heard = deque(maxlen=8)
+            body = re.sub(r"^\s*\[[^\]]*\]\s*", "", txt or "").strip()
+            if body:
+                self._recent_heard.append(body)
+            echo = list(self._recent_heard)
+        except Exception as e:  # noqa: BLE001
+            logger.warning('echo guard failed: %s', e)
+        return forbid, echo
+
     def _check_bait(self, txt: str):
         """Loop-bait verdict for this turn (never raises)."""
         try:
@@ -989,7 +1017,7 @@ class SpeechPipelineManager:
             import capability as _cap
             eyes_on = bool(_screen is not None and _screen.status().get("enabled"))
             ctx = getattr(self, "_ctx_text", "")
-            room = (room + chr(10) + _cap.abilities_note(eyes_on, bool(WEB_SEARCH_TOOLS))).strip()
+            room = (room + chr(10) + _cap.abilities_note(eyes_on, bool(WEB_SEARCH_TOOLS), getattr(self, 'current_persona', '') or '')).strip()
             try:
                 import call_memory as _cmem
                 memn = _cmem.memory_note(getattr(self, "current_persona", ""))
@@ -1498,6 +1526,7 @@ class SpeechPipelineManager:
                 self.generator_ready_event.set()
                 return
             history, room = self._llm_context(txt)
+            gen.decision.forbid, gen.decision.echo_lines = self._guard_lines(txt)
             if bait is not None and bait.note:
                 logger.info(f"🗣️🪤 [Gen {new_gen_id}] Loop bait ({bait.kind} x{bait.count}: {bait.line[:50]!r}) -> roast + pivot")
                 room = (room + chr(10) + bait.note).strip()
@@ -1909,6 +1938,10 @@ class SpeechPipelineManager:
             return False
         self.current_persona = name
         from identity import note as _id_note
+        try:
+            import response_decision as _rd_life; _rd_life.set_agent(name)
+        except Exception:
+            pass
         self.system_prompt = f"Your name is {display_name(name)}. {_id_note(name, display_name(name))} " + PERSONAS[name]
         try:
             import name_hearing

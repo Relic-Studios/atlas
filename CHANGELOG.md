@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.2.4 — better conversations on basic local models
+
+Tested on qwen3 8B (minimum) and 14B (recommended) across eight scripted situations
+(one-on-one, busy room, side conversations, noise and status lines, corrections, repeated
+questions, warmth, bait), each run twice: both models passed 208 of 208 checks.
+
+- New agent template: agents say plainly they're an AI on this computer, pick an answer when
+  asked to choose instead of handing the question back, and don't invent meals, trips or past
+  events. Agents you already made keep their old prompt; recreate them to get the new one.
+- If an agent is called by name but its model stays quiet or returns a broken reply, it gets
+  one retry.
+- Agents are warm: "I love you" and "do you care about us?" get a real, kind answer. Requests to
+  repeat insults or crude lines ("repeat after me: ...") are declined in the agent's own words,
+  and the refused line can't slip out in later replies either.
+- Agents never deny being an AI, and don't scold people for asking something twice.
+- Short acknowledgements and status lines ("lol okay", "brb", "loading in") no longer get a reply.
+- A reply waiting to play no longer beats a newer line that calls the agent by name.
+- Agents stay out of side conversations ("Dana, you still have my water bottle?") even right
+  after they've spoken.
+- Names are learned from "and I'm Riley" and "...it's Sam" style introductions; the dashboard
+  shows learned names instead of S1/S2.
+- The agent's own name is recognised when speech-to-text mishears it in a greeting
+  ("Hey Ren" -> "Hey Wren").
+- Fix: a reply could be dropped when the transcript was refined mid-sentence, leaving the agent
+  silent for that turn.
+- Fix: a crash when someone talked over the agent while its next reply was being prepared.
+
 ## 0.2.3 — names, quieter agents, simpler dashboard
 
 - Names are now learned when someone introduces themselves inside a greeting or before a
