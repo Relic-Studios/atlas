@@ -732,6 +732,17 @@ class SpeechPipelineManager:
         return len(wa & wb) >= 0.7 * min(len(wa), len(wb))
 
     @staticmethod
+    def _adds_content(a: str, b: str) -> bool:
+        """True if b carries real new content beyond draft a (demo take 8, 10-05:
+        a draft built on 'Okay, Wren. Settle it.' was kept when the line went on
+        'Co-op or competitive? There are four of us.', so she answered the
+        half-sentence). Punctuation-insensitive; 3+ new words is a new clause."""
+        tok = lambda t: [w for w in re.findall(r"[a-z0-9']+", t.lower()) if w]
+        wa = set(tok(a))
+        new = [w for w in tok(b) if w not in wa]
+        return len(new) >= 3
+
+    @staticmethod
     def _trim_transcript(txt: str, max_words: int = 60) -> str:
         """Cap the transcript fed to the LLM to the most recent words.
 
@@ -1157,7 +1168,11 @@ class SpeechPipelineManager:
                     # No abortion in progress, check similarity
                     logger.info(f"🗣️🛑🤔 {current_gen_id_str} Found active generation, checking text similarity.")
                     run_text = self.running_generation.text or ""
-                    if run_text and txt and self._same_utterance(run_text, txt):
+                    if run_text and txt and self._same_utterance(run_text, txt) and (
+                            self.running_generation.tts_quick_started
+                            or not self._adds_content(run_text, txt)):
+                        # Already speaking: keep it (cutting it off orphaned audio, demo
+                        # 10-04). Not speaking yet and the line grew a new clause: redraft.
                         logger.info(f"🗣️🛑🙅 {current_gen_id_str} Text refines the same utterance (word overlap). Ignoring.")
                         return False
                     try:

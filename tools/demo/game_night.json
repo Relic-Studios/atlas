@@ -32,12 +32,12 @@
   },
   {
    "who": "Sam",
-   "text": "Okay {N}, settle it. Co-op or competitive, for four people?",
+   "text": "Okay {N}, settle it. Co-op, or competitive? There are four of us.",
    "gap_s": 1.2
   },
   {
    "who": "Riley",
-   "text": "Something short though, I have work early.",
+   "text": "Pick something short, please. I have work early tomorrow.",
    "wait_reply": true,
    "gap_s": 0.6
   },
