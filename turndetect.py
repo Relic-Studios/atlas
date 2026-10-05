@@ -171,6 +171,28 @@ def interpolate_detection(prob: float) -> float:
     logger.warning(f"🎤⚠️ Probability {p} fell outside defined anchor points {anchor_points}. Returning fallback value.")
     return 4.0
 
+
+# Setup tails (demo take 9, 10-05): "Okay, Wren. Settle it." / "All right, Wren. Quick
+# test." are announcements that the real question is coming. A normal sentence-end pause
+# ended the turn there and the agent answered the setup ("Settle what?"). Hold longer.
+SETUP_TAIL_EXTRA_S = 0.9
+_SETUP_TAIL = re.compile(
+    r"^(?:(?:okay|ok|all right|alright|so|um|uh)\s+)?"
+    r"(?:settle (?:it|this)|quick (?:test|question|one|thing)|real quick|"
+    r"(?:i (?:have|got)|i'?ve got|got) a (?:quick )?question(?: for you)?|"
+    r"question(?: for you)?|here'?s (?:the thing|a question)|listen(?: up)?|"
+    r"okay so|so|wait|hold on|one (?:thing|question))$")
+
+
+def setup_tail(text: str) -> bool:
+    """True if the LAST sentence of text only sets up what comes next."""
+    parts = [x for x in re.split(r"[.?!,]+", (text or "").lower()) if x.strip()]
+    if not parts:
+        return False
+    last = re.sub(r"[^a-z' ]+", " ", parts[-1])
+    last = " ".join(last.split())
+    return bool(_SETUP_TAIL.match(last))
+
 class TurnDetection:
     """
     Manages turn detection logic based on text input and sentence completion model.
@@ -509,6 +531,10 @@ class TurnDetection:
                 logger.info(f"🎤⚠️ Final pause ({final_pause:.2f}s) is less than minimum ({min_pause:.2f}s). Using minimum.")
                 final_pause = min_pause
             
+            if setup_tail(processed_text):
+                final_pause += SETUP_TAIL_EXTRA_S
+                logger.info(f"🎤⏳ Setup phrase, holding the turn open +{SETUP_TAIL_EXTRA_S:.1f}s: \"{processed_text}\"")
+
             # Suggest the calculated time via callback
             self.suggest_time(final_pause, processed_text) # Use processed_text for context
 
