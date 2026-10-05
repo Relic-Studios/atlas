@@ -11,6 +11,8 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    env:
+      SIGNING_ACCOUNT: ${{ secrets.SIGNING_ACCOUNT }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -37,6 +39,24 @@ jobs:
           if (-not (Test-Path "C:\Program Files (x86)\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
       - name: Build installer
         run: python tools/build_installer.py --version $env:VERSION --ref $env:GITHUB_SHA --iscc "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+      - name: Sign installer (Azure Artifact Signing, only if configured)
+        # Skipped until the repo has these secrets: AZURE_TENANT_ID, AZURE_CLIENT_ID,
+        # AZURE_CLIENT_SECRET, SIGNING_ENDPOINT, SIGNING_ACCOUNT, SIGNING_PROFILE.
+        # Unsigned builds still ship; Windows SmartScreen just warns. See docs/SIGNING.md.
+        if: env.SIGNING_ACCOUNT != ''
+        uses: azure/artifact-signing-action@v2
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.SIGNING_PROFILE }}
+          files-folder: ${{ github.workspace }}\dist
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
       - name: Checksums
         shell: bash
         run: cd dist && sha256sum ATLAS-Setup-*.exe > SHA256SUMS.txt && cat SHA256SUMS.txt
