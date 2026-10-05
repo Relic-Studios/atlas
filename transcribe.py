@@ -1,4 +1,5 @@
 import logging
+import os
 logger = logging.getLogger(__name__)
 
 from turndetect import strip_ending_punctuation
@@ -807,8 +808,17 @@ class TranscriptionProcessor:
                 # Ensure wake words are disabled if needed (can also be done via config dict)
                 self._set_recorder_param("use_wake_words", False)
             else:
-                # Instantiate the LOCAL recorder with the corrected active_config
-                self.recorder = AudioToTextRecorder(**active_config)
+                # Instantiate the LOCAL recorder with the corrected active_config.
+                # RealtimeSTT waits on the worker's ready-event with no timeout; if the
+                # worker process dies at spawn (seen 10-05: demo take 6 hung 9 min with
+                # no child process) the whole server hangs silently. Watch it instead.
+                done = threading.Event()
+                threading.Thread(target=_watch_stt_spawn, args=(done,), daemon=True,
+                                 name="STTSpawnWatch").start()
+                try:
+                    self.recorder = AudioToTextRecorder(**active_config)
+                finally:
+                    done.set()
                 # Ensure wake words are disabled if needed (double check via param setting)
                 self._set_recorder_param("use_wake_words", False) # Uses the helper method
 
@@ -879,3 +889,34 @@ class TranscriptionProcessor:
             logger.info("👂🔌 TranscriptionProcessor shutdown process finished.")
         else:
             logger.info("👂ℹ️ Shutdown already performed.")
+
+# STT worker spawn watchdog (demo take 6, 10-05): RealtimeSTT blocks forever on
+# main_transcription_ready_event if its worker process dies while starting.
+# Fail loudly with the exit code instead of hanging. Not a respawn: the cause
+# must be found, so we stop the process and say why.
+STT_SPAWN_TIMEOUT_S = float(os.environ.get("ATLAS_STT_SPAWN_TIMEOUT_S", "180"))
+
+
+def _watch_stt_spawn(done, timeout_s=None, poll_s=1.0, exit_fn=None):
+    import multiprocessing.process as _mpp
+    timeout_s = STT_SPAWN_TIMEOUT_S if timeout_s is None else timeout_s
+    exit_fn = exit_fn or (lambda code: os._exit(code))
+    before = set(_mpp._children)
+    t0 = time.monotonic()
+    while not done.wait(poll_s):
+        new = [p for p in list(_mpp._children) if p not in before]
+        dead = [p for p in new if p.exitcode is not None]
+        if dead:
+            codes = ", ".join(f"{p.name}={p.exitcode:#x}" if isinstance(p.exitcode, int) and p.exitcode > 255
+                              else f"{p.name}={p.exitcode}" for p in dead)
+            logger.critical(f"👂💀 Speech-to-text worker exited during startup ({codes}). "
+                            "0xc0000142 means Windows could not start the process "
+                            "(often too many open apps / desktop heap). Stopping instead of hanging.")
+            exit_fn(3)
+            return "dead"
+        if time.monotonic() - t0 > timeout_s:
+            logger.critical(f"👂💀 Speech-to-text model not ready after {timeout_s:.0f}s "
+                            f"({len(new)} worker process(es) started). Stopping instead of hanging.")
+            exit_fn(3)
+            return "timeout"
+    return "ok"
