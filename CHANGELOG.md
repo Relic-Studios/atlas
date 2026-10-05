@@ -26,6 +26,16 @@ questions, warmth, bait), each run twice: both models passed 208 of 208 checks.
 - Fix: a reply could be dropped when the transcript was refined mid-sentence, leaving the agent
   silent for that turn.
 - Fix: a crash when someone talked over the agent while its next reply was being prepared.
+- The agent waits a beat after a setup line ("Settle it.", "Quick test.") so it hears the
+  actual question before answering, and redrafts if your sentence keeps going.
+- Character agents may play along in their own world; plain agents stay strictly factual about
+  being an AI.
+- If the speech-to-text worker fails to start, ATLAS now stops with a clear error instead of
+  hanging on the loading screen.
+- New demo video (unscripted agent, recorded live on qwen3 14B) on the website and README;
+  website and README art redrawn from ATLAS's own data instead of AI-generated images.
+- The public repo now ships ~340 unit tests that run on every push (Windows + Linux), and
+  releases are only built when they pass.
 
 ## 0.2.3 — names, quieter agents, simpler dashboard
 

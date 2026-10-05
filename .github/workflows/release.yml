@@ -24,6 +24,11 @@ jobs:
           echo "VERSION=$V" >> "$GITHUB_ENV"
       - name: Syntax check (every .py compiles)
         run: python -m compileall -q -x "(\.venv|node_modules)" .
+      - name: Unit tests (gate)
+        env: {PYTHONIOENCODING: utf-8, CUDA_VISIBLE_DEVICES: "-1"}
+        run: |
+          python -m pip install -q -r requirements-ci.txt
+          python -m unittest discover -s tests
       - name: Dependency vulnerability gate
         # PYSEC-2026-3740 (nltk, no fix released): TransitionParser model-path APIs that
         # ATLAS never calls. Accepted; see SECURITY.md. Any other known CVE fails the build.

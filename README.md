@@ -1,29 +1,35 @@
-<p align="center"><img src="docs/images/banner.jpg" alt="ATLAS — local voice agents for your calls" width="100%"></p>
+<p align="center"><img src="docs/images/banner.png" alt="ATLAS: local voice agents for group conversation" width="100%"></p>
 
 <p align="center">
   <a href="https://github.com/Relic-Studios/atlas/releases/latest"><b>Download for Windows</b></a> ·
   <a href="#linux">Linux</a> ·
   <a href="#requirements">Requirements</a> ·
+  <a href="https://relic-studios.github.io/atlas/">Website</a> ·
   <a href="CHANGELOG.md">Changelog</a> ·
   <a href="https://discord.gg/dWvcu3yG6s">Community Discord</a>
 </p>
 
+<p align="center"><a href="https://github.com/Relic-Studios/atlas/actions/workflows/tests.yml"><img src="https://github.com/Relic-Studios/atlas/actions/workflows/tests.yml/badge.svg" alt="tests"></a></p>
+
 # ATLAS
 
-Local voice agents that join your voice calls, listen, and talk back in a voice you choose.
+Local voice agents for group conversation. They listen to everyone in the room or call,
+answer when they're talked to, and speak in a voice you choose.
 Everything runs on your PC. No account, no bundled API keys.
 
+<p align="center"><a href="https://relic-studios.github.io/atlas/#demo"><img src="docs/media/demo.gif" width="80%" alt="ATLAS demo: two people and an agent named Wren"></a></p>
+<p align="center"><sub>Unedited run on a local 14B model. Human lines are scripted text-to-speech; every agent reply and every silence is live.
+<a href="https://relic-studios.github.io/atlas/#demo">Watch the full minute with sound.</a></sub></p>
+
 <p align="center">
-  <img src="docs/images/runs-on-your-pc.jpg" width="32%" alt="Runs on your PC">
-  <img src="docs/images/your-voice-your-agent.jpg" width="32%" alt="Your voice, your agent">
-  <img src="docs/images/knows-when-to-talk.jpg" width="32%" alt="Knows when to talk">
+  <img src="docs/images/voices.jpg" width="100%" alt="Four voices over a real one-minute conversation, the agent in teal">
 </p>
 
 - **Runs on your PC.** Listening, the voice and (if you choose) the language model all run locally.
 - **Your voice, your agent.** Import a 10–20 second clip, describe a personality, and ATLAS drafts the agent for you to edit.
-- **Knows when to talk.** In a group call it answers when it's addressed and stays quiet when it isn't.
+- **Knows when to talk.** In a group conversation it answers when it's addressed and stays quiet when it isn't.
 - **Learns names.** It picks up people's names from introductions instead of calling them "Speaker 3".
-- **You stay in control.** Instant mute, quiet mode, a talkativeness slider, mute a specific speaker, and a report after each call.
+- **You stay in control.** Instant mute, quiet mode, a talkativeness slider, mute a specific speaker, and a report after each conversation.
 
 ## Install
 
@@ -89,6 +95,30 @@ Smaller local models (4B and under) were benchmarked and can't keep up with a gr
 
 Questions, install help, persona and voice tips, clips: join the [ATLAS community Discord](https://discord.gg/dWvcu3yG6s).
 Bugs can also go in [GitHub issues](https://github.com/Relic-Studios/atlas/issues); security reports go through [SECURITY.md](SECURITY.md), not public channels.
+
+## Memory
+
+<img align="right" src="docs/images/memory.jpg" width="34%" alt="The shape of a real agent memory">
+
+Each agent keeps its own long-term memory: a graph of what was said that strengthens links it
+uses and lets the rest fade. Relevant memories come back on their own; the search starts while
+people are still talking, so it adds almost no delay.
+
+- Phone numbers, emails, addresses and keys are never stored.
+- Agents never see each other's memories.
+- After a conversation you approve what it should remember.
+- Right-click an agent to clear the last hour, 12 hours, day, week, or everything.
+
+<br clear="right">
+
+## Tests
+
+```
+pip install -r requirements-ci.txt
+python -m unittest discover -s tests
+```
+
+About 340 unit tests cover turn-taking, name learning, bait and repeat guards, memory isolation and privacy, setup, and the local-only security layer. They need no GPU or models and run on every push ([tests workflow](https://github.com/Relic-Studios/atlas/actions/workflows/tests.yml)). Releases are only built when they pass.
 
 ## Privacy
 

@@ -27,6 +27,7 @@ nav b{letter-spacing:.18em;font-size:18px}nav .sp{flex:1}
 nav a{color:var(--mute);text-decoration:none;font-size:14px}nav a:hover{color:var(--fg)}
 .btn{display:inline-block;padding:12px 22px;border-radius:10px;font-weight:600;text-decoration:none;border:1px solid var(--line);color:var(--fg)}
 .btn.primary{background:linear-gradient(135deg,var(--cyan),#2b8cff);color:#021018;border:0}
+.demo{margin:0 auto;max-width:1040px}.demo video{width:100%;border-radius:14px;border:1px solid rgba(255,255,255,.08);background:#000;display:block}.demo figcaption{color:var(--muted,#8b95a5);font-size:.86rem;margin-top:10px;line-height:1.5}
 .hero{position:relative;min-height:min(78vh,760px);display:flex;align-items:flex-end;overflow:hidden}
 .hero picture,.hero img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
 .hero::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(5,8,15,.15) 0%,rgba(5,8,15,.55) 55%,var(--bg) 100%)}
@@ -60,37 +61,35 @@ footer{padding:40px 0;color:var(--mute);font-size:14px;border-top:1px solid var(
 <a href="https://discord.gg/dWvcu3yG6s">Community</a><a href="https://github.com/Relic-Studios/atlas">GitHub</a></div></nav>
 
 <header class="hero">
-<picture><source srcset="img/hero.webp" type="image/webp"><img src="img/hero.jpg" alt="" fetchpriority="high"></picture>
+<picture><source srcset="img/hero.webp" type="image/webp"><img src="img/hero.jpg" alt="Loudness of four voices over a real one-minute conversation, the agent in teal" fetchpriority="high"></picture>
 <div class="wrap">
-<div class="kicker">Open source · local-first · v0.2.0</div>
-<h1>A voice agent that joins your calls and runs on your own PC.</h1>
+<div class="kicker">Open source · local-first · v0.2.4</div>
+<h1>Voice agents for group conversation, running on your own PC.</h1>
 <p class="lede">Give it a voice from a short clip and a personality in plain words. It hears everyone, learns their names, answers when someone talks to it, and stays out of the way when they don't.</p>
 <div class="cta"><a class="btn primary" href="https://github.com/Relic-Studios/atlas/releases/latest">Download for Windows</a><a class="btn" href="https://github.com/Relic-Studios/atlas#install">Linux install</a></div>
 <p class="fine">Free. No account. No hidden API keys. Requires an NVIDIA GPU.</p>
 </div></header>
 
+<section id="demo"><div class="wrap">
+<figure class="demo"><video controls preload="none" playsinline poster="media/atlas-demo-poster.jpg"><source src="media/atlas-demo.mp4" type="video/mp4"></video><figcaption>Unedited one-minute run: two people and an agent called Wren on a local 14B model. The human lines are scripted and spoken by open text-to-speech voices; every agent reply, and every decision to stay quiet, is live.</figcaption></figure>
+<div class="split" style="margin-top:44px;align-items:start"><div><div class="kicker">Built for groups</div><h2>Knows when it's being talked to.</h2>
+<p>Most voice bots answer everything. ATLAS tracks who is speaking, decides whether a line is meant for it, and holds back when it isn't. It learns names from introductions instead of calling people "Speaker 3".</p>
+</div>
+<div><table><tr><th>Situation tests, Qwen3 8B and 14B</th><th></th></tr><tr><td>One-on-one, busy room, side conversations</td><td>pass</td></tr><tr><td>Background chatter and "brb / loading in"</td><td>stays quiet</td></tr><tr><td>Called by name mid-conversation</td><td>answers</td></tr><tr><td>"Repeat after me" bait, corrections, repeats</td><td>pass</td></tr><tr><td>Total, 8 scenes × 2 runs</td><td>208 of 208 on each</td></tr></table><p class="fine">From <code>tests/sim_first_run.py</code> in the repo, on agents made with the built-in creator.</p></div></div>
+</div></section>
+
 <section id="how"><div class="wrap">
 <div class="kicker">How you use it</div>
-<h2>Four steps, the same every time.</h2>
-<p class="lede">ATLAS is built around one loop: set it up once, then make agents, take them into calls, and review what happened.</p>
+<h2>Four steps to your first conversation.</h2>
+<p class="lede">Set it up once, then make agents and talk with them. The app only shows hints until your first conversation.</p>
 <div class="steps">
 <div class="step"><h3>Set up</h3><p>The first-run wizard checks your GPU, installs or finds Ollama, picks a model that fits, or connects your own cloud provider.</p></div>
 <div class="step"><h3>Make an agent</h3><p>Import a voice clip you have the rights to, describe a personality, let ATLAS draft the rest, edit and save.</p></div>
-<div class="step"><h3>Join a call</h3><p>Route your call audio in and the agent's voice out. Mute, quiet mode and a talkativeness slider are one click away.</p></div>
+<div class="step"><h3>Start a conversation</h3><p>Route your room or call audio in and the agent's voice out. Mute, quiet mode and a talkativeness slider are one click away.</p></div>
 <div class="step"><h3>Review</h3><p>After the call: who it talked to, when it held back, what it said. Approve what it should remember. Clear anything you don't want kept.</p></div>
 </div></div></section>
 
-<section><div class="wrap split">
-<div><div class="kicker">Built for groups</div><h2>Knows when it's being talked to.</h2>
-<p>Most voice bots answer everything. ATLAS tracks who is speaking, decides whether a line is meant for it, and holds back when it isn't. It learns names from introductions instead of calling people "Speaker 3".</p>
-<table><tr><th>Measured on Qwen3 14B</th><th></th></tr>
-<tr><td>Interrupted when not addressed</td><td>0 times</td></tr>
-<tr><td>Missed when addressed</td><td>0 times</td></tr>
-<tr><td>Requests completed</td><td>12 of 12</td></tr>
-<tr><td>Replies in its own words</td><td>29 of 30</td></tr></table>
-<p class="fine">From the turn-taking and request benchmarks in the repo. An 8B model also works, with 3 of 12 misses.</p></div>
-<picture><source srcset="img/group.webp" type="image/webp"><img src="img/group.jpg" alt="Several voices meeting at one point above a round table" loading="lazy"></picture>
-</div></section>
+
 
 <section id="memory"><div class="wrap split rev">
 <div><div class="kicker">Memory</div><h2>Remembers what matters. Forgets on request.</h2>
@@ -101,7 +100,7 @@ footer{padding:40px 0;color:var(--mute);font-size:14px;border-top:1px solid var(
 <div class="card"><h3>You approve</h3><p>Review what it proposes to remember after each call.</p></div>
 <div class="card"><h3>Clear anytime</h3><p>Last hour, 12 hours, day, week or everything, per agent.</p></div>
 </div></div>
-<picture><source srcset="img/memory.webp" type="image/webp"><img src="img/memory.jpg" alt="A glowing network of connected points" loading="lazy"></picture>
+<picture><source srcset="img/memory.webp" type="image/webp"><img src="img/memory.jpg" alt="The shape of a real agent memory: rings are topics, dots are moments, teal are the most linked" loading="lazy"></picture>
 </div></section>
 
 <section id="privacy"><div class="wrap split">
@@ -111,7 +110,7 @@ footer{padding:40px 0;color:var(--mute);font-size:14px;border-top:1px solid var(
 <li>The app's server only accepts requests from ATLAS itself, on this computer.</li>
 <li>Release builds are checked for known vulnerabilities and ship SHA-256 checksums.</li>
 <li>Open source, so you can read exactly what it does.</li></ul></div>
-<picture><source srcset="img/local.webp" type="image/webp"><img src="img/local.jpg" alt="A desktop PC inside a glowing protective dome" loading="lazy"></picture>
+<picture><source srcset="img/local.webp" type="image/webp"><img src="img/local.jpg" alt="Listen, remember, think and speak, all inside one circle labelled your PC" loading="lazy"></picture>
 </div></section>
 
 <section id="requirements"><div class="wrap split rev">
@@ -123,11 +122,11 @@ footer{padding:40px 0;color:var(--mute);font-size:14px;border-top:1px solid var(
 <tr><td>OS</td><td>Windows 10/11 or Ubuntu 22.04+. No macOS yet.</td></tr>
 <tr><td>Installer</td><td>Not code-signed yet, so Windows SmartScreen will warn. Checksums are on every release.</td></tr>
 </table></div>
-<picture><source srcset="img/setup.webp" type="image/webp"><img src="img/setup.jpg" alt="Glowing stepping stones leading upward" loading="lazy"></picture>
+<picture><source srcset="img/setup.webp" type="image/webp"><img src="img/setup.jpg" alt="The ATLAS first-run setup wizard" loading="lazy"></picture>
 </div></section>
 
 <section><div class="wrap" style="text-align:center">
-<h2>Try it in your next call.</h2>
+<h2>Try it in your next conversation.</h2>
 <p class="lede" style="margin:0 auto 26px">Free and open source. Bring your own voice, your own personality, your own model.</p>
 <div class="cta" style="justify-content:center"><a class="btn primary" href="https://github.com/Relic-Studios/atlas/releases/latest">Download ATLAS</a><a class="btn" href="https://github.com/Relic-Studios/atlas">Read the code</a><a class="btn" href="https://discord.gg/dWvcu3yG6s">Join the community</a></div>
 <p class="fine">Only use voices you have the rights to.</p>

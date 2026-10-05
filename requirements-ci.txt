@@ -1,0 +1,9 @@
+# Light deps for the public unit-test suite (no GPU, no models).
+numpy
+scipy
+soundfile
+fastapi
+uvicorn
+httpx
+requests
+pydantic

@@ -570,9 +570,27 @@ except Exception:  # noqa: BLE001
 _COMMON_WORD_ZIPF = 5.1
 
 
+# Fallback when wordfreq is unavailable (public test run 10-05: without it,
+# "Did you see what she did?" read as "addressed to Did" and was vetoed).
+# Sentence-initial words that are never a vocative name; failing open here
+# silences real questions, so keep this list conservative but present.
+_COMMON_FALLBACK = frozenset("""
+a an the and but or so if then yes yeah yep no nope ok okay hey hi hello yo
+do does did done can could will would shall should may might must is are was
+were be been am have has had get got go going went come came let lets let's
+what who whom whose why when where which how how's what's who's where's
+i me my we us our you your he she it they them this that these those there
+here now just really actually like well oh ah um uh hmm wait look see
+please thanks thank sorry maybe also anyway though still even only all any
+some every each both not never always don't doesn't didn't can't won't isn't
+""".split())
+
+
 @functools.lru_cache(maxsize=4096)
 def _is_common_word(w: str) -> bool:
-    return bool(_zipf) and _zipf(w, "en") >= _COMMON_WORD_ZIPF
+    if _zipf:
+        return _zipf(w, "en") >= _COMMON_WORD_ZIPF
+    return w in _COMMON_FALLBACK
 
 
 def _looks_like_other_name(word: str, names: tuple[str, ...]) -> bool:
