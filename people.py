@@ -240,7 +240,8 @@ class NameBook:
             # "Hi, Wren. I'm Riley. ..." (demo take 5): a sentence that is only a greeting
             # to the agent carries no intro, so judge the sentence after it.
             g0 = re.match(r"^\W*(?:hey|hi|hello|yo|sup)\W+([A-Za-z]+)\W*$", first, re.I)
-            if g0 and g0[1].lower() in self.agent_names and len(parts) > 1:
+            # A lone greeting sentence never carries an intro, whoever it greets.
+            if g0 and len(parts) > 1:
                 parts = parts[1:]
                 body_rest = " ".join(parts)
                 first = parts[0]

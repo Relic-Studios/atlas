@@ -1978,6 +1978,13 @@ class SpeechPipelineManager:
         self._runtime()  # ensure registry exists
         rt = self.agents.activate(name)
         self.dynamics.agent_names = rt.profile.names
+        # Agents created after startup (e.g. with +) must count as agent names in the
+        # name book too, or 'Hi Wren. I'm Riley.' is misjudged (demo take 10).
+        try:
+            self.people.agent_names |= {display_name(name).lower(), str(name).lower(),
+                                        *(str(n).lower() for n in (rt.profile.names or ()))}
+        except Exception as e:  # noqa: BLE001
+            logger.warning('people.agent_names update failed: %s', e)
         # Swap to the persona's assigned voice (cache-backed hot-swap).
         from voices import PERSONA_VOICES, DEFAULT_VOICE
         _voice = PERSONA_VOICES.get(name, DEFAULT_VOICE)
