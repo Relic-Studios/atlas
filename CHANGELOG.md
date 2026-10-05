@@ -14,6 +14,20 @@ ATLAS is early beta. See [SAFETY.md](SAFETY.md) for what an agent can do, what's
 - "Look!", "check this out" and similar now take a screenshot right away (when Eyes is on).
 - New SAFETY.md.
 
+**Plugins**
+- New Plugins page (header button): every agent ability — web search, Eyes, clock, notes, step back, self-check, languages — is a plugin you can switch off for all agents. Switching one off removes its tool and any automatic use of it.
+- Settings windows per plugin: provider choice, write-only API keys (saved locally, never shown back), and a Test connection button. A marketplace tab previews what's coming.
+
+**Languages**
+- Speech-to-text now detects each speaker's language and transcribes it as spoken instead of forcing English. Shaky guesses are retried in the room's language.
+- Agents answer in the language they were spoken to in, and the voice speaks that language. Tested live on Spanish, German, French, Japanese and English.
+- Languages plugin: auto-detect or a fixed listening language, plus a main language.
+
+**Voice and turn-taking**
+- Fewer mid-sentence cut-offs: short remarks from the person the agent is answering ("I don't know", "guys, I'm hungry") no longer stop it; questions, pushback, its name or "stop" still do. It finishes its line when under 2 seconds remain.
+- Stutter-loop guard: if the voice starts repeating the same sound ("r-r-r-r"), that sentence is stopped.
+- The own-code reader refuses any path outside ATLAS's code.
+
 ## 0.2.4 — better conversations on basic local models
 
 Tested on qwen3 8B (minimum) and 14B (recommended) across eight scripted situations
