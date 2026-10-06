@@ -2,7 +2,7 @@
 
 ATLAS is early beta. See [SAFETY.md](SAFETY.md) for what an agent can do, what's tested and what isn't.
 
-## Unreleased
+## 0.4.1 — no more scraping
 
 - **Web search no longer scrapes from your PC.** The keyless fallbacks (a parallel
   scraper over DuckDuckGo/Brave/Google pages, and local SearXNG) are gone: they could
