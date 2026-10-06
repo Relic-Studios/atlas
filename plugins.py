@@ -210,6 +210,9 @@ BUILTIN: List[dict] = [
             {"key": "listen", "label": "Listen for", "type": "select", "default": "auto",
              "options": [{"value": "auto", "label": "Detect automatically (recommended)"}] + _LANG_OPTIONS,
              "help": "Pick one language only if detection keeps guessing wrong in your room."},
+            {"key": "reply", "label": "Reply language", "type": "select", "default": "ask",
+             "options": [{"value": "ask", "label": "Main language unless asked (recommended)"},
+                         {"value": "follow", "label": "Follow whatever the room speaks"}]},
             {"key": "primary", "label": "Main language", "type": "select", "default": "en",
              "options": list(_LANG_OPTIONS),
              "help": "Used for short or unclear lines and when this plugin is off."},
@@ -519,6 +522,13 @@ def usable(pid: str, state: Optional[dict] = None) -> bool:
     if pid == "web_search" and not _search_ready():
         return False
     return True
+
+
+def off_ids() -> set:
+    """Every plugin id that is switched off or can't run right now. The agent's
+    abilities line uses this, so it never advertises an ability that's off."""
+    st = _load()
+    return {d["id"] for d in BUILTIN if not usable(d["id"], st)}
 
 
 def tool_names_disabled() -> set:

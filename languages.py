@@ -77,6 +77,65 @@ def primary() -> str:
     return v or "en"
 
 
+def follow_room() -> bool:
+    """Owner 10-06: replies stay in the main language unless someone asks for another
+    one. 'follow' (opt-in) restores auto-switching to whatever the room speaks."""
+    v = (os.environ.get("ATLAS_REPLY_LANGUAGE") or "").strip().lower()
+    if not v:
+        on, s = _plugin()
+        v = str(s.get("reply") or "").strip().lower() if on else "ask"
+    return v == "follow"
+
+
+# "speak Spanish", "reply in Japanese", "can you talk in French?", "habla español",
+# "back to English". Matched against NAMES plus a few native spellings.
+_NATIVE = {"español": "es", "espanol": "es", "castellano": "es", "français": "fr",
+           "francais": "fr", "deutsch": "de", "português": "pt", "portugues": "pt",
+           "italiano": "it", "nihongo": "ja", "日本語": "ja", "中文": "zh", "한국어": "ko",
+           "русский": "ru", "mandarin": "zh"}
+
+
+def _lang_words() -> dict:
+    m = {v.lower(): k for k, v in NAMES.items()}
+    m.update(_NATIVE)
+    return m
+
+
+_REQ_VERB = (r"(?:speak|talk|reply|respond|answer|say (?:it|that|this)|switch|change|"
+             r"habla|hablame|háblame|hablar|parle|parlez|sprich|sprechen|fala|parla)")
+
+
+_NOT_ASKING = {"i", "we", "they", "he", "she", "it", "who", "people", "i'd", "i'll", "i'm",
+               "we're", "they're", "gonna", "usually", "always", "often", "never", "can't"}
+
+
+def requested_language(text: str) -> str | None:
+    """Language code someone explicitly asked the agent to use, else None."""
+    t = (text or "").lower()
+    if not t.strip():
+        return None
+    words = _lang_words()
+    alt = "|".join(sorted((re.escape(w) for w in words), key=len, reverse=True))
+    pats = (
+        rf"\b(?:back|go back|switch back|return)\s+to\s+({alt})\b",
+        rf"\b{_REQ_VERB}\b[^.?!]{{0,25}}?\b(?:in|to|into|en|em|auf)\s+({alt})\b",
+        rf"\b{_REQ_VERB}\s+({alt})\b",
+        rf"\b(?:in|en)\s+({alt})\s*,?\s*(?:please|por favor|s'il (?:te|vous) pla[iî]t|bitte)\b",
+    )
+    for rx in pats:
+        for m in re.finditer(rx, t):
+            # "I speak Spanish at home", "do you speak French?" describe, not ask.
+            before = re.findall(r"[a-z']+", t[:m.start()])[-2:]
+            if before and before[-1] in _NOT_ASKING:
+                continue
+            if len(before) == 2 and before[0] in ("do", "does", "did") and before[1] in ("you", "he", "she", "they"):
+                continue
+            return words.get(m.group(1))
+    if re.search(r"\b(?:stop|quit) (?:speaking|talking) (?:in )?(?:" + alt + r")\b", t):
+        return "__back__"
+    return None
+
+
 def name(code: str | None) -> str:
     c = (code or "").lower()
     return NAMES.get(c, c or "English")
@@ -96,8 +155,10 @@ class Room:
     def __init__(self, fallback: str | None = None):
         self._lock = threading.Lock()
         self.fallback = (fallback or primary()).lower()
-        self.code = self.fallback          # language the room is speaking now
-        self.seen_other = False            # any confident non-fallback language this call
+        self.code = self.fallback          # language the agent replies (and is voiced) in
+        self.heard = self.fallback         # last confidently detected language (STT hint)
+        self.seen_other = False            # reply language left the fallback this call
+        self.requested = False             # someone explicitly asked for self.code
         self.last_detect: tuple[str | None, float] = (None, 0.0)
         self.at = 0.0
 
@@ -106,7 +167,7 @@ class Room:
         re-transcribe with (forced), else None."""
         d = (detected or "").lower()
         with self._lock:
-            room = self.code
+            room = self.heard
         if not d or d == room:
             return None
         if prob >= CONFIDENT and units(text) >= MIN_UNITS:
@@ -118,7 +179,19 @@ class Room:
         d = (detected or "").lower()
         with self._lock:
             self.last_detect = (d or None, float(prob or 0.0))
-            if d and prob >= CONFIDENT and units(text) >= MIN_UNITS:
+            confident = bool(d and prob >= CONFIDENT and units(text) >= MIN_UNITS)
+            if confident:
+                self.heard = d
+            req = requested_language(text)
+            if req == "__back__":
+                self.code, self.requested = self.fallback, False
+                self.at = time.time()
+            elif req:
+                self.code, self.requested = req, (req != self.fallback)
+                self.at = time.time()
+                if req != self.fallback:
+                    self.seen_other = True
+            elif confident and not self.requested and follow_room():
                 self.code = d
                 self.at = time.time()
                 if d != self.fallback:
@@ -130,11 +203,20 @@ class Room:
             return self.code
 
     def note(self, speaker: str | None = None) -> str:
-        """Prompt line, or '' when the whole call has been in the fallback language."""
+        """Prompt line, or '' when replies are in the main language."""
         with self._lock:
-            code, other = self.code, self.seen_other
-        if code == self.fallback and not other:
-            return ""
+            code, req, other = self.code, self.requested, self.seen_other
+        if code == self.fallback:
+            if not other:
+                return ""
+            lang = name(code)
+            # Back to the main language after a switch: say so, or the model keeps
+            # answering in the previous language from history.
+            return f"LANGUAGE: reply in {lang} again (the conversation switched back to {lang})."
+        if req:
+            lang = name(code)
+            return (f"LANGUAGE: you were asked to speak {lang}. Reply in {lang} until someone"
+                    f" asks you to switch back.")
         who = speaker or "The person you're answering"
         lang = name(code)
         extra = ""
@@ -157,7 +239,7 @@ _SCRIPTS = [
     ("ru", re.compile(r"[Ѐ-ӿ]")),
 ]
 _STOP = {
-    "en": "the and is you that it to of what i not this with for are",
+    "en": ("the and is you that it to of what i not this with for are a an in on my your we" " he she they was be have do don't it's that's i'm can will just so but if at as" " all one got get like yeah okay sure good"),
     "es": "el la que de y es en los las un una por para no con qué sí pero muy",
     "fr": "le la les de et est un une que pas je vous il elle des du pour avec c'est",
     "de": "der die das und ist nicht ich du ein eine zu mit es wir sie auch was",
@@ -167,23 +249,47 @@ _STOP = {
 _STOPSETS = {k: set(v.split()) for k, v in _STOP.items()}
 
 
+# Live 10-06: "That's a hell of a move." was voiced as Portuguese because the bare
+# word "a" only appeared in the Portuguese list. Switching the voice away from the
+# room's language now needs real evidence: a different script, or a clear lead of
+# several stopwords over the room language.
+SWITCH_MARGIN = 2
+
+
 def guess_text(text: str, hint: str | None = None) -> str:
     """Best-guess Whisper-style code for a reply text (script first, then stopwords)."""
     t = text or ""
     for code, rx in _SCRIPTS:
         if len(rx.findall(t)) >= 2:
             return code
-    words = re.findall(r"[a-zà-ÿ']+", t.lower())
+    h = (hint or "en").lower()
+    words = re.findall(r"[a-z\u00e0-\u00ff']+", t.lower())
     if not words:
-        return (hint or "en").lower()
-    scores = {k: sum(w in s for w in words) for k, s in _STOPSETS.items()}
-    h = (hint or "").lower()
-    if h in scores:
-        scores[h] += 0.5            # ties go to the language the room is speaking
+        return h
+    scores = {k: sum(w in st for w in words) for k, st in _STOPSETS.items()}
     best = max(scores, key=scores.get)
-    return best if scores[best] > 0 else (h or "en")
+    base = scores.get(h, 0)
+    if best != h and scores[best] >= SWITCH_MARGIN and scores[best] - base >= SWITCH_MARGIN:
+        return best
+    return h if h in scores or h in TTS_NAMES else "en"
 
 
 def tts_language(text: str, hint: str | None = None) -> str:
-    """Qwen3-TTS language name for this text ('english' if unsupported)."""
-    return TTS_NAMES.get(guess_text(text, hint), "english")
+    """Qwen3-TTS language name for this text ('english' if unsupported).
+    While the whole call has stayed in the main language, only a different script
+    (kana, hangul, cyrillic, CJK) may change the voice: short English lines share too
+    many little words with Spanish/Portuguese/Italian to guess from."""
+    h = (hint or "en").lower()
+    try:
+        locked = (h == ROOM.fallback)
+    except Exception:  # noqa: BLE001
+        locked = True
+    if locked:
+        # Owner 10-06: stay in the main language until someone asks for another.
+        # Only a different script may change the voice (the main-language voice
+        # can't say kana/hangul/cyrillic anyway); Latin-script guesses are off.
+        for code, rx in _SCRIPTS:
+            if len(rx.findall(text or "")) >= 2:
+                return TTS_NAMES.get(code, "english")
+        return TTS_NAMES.get(h, "english")
+    return TTS_NAMES.get(guess_text(text, h), "english")

@@ -6,8 +6,18 @@ import languages as L
 
 
 class RoomGating(unittest.TestCase):
+    """Auto-follow mode (opt-in since owner 10-06; default replies stay in the main language)."""
     def setUp(self):
+        self._follow = os.environ.get("ATLAS_REPLY_LANGUAGE")
+        os.environ["ATLAS_REPLY_LANGUAGE"] = "follow"   # opt-in auto-follow (default is 'ask')
+        self.addCleanup(self._restore_follow)
         self.r = L.Room(fallback="en")
+
+    def _restore_follow(self):
+        if self._follow is None:
+            os.environ.pop("ATLAS_REPLY_LANGUAGE", None)
+        else:
+            os.environ["ATLAS_REPLY_LANGUAGE"] = self._follow
 
     def test_confident_switch(self):
         self.assertEqual(self.r.observe("es", 0.97, "¿Qué juego vamos a jugar hoy?"), "es")
@@ -49,9 +59,12 @@ class TextLanguage(unittest.TestCase):
         self.assertEqual(L.tts_language("Привет, как дела"), "russian")
 
     def test_latin_stopwords(self):
-        self.assertEqual(L.tts_language("Creo que es mejor jugar en equipo, pero no sé."), "spanish")
-        self.assertEqual(L.tts_language("Je pense que c'est pas mal pour ce soir."), "french")
-        self.assertEqual(L.tts_language("Ich glaube, das ist nicht so schlimm."), "german")
+        # Once the agent is replying in another language (asked or follow mode).
+        self.assertEqual(L.tts_language("Creo que es mejor jugar en equipo, pero no sé.", "es"), "spanish")
+        self.assertEqual(L.tts_language("Je pense que c'est pas mal pour ce soir.", "fr"), "french")
+        self.assertEqual(L.tts_language("Ich glaube, das ist nicht so schlimm.", "de"), "german")
+        # Main language: Latin-script guesses never move the voice.
+        self.assertEqual(L.tts_language("Creo que es mejor jugar en equipo, pero no sé.", "en"), "english")
         self.assertEqual(L.tts_language("I think that is the right call."), "english")
 
     def test_hint_breaks_ties_and_unsupported_falls_back(self):
@@ -79,12 +92,18 @@ class RetryWrapper(unittest.TestCase):
         self._room = L.ROOM
         L.ROOM = L.Room(fallback="en")
         os.environ["ATLAS_STT_LANGUAGE"] = "auto"
+        self._follow = os.environ.get("ATLAS_REPLY_LANGUAGE")
+        os.environ["ATLAS_REPLY_LANGUAGE"] = "follow"
         import transcribe
         self.T = transcribe
 
     def tearDown(self):
         L.ROOM = self._room
         os.environ.pop("ATLAS_STT_LANGUAGE", None)
+        if self._follow is None:
+            os.environ.pop("ATLAS_REPLY_LANGUAGE", None)
+        else:
+            os.environ["ATLAS_REPLY_LANGUAGE"] = self._follow
 
     def test_shaky_detection_retried_in_room_language(self):
         rec = self._rec([("Ja.", "cy", 0.35), ("Yeah.", "en", 0.99)])

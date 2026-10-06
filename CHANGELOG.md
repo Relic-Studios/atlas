@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+**Fixes**
+- Replies and the voice stay in the main language (English by default). Another language is only used after someone asks for it ("reply in Spanish", "speak Japanese please"), and "go back to English" switches back. Fixes English replies being pronounced as Portuguese or other languages after a misdetected line.
+- Agents no longer claim abilities from plugins that are switched off (e.g. "checking Steam sales" with Game info off).
+
 ATLAS is early beta. See [SAFETY.md](SAFETY.md) for what an agent can do, what's tested and what isn't.
 
 ## 0.4.1 — no more scraping
