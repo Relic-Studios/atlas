@@ -104,6 +104,7 @@ class Diarizer:
         self.max_idle_seconds = max_idle_seconds
         self.decay_half_life_seconds = decay_half_life_seconds
         self.device = device
+        self.last_embedding = None   # voiceprint of the last processed turn (dev logging)
 
         self._profiles: list[SpeakerProfile] = []
         # Monotonic label counter: S{len+1} reused a live label after a profile
@@ -111,6 +112,7 @@ class Diarizer:
         self._next_label = 1
         self._pending: list = []          # (embedding, seconds, time) not yet a voice
         self._aliases: dict = {}          # merged label -> surviving label
+        self._merges: list = []           # (dropped, kept) not yet reported
         self._lock = threading.Lock()
         self._embedder = None
         self._self_embedding: np.ndarray | None = None
@@ -187,6 +189,13 @@ class Diarizer:
     def _match_threshold(self, p: "SpeakerProfile") -> float:
         return self.MATCH_MATURE if p.sentence_count >= 3 else self.MATCH_YOUNG
 
+    def drain_merges(self) -> list:
+        """(old_label, surviving_label) pairs since the last call, so a name
+        learned for a split-off label follows it into the merged person."""
+        with self._lock:
+            out, self._merges = self._merges, []
+        return out
+
     def _resolve(self, label):
         seen = set()
         while label in self._aliases and label not in seen:
@@ -211,6 +220,7 @@ class Diarizer:
                     keep.speech_seconds += drop.speech_seconds
                     keep.last_seen_at = max(keep.last_seen_at, drop.last_seen_at)
                     self._aliases[drop.label] = keep.label
+                    self._merges.append((drop.label, keep.label))
                     self._profiles.remove(drop)
                     merged = True
                     break
@@ -238,6 +248,7 @@ class Diarizer:
         each becoming S44, S45, ...
         """
         embedding = _normalize(self._embed(audio, sample_rate))
+        self.last_embedding = embedding
         duration = float(len(audio)) / float(sample_rate)
         now = time.time()
 
