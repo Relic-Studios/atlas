@@ -127,6 +127,7 @@ class NameBook:
         self.voice_lookup = None                # label -> centroid (np.ndarray) | None
         self.store = Path(store) if store else None
         self._prints: dict[str, list[float]] = {}
+        self.aliases: dict[str, str] = {}       # diarizer folded label -> surviving label
         self._lock = threading.Lock()
         self._load()
 
@@ -179,6 +180,31 @@ class NameBook:
         with self._lock:
             self.people.clear()
             self.heard.clear()
+            self.aliases.clear()
+
+    def merge(self, old: str, new: str) -> None:
+        """The diarizer decided `old` was a fragment of `new` (one person split in
+        two). A name learned on either side survives on `new`."""
+        if not old or not new or old == new:
+            return
+        with self._lock:
+            self.aliases[old] = new
+            o = self.people.pop(old, None)
+            if o is None or not o.name:
+                return
+            n = self.people.get(new)
+            if n is None:
+                n = self.people[new] = Person(new)
+            if not n.name:
+                n.name, n.source = o.name, o.source
+                logger.info("👤 %s folded into %s: still %s", old, new, o.name)
+
+    def _resolve(self, label):
+        seen = set()
+        while label in self.aliases and label not in seen:
+            seen.add(label)
+            label = self.aliases[label]
+        return label
 
     def _person(self, label: str) -> Person:
         p = self.people.get(label)
@@ -315,7 +341,7 @@ class NameBook:
 
     # ------------------------------------------------------------ reading
     def name_of(self, label: str | None) -> str | None:
-        p = self.people.get(label or "")
+        p = self.people.get(self._resolve(label or ""))
         return p.name if p else None
 
     def display(self, label: str | None) -> str:

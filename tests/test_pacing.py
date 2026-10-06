@@ -183,3 +183,38 @@ class Audio(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ThreadSurvivesPacing(unittest.TestCase):
+    """Live 10-06 (pyramids): over its share, the agent answered its name once and
+    then held every follow-up ('what was it used for?', 'give us a Graham Hancock
+    take') -- conversation threads died after the first mention."""
+
+    def setUp(self):
+        self.f, self.c = room(agent_words_per_turn=60)
+        self.assertEqual(self.f.pacing.tier(0.35), "hard")
+        self.names = ("Max",)
+
+    def gate(self, spk, text):
+        return self.f.pacing_gate(f"[{spk}] {text}", spk, self.names)
+
+    def test_named_then_followups_from_room_pass(self):
+        self.c.t += 30
+        self.assertIsNone(self.gate("S1", "Hey Max, can you talk about the pyramids?"))
+        self.c.t += 3
+        self.f.on_agent_spoke("S1", "The Giza pyramids were built around 2500 BC.")
+        self.c.t += 8
+        self.assertIsNone(self.gate("S3", "But like, what was it used for?"))
+        self.c.t += 40   # thread gone quiet, but S1 called it by name < 90 s ago
+        self.assertIsNone(self.gate("S1", "Yeah, give us like a Graham Hancock representation."))
+
+    def test_unrelated_chatter_still_held(self):
+        self.c.t += 120
+        self.assertIsNotNone(self.gate("S3", "Like the nitrate that the pyramid use would spray."))
+        self.assertIsNotNone(self.gate("S2", "Here is some sheep."))
+
+    def test_engagement_expires(self):
+        self.c.t += 30
+        self.gate("S1", "Max, quick one.")
+        self.c.t += 200
+        self.assertIsNotNone(self.gate("S1", "anyway the map is huge."))

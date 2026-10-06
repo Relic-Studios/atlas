@@ -1166,6 +1166,22 @@ async def send_tts_chunks(app: FastAPI, message_queue: asyncio.Queue, callbacks:
 # --------------------------------------------------------------------
 # Callback class to handle transcription events
 # --------------------------------------------------------------------
+
+def reply_in_flight(gen, bridge=None) -> bool:
+    """True once a reply is committed to audio (allowed to play, quick answer out,
+    or the call bridge is speaking). Only barge-in may stop those (live 10-06)."""
+    try:
+        if getattr(gen, "quick_answer_provided", False):
+            return True
+        ev = getattr(gen, "tts_quick_allowed_event", None)
+        if ev is not None and ev.is_set():
+            return True
+        if bridge is not None and bridge.is_speaking():
+            return True
+    except Exception:  # noqa: BLE001
+        return False
+    return False
+
 class TranscriptionCallbacks:
     """
     Manages state and callbacks for a single WebSocket connection's transcription lifecycle.
@@ -1420,7 +1436,12 @@ class TranscriptionCallbacks:
             logger.info(f"🖥️🤫 HOLD ({veto}): '{txt[:60]}'")
             # An earlier, shorter partial may already have started a generation
             # ("Can you pass the salt" before ", Jordan?"). Retire it.
-            if mgr.running_generation is not None:
+            # Only an UNSPOKEN draft is retired. A reply already committed to
+            # audio belongs to an earlier turn: a "Yeah." / side remark over it
+            # must not cut it off (live 10-06: 'Yeah.' -> HOLD(acknowledgement)
+            # aborted Max mid-sentence; barge-in had already said talk over).
+            run = mgr.running_generation
+            if run is not None and not reply_in_flight(run, getattr(getattr(getattr(self, "app", None), "state", None), "CallBridge", None)):
                 mgr.abort_generation(wait_for_completion=False, reason=f"pre_llm_veto: {veto}")
             return
         # Fast-VAD guards (floor.py, pure text): laughter/filler never costs an
@@ -1568,6 +1589,18 @@ class TranscriptionCallbacks:
         ov = self._agent_audible(audio)
         if ov is not None:
             rec["agent_audible"] = ov
+        # Dev builds only: the turn's voiceprint, so diarization can be replayed
+        # and tuned on real calls (biometric -> never in public recordings).
+        try:
+            import user_settings as _us
+            if not _us.is_public() and os.environ.get("ATLAS_LOG_VOICEPRINTS", "1") != "0":
+                bridge = getattr(self.app.state, "CallBridge", None)
+                dz = getattr(self.app.state, "Diarizer", None) or getattr(bridge, "diarizer", None)
+                vp = getattr(dz, "last_embedding", None)
+                if vp is not None:
+                    rec["vp"] = [round(float(x), 4) for x in vp]
+        except Exception:  # noqa: BLE001
+            pass
         _rec_event("pace", **rec)
 
     def _tag_speaker(self, audio) -> str | None:
@@ -1583,7 +1616,17 @@ class TranscriptionCallbacks:
             # audio arrives as a float32 mono array at 16 kHz (see transcribe.py)
             aud = self._agent_audible(audio)
             kw = {} if aud is None else {"agent_audible": aud}
-            return diarizer.process(audio, 16000, **kw).speaker
+            spk = diarizer.process(audio, 16000, **kw).speaker
+            try:   # fragments folded into a person keep any name learned for them
+                merges = diarizer.drain_merges() if hasattr(diarizer, "drain_merges") else []
+                if merges:
+                    book = self.app.state.SpeechPipelineManager.people
+                    for old, new in merges:
+                        book.merge(old, new)
+                        logger.info(f"🖥️👥 {old} folded into {new}")
+            except Exception as e:  # noqa: BLE001
+                logger.debug(f"merge carry-over skipped: {e}")
+            return spk
         except Exception as e:  # noqa: BLE001
             logger.warning(f"🖥️⚠️ diarization skipped: {e}")
             return None
@@ -1736,6 +1779,9 @@ class TranscriptionCallbacks:
         self.held_fragment = final
         return True
 
+    def _reply_in_flight(self, gen) -> bool:
+        return reply_in_flight(gen, getattr(getattr(getattr(self, "app", None), "state", None), "CallBridge", None))
+
     MONOLOGUE_S = float(os.environ.get("ATLAS_MONOLOGUE_S", "6.0"))
 
     def _monologue_hold(self, txt: str, speaker) -> bool:
@@ -1753,7 +1799,7 @@ class TranscriptionCallbacks:
             self._draft_t = now  # rolling: stay held for the whole monologue
             run = getattr(mgr, "running_generation", None)
             if (run is not None and not getattr(run, "abortion_started", False)
-                    and not getattr(run, "quick_answer_provided", False)):
+                    and not reply_in_flight(run, getattr(getattr(getattr(self, "app", None), "state", None), "CallBridge", None))):
                 mgr.abort_generation(wait_for_completion=False, reason="monologue: answer at turn end")
             logger.info(f"🖥️🎙️ monologue: holding draft until turn end: '{txt[-50:]}'")
             return True

@@ -283,6 +283,11 @@ class ConversationFloor:
     _ASK = re.compile(r"\?|^\s*(?:what|who|whom|whose|why|how|when|where|which|can|could|"
                       r"would|will|do|does|did|is|are|was|were|should|have|has|any)\b", re.I)
     _TO_YOU = re.compile(r"\b(?:you|your|you're|ya|u)\b", re.I)
+    _REQUEST = re.compile(r"\b(?:give\s+(?:us|me)|tell\s+(?:us|me)|talk\s+about|explain|"
+                          r"go\s+on|keep\s+going|more\s+about|what\s+about|"
+                          r"(?:from|take\s+it\s+from)\s+.{0,30}point\s+of\s+view)\b", re.I)
+    THREAD_WINDOW_S = 25.0
+    ENGAGED_WINDOW_S = 90.0
 
     def talkativeness(self) -> float:
         try:
@@ -292,13 +297,29 @@ class ConversationFloor:
 
     def pacing_gate(self, text: str, speaker: str | None,
                     names: tuple[str, ...]) -> str | None:
-        if names_agent(text, names) or self._answers_agent(speaker):
+        now = self.clock()
+        eng = self.__dict__.setdefault("_engaged", {})
+        if names_agent(text, names):
+            if speaker:
+                eng[speaker] = now
+            return None
+        if self._answers_agent(speaker):
             return None
         tier = self.pacing.tier(self.talkativeness())
         if tier == "ok":
             return None
         body = strip_label(text)
         asks = bool(self._ASK.search(body))
+        # Live 10-06 (pyramids): pacing must cut volunteering, never a live thread.
+        # A question/request right after the agent spoke (from anyone), or any
+        # line from someone who called the agent by name in the last 90 s,
+        # continues the conversation the room started with it.
+        req = asks or bool(self._REQUEST.search(body))
+        if req and (now - self.last_agent_at) <= self.THREAD_WINDOW_S:
+            return None
+        if speaker and (now - eng.get(speaker, -1e9)) <= self.ENGAGED_WINDOW_S \
+                and not filler_only(body):
+            return None
         partner = bool(speaker) and speaker == self.active_partner()
         to_you = asks and bool(self._TO_YOU.search(body))
         if tier == "soft":
