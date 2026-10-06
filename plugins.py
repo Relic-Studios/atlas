@@ -278,6 +278,19 @@ BUILTIN: List[dict] = [
         "settings": [],
     },
     {
+        "id": "floor_referee", "name": "Floor referee", "icon": "scale", "category": "Room",
+        "summary": "For debates and meetings: talk-time balance, timeboxed topics, fair two-sided summaries.",
+        "detail": "Uses only this session's in-memory transcript. 'Who's been talking most?', 'give us 5 "
+                  "minutes on the budget', 'sum up both sides'. With the quiet-person hint on, the agent may "
+                  "invite someone who's gone quiet into the talk, but only when it's already answering. "
+                  "Off by default: it changes how the agent steers a conversation.",
+        "tools": ["floor_stats", "start_topic", "debate_sides"], "default": False,
+        "settings": [
+            {"key": "invite_quiet", "label": "Hint the agent when someone goes quiet", "type": "select",
+             "default": "on", "options": [{"value": "on", "label": "On"}, {"value": "off", "label": "Off"}]},
+        ],
+    },
+    {
         "id": "game_info", "name": "Game info", "icon": "game", "category": "Games",
         "summary": "'Is it on sale?' 'How many people are playing?' Live Steam prices and player counts.",
         "detail": "Uses Steam's public store and player-count endpoints: free, no account, no key. "

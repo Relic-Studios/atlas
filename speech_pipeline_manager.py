@@ -1224,8 +1224,20 @@ class SpeechPipelineManager:
         m = re.match(r'^\s*\[(S\d+)\]', txt or '')
         try:
             prof = self.agent.profile
-            return steering_note(txt, m[1] if m else None, self.floor,
+            note = steering_note(txt, m[1] if m else None, self.floor,
                                  prof.names, vibe=self.vibe_enabled, profile=prof)
+            try:
+                import plugins as _plugins
+                if _plugins.is_enabled("floor_referee") and \
+                        (_plugins.settings_of("floor_referee") or {}).get("invite_quiet", "on") == "on":
+                    import floor_referee as _fr
+                    qn = _fr.quiet_note(m[1] if m else None,
+                                        getattr(getattr(self, "people", None), "name_of", None))
+                    if qn:
+                        note = (note + "\n" + qn).strip() if note else qn
+            except Exception as e:  # noqa: BLE001
+                logger.debug("floor referee note failed: %s", e)
+            return note
         except Exception as e:  # noqa: BLE001 - steering must never block a turn
             logger.warning("room context failed: %s", e)
             return ""

@@ -474,6 +474,13 @@ def intent(text: str, poll_open: Optional[bool] = None):
     if bt:
         return bt
     try:
+        import floor_referee as _fr
+        fr = _fr.intent(t)
+    except Exception:  # noqa: BLE001
+        fr = None
+    if fr:
+        return fr
+    try:
         import game_info as _gi
         gi = _gi.intent(t)
     except Exception:  # noqa: BLE001
@@ -583,6 +590,18 @@ TOOLS_BY_PLUGIN: Dict[str, List[dict]] = {
                            "description": "push/void; or won/lost from the bettor's side"},
                "note": {"type": "string", "description": "e.g. the final score"}}),
     ],
+    "floor_referee": [
+        _tool("floor_stats", "Who has talked how much in the last N minutes (humans only). Use when asked "
+              "who's been talking most, who hasn't spoken, or 'am I talking too much'.",
+              {"minutes": {"type": "number", "description": "window, default 15"}}),
+        _tool("start_topic", "Timebox a topic ('give us 5 minutes on the budget'). Time's-up is called "
+              "at the next gap on its own.",
+              {"topic": {"type": "string"}, "minutes": {"type": "number"}}, ["topic", "minutes"]),
+        _tool("debate_sides", "Get the real lines grouped by person so you can sum up each side fairly. "
+              "Use when asked to summarise both sides / everyone's positions.",
+              {"topic": {"type": "string", "description": "optional topic words to focus on"},
+               "minutes": {"type": "number", "description": "window, default 15"}}),
+    ],
     "game_info": [
         _tool("game_info", "Live Steam info for a game: price, whether it's on sale, how many people are "
               "playing right now, release date. Never guess these numbers.",
@@ -646,6 +665,14 @@ def execute(name: str, args: dict, asker: str = "", voter_name: str = "",
         return bets.record_bet(str(a.get("claim") or ""), str(a.get("who") or "") or voter_name or "",
                                str(a.get("against") or ""), str(a.get("stakes") or ""),
                                str(a.get("settle_by") or a.get("when") or ""))
+    if name in ("floor_stats", "start_topic", "debate_sides"):
+        import floor_referee as fr
+        mins = a.get("minutes")
+        if name == "floor_stats":
+            return fr.floor_stats(mins or fr.DEFAULT_MIN, name_of=name_of)
+        if name == "debate_sides":
+            return fr.debate_sides(mins or fr.DEFAULT_MIN, str(a.get("topic") or ""), name_of=name_of)
+        return fr.start_topic(str(a.get("topic") or ""), mins if mins is not None else 5, asker)
     if name == "game_info":
         import game_info
         s = settings("game_info") or {}

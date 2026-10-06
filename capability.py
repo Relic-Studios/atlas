@@ -136,6 +136,8 @@ def abilities_note(eyes_on: bool, search_on: bool = True, persona: str = "", off
         can.append("recap what was said in this call (from the real transcript, never from memory alone)")
     if "voice_mail" not in off:
         can.append("take messages for people who aren't here and pass them on when you next hear their voice")
+    if "floor_referee" not in off:
+        can.append("referee a debate or meeting: who's talked most, timebox a topic, sum up each side fairly")
     if "bets" not in off:
         can.append("log friendly bets and bring them up when they can be settled (never deciding the winner yourself)")
     if "game_info" not in off:
