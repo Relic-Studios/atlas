@@ -2,6 +2,37 @@
 
 ATLAS is early beta. See [SAFETY.md](SAFETY.md) for what an agent can do, what's tested and what isn't.
 
+## 0.4.0 — plugins for group calls (unreleased)
+
+Fifteen new plugins, each with its own switch and settings on the Plugins page. Each was
+tested live with two different agents on a 14B-class model: every result came
+from the real tool, and small talk didn't trigger any of them.
+
+- **Dice, coins & polls** — "roll a d20", "settle it with a coin flip", "quick vote: pizza or tacos?" (one vote per person, counted even without the agent's name).
+- **Timers & reminders** — "remind us in 10 minutes to start the raid"; announced at the next pause.
+- **Weather** — Open-Meteo, free, no key; °F in the US.
+- **Game info** — Steam price, sale and live player count.
+- **Call summary** — "what did we decide?" recaps from the real transcript of this session.
+- **Voice mail** — "tell Riley the raid moved to 9"; delivered when Riley's voice is next heard.
+- **Bet tracker** — logs bets with stakes, brings them up when due, settles from "I won the bet".
+- **Teach-me mode** — teach an agent a house rule; it uses it in later calls, per agent.
+- **Lore keeper** — the group's running jokes and stories, owner-approved, brought back when relevant.
+- **Room-energy sense** — reads hype/tense/heavy from the conversation and adjusts tone only.
+- **Floor referee** (off by default) — talk time, timeboxed topics, fair two-sided summaries.
+- **Quiet fact-check** (off by default) — checks claims in the background; speaks only when asked "was that true?".
+- **Soul reflection** (off by default) — after a call the agent proposes up to three notes on how it wants to talk differently; you approve or reject each.
+- **Highlight reel** (off by default) — captioned vertical clips of the best moments; opted-in speakers only.
+- **Live translate** (off by default) — "what did she say?" for lines in another language.
+
+**Background mode**
+- Click the active agent's icon to put it in background mode (moon badge). It only answers when you say its name, then keeps answering follow-ups to that person for a few turns without the name, and goes quiet again. Click again for normal conversation.
+
+**Fixes**
+- Installer is 2.8 MB again (was 10.4 MB): website and marketing media are no longer bundled.
+- Quoted speech in a translation is no longer cut by the "don't invent a life" guard.
+- Notes from plugins no longer vanish if the turn-taking step fails.
+- Tests never touch your real plugin settings.
+
 ## 0.3.0 — agents can check themselves
 
 - New for every agent: **a prediction log.** An agent can write down a prediction ("Sam will pick co-op"), check it later and mark it right or wrong. Private to each agent, wiped with its memory.

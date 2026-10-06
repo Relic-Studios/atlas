@@ -72,8 +72,8 @@ function renderDock() {
       d.style.setProperty('--pc', p.accent); d.textContent = initial(p);
       d.setAttribute('aria-label', p.name);
       if (p.custom) { const c = document.createElement('i'); c.className = 'cu'; d.appendChild(c); }
-      d.onclick = () => setPersona(p.id);
-      d.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setPersona(p.id); } };
+      d.onclick = () => avClick(p);
+      d.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); avClick(p); } };
       d.onmouseenter = () => showTip(d, p); d.onmouseleave = hideTip; d.onfocus = () => showTip(d, p); d.onblur = hideTip;
       d.oncontextmenu = (e) => { e.preventDefault(); hideTip(); openMemory(p); };
       box.appendChild(d);
@@ -89,11 +89,25 @@ function renderDock() {
     el.classList.toggle('active', id === S.persona);
     el.classList.toggle('switching', S.switching === id);
     el.classList.toggle('speaking', id === S.persona && !!S.fast.speaking);
+    el.classList.toggle('bg', isBackground(id));
   }
+}
+// Background mode (owner 10-06): click the ACTIVE agent to toggle it. The agent then
+// only answers when spoken to; its name opens a short direct exchange.
+const isBackground = (id) => ((S.snap?.owner?.background) || []).includes(id);
+async function avClick(p) {
+  if (p.id !== S.persona) return setPersona(p.id);
+  const on = !isBackground(p.id);
+  const st = await ownerPost({ background: { agent: p.id, on } });
+  if (!st) return toast('could not change background mode');
+  renderDock(); hideTip();
+  toast(on ? `${(p.name || p.id).toUpperCase()} · background mode — answers only when spoken to`
+           : `${(p.name || p.id).toUpperCase()} · conversation mode`, p.accent);
 }
 function showTip(el, p) {
   const t = $('avTip'); const r = el.getBoundingClientRect();
-  const st = p.id ? (S.switching === p.id ? 'switching…' : p.id === S.persona ? (S.fast.speaking ? 'speaking' : 'active') : 'click to switch') : '';
+  const bgm = p.id && isBackground(p.id);
+  const st = p.id ? (S.switching === p.id ? 'switching…' : p.id === S.persona ? (S.fast.speaking ? 'speaking' : (bgm ? 'background mode · click for conversation' : 'active · click for background mode')) : (bgm ? 'click to switch · background' : 'click to switch')) : '';
   t.innerHTML = `<div class="n" style="color:${esc(p.accent || 'var(--accent)')}">${esc((p.name || '').toUpperCase())}</div>`
     + `<div class="r">${esc(p.role || '')}</div>`
     + (p.voice || st ? `<div class="m">${p.voice ? 'voice · ' + esc(p.voice) : ''}${p.voice && st ? ' — ' : ''}${esc(st)}${p.id ? ' · right-click: memory' : ''}</div>` : '');
@@ -850,7 +864,7 @@ async function loadBrain() {
 // ---- Owner controls: hard mute, quiet mode, talkativeness, muted speakers ----
 async function ownerPost(body) {
   try { const r = await fetch('/api/owner', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-        const st = await r.json(); if (S.snap) S.snap.owner = st; renderOwner(st); return st; } catch (_) { return null; }
+        const st = await r.json(); S.snap = S.snap || {}; S.snap.owner = st; renderOwner(st); renderDock(); return st; } catch (_) { return null; }
 }
 function renderOwner(o) {
   if (!o) return;
@@ -875,7 +889,7 @@ function renderOwner(o) {
     const lab = b.getAttribute('data-mute');
     ownerPost(b.classList.contains('on') ? { unmute_speaker: lab } : { mute_speaker: lab });
   });
-  fetch('/api/owner').then((r) => r.json()).then(renderOwner).catch(() => {});
+  fetch('/api/owner').then((r) => r.json()).then((o) => { S.snap = S.snap || {}; S.snap.owner = S.snap.owner || o; renderOwner(o); renderDock(); }).catch(() => {});
 })();
 (function wireEyes() {
   const el = $('pEyes'); if (!el) return;

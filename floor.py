@@ -173,6 +173,7 @@ class ConversationFloor:
         self.last_agent_at = 0.0         # agent's last spoken reply
         self.side = None                 # (asker, addressee_label|None, t): human->human question
         self.asked = None                # (target, t): the agent's last reply ended in a question
+        self.direct = None               # background mode: [speaker, follow-ups left, last t]
 
     def reset(self) -> None:
         self.partner, self.partner_at, self.recent = None, 0.0, {}
@@ -183,6 +184,7 @@ class ConversationFloor:
         self.last_agent_at = 0.0
         self.side = None
         self.asked = None
+        self.direct = None
 
     def _log_turn(self, who: str) -> None:
         self.turn_log.append((who, self.clock()))
@@ -250,11 +252,55 @@ class ConversationFloor:
                 self.release_quiet()
             else:
                 return "quiet mode"
+        bg = self.background_gate(text, speaker, names, veto)
+        if bg is not None:
+            return bg or None
         if veto:
             if veto.startswith("addressed to") and speaker:
                 self.side = (speaker, None, self.clock())
             return veto
         return self.passive_gate(text, speaker, names)
+
+    # --- background mode (owner 10-06) ----------------------------------------
+    # The agent is a quiet helper: it answers only when spoken to. Saying its name
+    # opens a direct exchange with THAT person; their next few lines (no name
+    # needed) stay with the agent while the exchange is warm, then it drops back.
+    DIRECT_FOLLOWUPS = 3
+    DIRECT_WINDOW_S = 30.0
+
+    def background_active(self) -> bool:
+        import owner_controls as _owner
+        pid = getattr(self.profile, "id", None)
+        return _owner.background_on(pid)
+
+    def background_gate(self, text, speaker, names, veto):
+        """None = background mode is off (normal gating). "" = let this line
+        through (bypassing the passive heuristics). Otherwise a HOLD reason."""
+        if not self.background_active():
+            self.direct = None
+            return None
+        now = self.clock()
+        if names_agent(text, names):
+            self.direct = [speaker, self.DIRECT_FOLLOWUPS, now]
+            return veto or ""
+        d = self.direct
+        if d and speaker and d[0] != speaker and not filler_only(text):
+            # Someone else jumped in ("lol Riley you always ask that"): the room has
+            # the floor again, so the next line needs the name (live sim 10-06).
+            self.direct = d = None
+        if d and speaker and d[0] == speaker and d[1] > 0 and now - d[2] <= self.DIRECT_WINDOW_S:
+            if veto and veto.startswith("addressed to"):
+                self.direct = None          # they turned to someone else
+                return veto
+            if ack_only(text) or _thanks_only(text, names) or status_only(text, names):
+                self.direct = None          # "ok thanks" closes the exchange
+                return "background mode (exchange closed)"
+            d[1] -= 1
+            d[2] = now
+            return veto or ""
+        if d and (now - d[2] > self.DIRECT_WINDOW_S or d[1] <= 0):
+            self.direct = None
+        return "background mode"
 
     # --- passivity: structural holds the model reliably ignored in sims ------
     SIDE_TTL_S = 15.0
@@ -324,6 +370,8 @@ class ConversationFloor:
         self._log_turn('a')
         self.last_agent_at = self.clock()
         self.asked = (target, self.last_agent_at) if (text or "").rstrip().endswith("?") else None
+        if self.direct and target == self.direct[0]:
+            self.direct[2] = self.last_agent_at   # the window runs from her last reply
         if target and target not in ("user", "self"):
             self.partner, self.partner_at = target, self.clock()
 
@@ -470,9 +518,22 @@ def steering_note(text: str, current: str | None, floor: ConversationFloor,
         if vibe:
             parts.append(VIBE)
         return "\n".join(parts)
-    note = floor.room_note(current, text, names, profile=profile)
-    if note:
-        parts.append(note)
+    bg = False
+    try:
+        bg = floor.background_active()
+    except Exception:  # noqa: BLE001
+        pass
+    d = floor.direct if bg else None
+    if bg and d and current and d[0] == current and not names_agent(text, names):
+        parts.append(f"BACKGROUND MODE: {current} is still talking to you (they called you a "
+                     "moment ago), so this line is for you: answer it briefly and helpfully.")
+    else:
+        note = floor.room_note(current, text, names, profile=profile)
+        if note:
+            parts.append(note)
+    if bg:
+        parts.append("You're a quiet background helper right now: answer what you were asked, "
+                     "short and useful. No small talk, no follow-up questions unless you need one.")
     said, total = floor.talk_share()
     limit = profile.floor_share_limit() if profile is not None else 0.5
     if total >= 6 and said >= limit * total and not names_agent(text, names):
@@ -827,6 +888,24 @@ def status_only(text: str, names: tuple[str, ...] = ()) -> bool:
 _ACK = {"ok", "okay", "k", "kk", "cool", "alright", "nice", "sure", "yeah", "yep", "yup",
         "ya", "yea", "got", "it", "gotcha", "sounds", "good", "bet", "word", "true", "fair",
         "right", "perfect", "great", "back", "same", "facts", "ight", "aight", "fine", "noted"}
+
+
+_THANKS = {"thanks", "thank", "you", "ty", "thx", "tysm", "cheers", "appreciate", "it",
+           "much", "so", "very", "awesome", "perfect", "great", "cool", "ok", "okay",
+           "nice", "got", "gotcha", "that's", "thats", "all", "i", "needed", "bye", "later"}
+
+
+def _thanks_only(text: str, names: tuple = ()) -> bool:
+    """'ok thanks Fae' / 'cool, that's all I needed': closes a background exchange."""
+    body = strip_label(text).strip()
+    if not body or "?" in body:
+        return False
+    w = [t for t in re.sub(r"[^a-z' ]+", " ", body.lower()).split() if t not in names]
+    if not w or len(w) > 6:
+        return False
+    return all(t in _THANKS for t in w) and any(t in ("thanks", "thank", "ty", "thx", "tysm",
+                                                       "cheers", "appreciate", "needed", "bye")
+                                                 for t in w)
 
 
 def ack_only(text: str) -> bool:

@@ -8,7 +8,9 @@ What an agent *says* matters less than what it can *do*. So this page starts wit
 
 ## What an agent can do
 
-An agent has exactly six tools. New tools are not added without review.
+Every ability is a plugin on the **Plugins** page and can be switched off for all agents;
+switching one off removes its tools and any automatic use of it. New tools are not added
+without review. The core tools:
 
 | Tool | What it does | How it's limited |
 |---|---|---|
@@ -18,6 +20,26 @@ An agent has exactly six tools. New tools are not added without review.
 | `make_prediction` | Writes down a prediction the agent can check later ("Sam will pick co-op") | Stored only in that agent's own memory folder (`agent_state/memory/<agent>/predictions.json`), never shared with other agents. The privacy filter applies (no phone numbers, emails, addresses or keys). At most 20 open predictions; older ones expire. Cleared by the per-agent memory wipe. |
 | `check_predictions` | Lists the agent's open predictions and marks them right or wrong | Same folder, same limits. |
 | `read_own_code` | Lets the agent read the ATLAS source that runs it, so it can check its own claims about how it works | **Read-only.** Only code and docs in the app folder (`.py`, `.js`, `.md`, …), plus that agent's own persona file. It can never read `private/`, `user/`, memory, recordings, voices, logs, other agents' personas, or any file whose name contains key/token/secret/password. Results are capped small. There is no tool to write or run code. |
+
+### Plugin tools (0.4.0)
+
+| Plugin | Default | What leaves your PC | Stored on your PC |
+|---|---|---|---|
+| Dice, coins & polls | on | nothing | nothing (polls live in memory) |
+| Timers & reminders | on | nothing | timers until they fire (stale ones dropped after 15 min) |
+| Weather | on | the place name, to Open-Meteo (free, no key) | nothing |
+| Game info | on | the game name, to Steam's public store API | nothing |
+| Call summary | on | nothing (recap goes to your chosen model) | nothing; this session's transcript in memory only |
+| Voice mail | on | nothing | messages addressed to a voice, until delivered or 7 days |
+| Bet tracker | on | nothing | bets and scoreboard; the agent never decides who won |
+| Teach-me mode | on | nothing | lessons, per agent, privacy-filtered, wiped with memory |
+| Lore keeper | on | nothing | group lore, owner-approved by default, wiped with memory |
+| Room-energy sense | on | nothing | nothing; changes tone only, never whether the agent speaks |
+| Floor referee | off | nothing | nothing; talk-time from this session only |
+| Quiet fact-check | off | claims, as search queries (rate-limited, 30/day default) | nothing; results in memory for the session |
+| Soul reflection | off | nothing (runs off-call on your chosen model) | proposed persona notes; only ones **you approve** are used |
+| Highlight reel | off | nothing | clips in your folder; only opted-in speakers, slurs/abuse skipped |
+| Live translate | off | nothing (your chosen model translates) | nothing |
 
 An agent **cannot**: write or change any file (including its own code), read your files outside the app's source code, run commands, open apps, send messages or
 email, post anywhere, buy anything, or reach the network other than through `web_search`

@@ -649,6 +649,13 @@ async def owner_set(request: Request):
         on = body["quiet"] if body["quiet"] != "toggle" else not _owner.quiet_active()
         _owner.set_quiet(bool(on), float(body.get("quiet_min", _owner.QUIET_DEFAULT_MIN)))
         logger.info(f"🖥️🤫 owner quiet mode {'ON' if on else 'off'}")
+    b = body.get("background")
+    if isinstance(b, dict):
+        aid = str(b.get("agent") or (mgr.agent.id if mgr is not None else ""))
+        on = b.get("on", "toggle")
+        on = (not _owner.background_on(aid)) if on == "toggle" else bool(on)
+        _owner.set_background(aid, on)
+        logger.info(f"🖥️🌙 background mode {'ON' if on else 'off'} for {aid}")
     for key, on in (("mute_speaker", True), ("unmute_speaker", False)):
         if body.get(key):
             _owner.set_speaker_muted(str(body[key]), on)

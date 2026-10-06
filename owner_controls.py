@@ -63,6 +63,32 @@ def set_talkativeness(pid: str, value: float) -> float:
     return v
 
 
+# Background mode (owner 10-06): a per-agent switch, set by clicking the active
+# agent's icon. The agent only answers when spoken to: its name opens a short
+# direct exchange with that person (a few follow-ups need no name), then it goes
+# back to listening. Persisted, so it survives restarts.
+def background_agents() -> list:
+    v = _load_prefs().get("background", [])
+    return sorted(str(x) for x in v) if isinstance(v, list) else []
+
+
+def background_on(pid) -> bool:
+    return bool(pid) and str(pid) in background_agents()
+
+
+def set_background(pid: str, on: bool) -> bool:
+    pid = str(pid or "").strip()
+    if not pid:
+        return False
+    with _lock:
+        d = _load_prefs()
+        cur = set(d.get("background") or [])
+        (cur.add if on else cur.discard)(pid)
+        d["background"] = sorted(cur)
+        _save_prefs(d)
+    return bool(on)
+
+
 def set_mute(on: bool) -> None:
     STATE["mute"] = bool(on)
 
@@ -99,4 +125,5 @@ def snapshot(clock=time.monotonic) -> dict:
     return {"mute": STATE["mute"],
             "quiet_s": max(0.0, round(STATE["quiet_until"] - clock(), 1)),
             "muted_speakers": sorted(STATE["muted_speakers"]),
-            "talkativeness": _load_prefs().get("talkativeness", {})}
+            "talkativeness": _load_prefs().get("talkativeness", {}),
+            "background": background_agents()}
