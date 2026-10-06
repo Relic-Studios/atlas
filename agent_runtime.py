@@ -165,7 +165,7 @@ class AgentRegistry:
             self.runtimes[pid] = rt
         return rt
 
-    def activate(self, pid: str) -> AgentRuntime:
+    def activate(self, pid: str, fresh_session: bool = True) -> AgentRuntime:
         """Make pid the speaking agent. The previous agent's state is left intact
         (its own memory), the new one resumes its own -- or starts fresh if stale."""
         now = self.clock()
@@ -178,7 +178,8 @@ class AgentRegistry:
         self.refresh_profile(pid)
         if rt.last_active and now - rt.last_active > STALE_S:
             rt.reset_conversation()
-        rt.reset_session()
+        if fresh_session:
+            rt.reset_session()
         rt.last_active = now
         self.active = rt
         return rt

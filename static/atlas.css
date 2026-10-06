@@ -230,6 +230,7 @@ input[type=range]{accent-color:var(--accent);width:110px;height:14px}
 .av.switching::before{content:"";position:absolute;inset:-3px;border-radius:8px;border:1.5px solid transparent;border-top-color:var(--pc);animation:spin .7s linear infinite}
 .av.bg{opacity:.85}
 .av.bg::after{content:"";position:absolute;right:-3px;top:-3px;width:9px;height:9px;border-radius:50%;background:radial-gradient(circle at 70% 30%,var(--bg) 2.4px,var(--pc) 2.8px);border:1.5px solid var(--bg)}
+.av.panel::before{content:"";position:absolute;left:-3px;bottom:-3px;width:9px;height:5px;border-radius:3px;background:var(--pc);border:1.5px solid var(--bg)}
 .av .cu{position:absolute;right:-2px;bottom:-2px;width:7px;height:7px;border-radius:50%;background:var(--bg);border:1.5px solid var(--pc)}
 .av.add{background:transparent;border:1px dashed var(--line-2);color:var(--muted);font-size:15px;font-weight:400;opacity:1}
 .av.add:hover{border-color:var(--accent);color:var(--accent)}
