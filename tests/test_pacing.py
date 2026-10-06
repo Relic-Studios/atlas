@@ -200,13 +200,15 @@ class ThreadSurvivesPacing(unittest.TestCase):
 
     def test_named_then_followups_from_room_pass(self):
         self.c.t += 30
-        self.assertIsNone(self.gate("S1", "Hey Max, can you talk about the pyramids?"))
+        self.assertIsNone(self.f.turn_gate("[S1] Hey Max, can you talk about the pyramids?",
+                                           "S1", self.names))
         self.c.t += 3
         self.f.on_agent_spoke("S1", "The Giza pyramids were built around 2500 BC.")
         self.c.t += 8
         self.assertIsNone(self.gate("S3", "But like, what was it used for?"))
-        self.c.t += 40   # thread gone quiet, but S1 called it by name < 90 s ago
-        self.assertIsNone(self.gate("S1", "Yeah, give us like a Graham Hancock representation."))
+        self.c.t += 25   # S1 is still in the conversation they opened with its name
+        self.assertIsNone(self.f.turn_gate("[S1] Yeah, give us like a Graham Hancock representation.",
+                                           "S1", self.names))
 
     def test_unrelated_chatter_still_held(self):
         self.c.t += 120

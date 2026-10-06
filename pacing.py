@@ -25,6 +25,7 @@ from typing import Callable, Optional
 WINDOW_S = 300.0          # rolling window for shares (5 minutes)
 MIN_WORDS = 60            # below this the room hasn't said enough to judge pacing
 MIN_HUMANS = 2            # 1-on-1 conversations are never paced
+FRAGMENT_SHARE = 0.05     # a voice label with <5% of human words is a diarizer fragment, not a person
 SOFT_PRESSURE = 1.15      # over budget: only plausible requests get through
 HARD_PRESSURE = 1.6       # well over budget: only direct address gets through
 AGENT_WPS = 2.7           # TTS speaking rate, used to estimate agent seconds
@@ -131,7 +132,9 @@ class Pacing:
             if not is_agent:
                 human_turn_words.append(w)
         total = sum(words.values())
-        humans = [k for k in words if k != "agent"]
+        human_total = sum(v for k, v in words.items() if k != "agent")
+        humans = [k for k in words if k != "agent"
+                  and words[k] >= max(1.0, FRAGMENT_SHARE * human_total)]
         agent = words.get("agent", 0)
         fair = 1.0 / (len(humans) + 1) if humans else 1.0
         # talkativeness 0 -> 60% of a fair share, 0.35 -> 88%, 1 -> 140%

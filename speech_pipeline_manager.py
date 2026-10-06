@@ -1755,6 +1755,13 @@ class SpeechPipelineManager:
                 names = tuple(getattr(getattr(self.agent, "profile", None), "names", ()) or ())
                 named = bool(names) and not is_cue and directly_named(txt, names)
                 who = gen.decision.expected_target or "them"
+                # owner 10-06: a directed follow-up from the person the agent is
+                # in a conversation with gets the same one retry as its name
+                if not named and not is_cue:
+                    from floor import strip_label as _sl
+                    eng = self.floor.engaged_with()
+                    named = bool(eng) and eng == gen.decision.expected_target \
+                        and self.floor._directed(_sl(txt))
             except Exception as e:  # noqa: BLE001
                 logger.warning("named-hold setup failed: %s", e)
                 named, who = False, "them"

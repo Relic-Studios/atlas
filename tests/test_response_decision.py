@@ -15,8 +15,11 @@ def load_method(filename, classname, method, bindings=None):
     tree = ast.parse((ROOT / filename).read_text(encoding='utf-8'))
     cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == classname)
     node = next(n for n in cls.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == method)
-    import server as _srv  # module-level helpers the extracted method may call
-    ns = {'logger': logging.getLogger('test'), 'reply_in_flight': _srv.reply_in_flight, **(bindings or {})}
+    # module-level helpers the extracted method may call, extracted the same way
+    # (importing server.py needs the full speech stack, absent in light CI)
+    helpers = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in ('reply_in_flight',)]
+    ns = {'logger': logging.getLogger('test'), **(bindings or {})}
+    exec(compile(ast.Module(body=helpers, type_ignores=[]), filename, 'exec'), ns)
     exec(compile(ast.Module(body=[node], type_ignores=[]), filename, 'exec'), ns)
     return ns[method]
 

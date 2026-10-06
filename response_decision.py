@@ -388,7 +388,8 @@ def _filter_response(source, decision):
 # agent's own name is a turn handed to it; one regeneration with a short note
 # fixes it without touching lines that merely mention the name.
 
-NAMED_NUDGE = ("(They just said your name: this line is to you. "
+NAMED_NUDGE = ("(This line is to you: they said your name, or they are continuing "
+               "their conversation with you. "
                "Reply to {who} with [SPEAK to={who}] and a short answer.)")
 
 

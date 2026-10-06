@@ -174,6 +174,8 @@ class ConversationFloor:
         self.side = None                 # (asker, addressee_label|None, t): human->human question
         self.asked = None                # (target, t): the agent's last reply ended in a question
         self.direct = None               # background mode: [speaker, follow-ups left, last t]
+        self.turned_away = None          # (speaker, t): they just turned to another human
+        self.engaged = None              # live conversation: {"who", "since", "last", "agent_at"}
         from pacing import Pacing
         self.pacing = Pacing(clock=clock)  # rolling talk share (owner 10-06: talk less)
         self.last_gate = None            # last turn_gate verdict (logged per turn)
@@ -188,6 +190,8 @@ class ConversationFloor:
         self.side = None
         self.asked = None
         self.direct = None
+        self.engaged = None
+        self.turned_away = None
         self.pacing.reset()
         self.last_gate = None
 
@@ -265,14 +269,119 @@ class ConversationFloor:
         bg = self.background_gate(text, speaker, names, veto)
         if bg is not None:
             return bg or None
+        eng = self.engagement_gate(text, speaker, names, veto)
+        if isinstance(eng, str):
+            return eng
         if veto:
             if veto.startswith("addressed to") and speaker:
                 self.side = (speaker, None, self.clock())
             return veto
+        if eng:
+            return None      # the person it's talking with: no passive/pacing holds
         passive = self.passive_gate(text, speaker, names)
         if passive:
             return passive
         return self.pacing_gate(text, speaker, names)
+
+    # --- engagement (owner 10-06: "he goes silent after the first mention of his
+    # name and can't maintain a conversation ... it needs to be a stable
+    # conversation until dropped") -----------------------------------------------
+    # Saying the agent's name opens a conversation with that person. Until it is
+    # DROPPED, their follow-ups reach the model without the name, past the
+    # passive and pacing holds. Dropped when: they turn to someone else (vocative
+    # or side exchange), they close it ("ok thanks", "never mind"), someone else
+    # calls the agent (focus moves to them), or nobody in it has spoken for
+    # ENGAGE_IDLE_S. Diarizer drift: a directed line from a new label right after
+    # the agent answered, before the engaged person said anything else, is taken
+    # as that person (one mixed stream splits a voice across labels).
+    ENGAGE_IDLE_S = 45.0
+    ENGAGE_DRIFT_S = 12.0
+    _CLOSE = re.compile(r"^\s*(?:never\s*mind|nvm|forget\s+it|that'?s\s+(?:all|it)|"
+                        r"all\s+good|cool\s+thanks|ok(?:ay)?\s+thanks?|thanks?(?:\s+you)?|"
+                        r"that'?s\s+enough|we'?re\s+good|got\s+it)\b[\s.!,]*"
+                        r"(?:\w+[\s.!]*)?$", re.I)
+
+    def engaged_with(self) -> str | None:
+        e = self.engaged
+        if not e:
+            return None
+        if self.clock() - max(e["last"], e["agent_at"]) > self.ENGAGE_IDLE_S:
+            self.engaged = None
+            return None
+        return e["who"]
+
+    def _directed(self, body: str) -> bool:
+        return bool(self._ASK.search(body) or self._REQUEST.search(body)
+                    or self._TO_YOU.search(body))
+
+    _LEAVING = re.compile(r"\b(?:gonna|going\s+to|gotta|need\s+to|have\s+to)\s+(?:go|head\s+out|"
+                          r"run|dip|bounce|grab|get\s+(?:food|some|a\s+drink))\b|\b(?:brb|afk|be\s+right\s+back|"
+                          r"gtg|g2g|i'?m\s+out|peace\s+out|later\s+guys)\b", re.I)
+    TURNED_AWAY_S = 20.0
+
+    def engagement_gate(self, text: str, speaker: str | None,
+                        names: tuple[str, ...], veto: str | None):
+        """True = this line continues the agent's live conversation (skip the
+        passive/pacing holds). A string = a HOLD reason (they closed it or are
+        talking to someone else). False = no opinion (normal gating)."""
+        now = self.clock()
+        if not speaker or speaker == "self":
+            return False
+        if names_agent(text, names):
+            e = self.engaged
+            if e and e["who"] == speaker:
+                e["last"] = now
+            else:
+                self.engaged = {"who": speaker, "since": now, "last": now, "agent_at": 0.0}
+            return True
+        ta = getattr(self, "turned_away", None)
+        if ta and ta[0] == speaker and now - ta[1] <= self.TURNED_AWAY_S:
+            # "Hey Riley, did you watch it?" -> "it was so good dude": still Riley's
+            self.turned_away = (speaker, now)
+            return "talking to someone else"
+        who = self.engaged_with()
+        if not who:
+            return False
+        e = self.engaged
+        body = strip_label(text)
+        if speaker != who:
+            drift = (e["agent_at"] > e["last"]                       # it answered; they haven't spoken since
+                     and now - e["agent_at"] <= self.ENGAGE_DRIFT_S
+                     and self._directed(body)
+                     and not (veto and veto.startswith("addressed to")))
+            if drift:
+                e["who"], e["last"] = speaker, now
+                return True
+            # Live sim 10-06: mid-conversation with Sam, Riley's "bro this lobby
+            # is taking forever" got "Yeah, it's a bit slow." A remark from someone
+            # else that asks nothing and isn't aimed at the agent is not its turn.
+            if not self._directed(body):
+                return "side remark (in conversation with someone else)"
+            return False
+        # it IS the engaged person
+        if veto and veto.startswith("addressed to"):
+            self.engaged = None                 # turned to someone else
+            self.turned_away = (speaker, now)
+            if self.partner == speaker:
+                self.partner = None             # ...so the old thread is over too
+            return False
+        sd = self.side
+        if (sd and sd[0] != speaker and sd[1] in (speaker, None)
+                and sd[2] > max(e["last"], e["agent_at"])
+                and now - sd[2] <= self.SIDE_TTL_S):
+            # someone just asked THEM something ("Sam did you bring the controller"):
+            # this answer belongs to that exchange; the conversation stays open
+            e["last"] = now
+            return False
+        if self._CLOSE.match(body) or _thanks_only(text, names) or self._LEAVING.search(body):
+            self.engaged = None                 # "ok thanks" / "never mind" / "gonna go make tea"
+            if self.partner == speaker:
+                self.partner = None
+            return "conversation closed"
+        e["last"] = now
+        if filler_only(body) or ack_only(text):
+            return False                        # "yeah" keeps it alive but isn't a turn
+        return True
 
     # --- pacing (owner 10-06: "our agent needs to talk less") ------------------
     # Live 10-06: 31% of all words in a 7-person room, ~7% of turns after its name.
@@ -287,7 +396,6 @@ class ConversationFloor:
                           r"go\s+on|keep\s+going|more\s+about|what\s+about|"
                           r"(?:from|take\s+it\s+from)\s+.{0,30}point\s+of\s+view)\b", re.I)
     THREAD_WINDOW_S = 25.0
-    ENGAGED_WINDOW_S = 90.0
 
     def talkativeness(self) -> float:
         try:
@@ -298,10 +406,7 @@ class ConversationFloor:
     def pacing_gate(self, text: str, speaker: str | None,
                     names: tuple[str, ...]) -> str | None:
         now = self.clock()
-        eng = self.__dict__.setdefault("_engaged", {})
         if names_agent(text, names):
-            if speaker:
-                eng[speaker] = now
             return None
         if self._answers_agent(speaker):
             return None
@@ -311,14 +416,11 @@ class ConversationFloor:
         body = strip_label(text)
         asks = bool(self._ASK.search(body))
         # Live 10-06 (pyramids): pacing must cut volunteering, never a live thread.
-        # A question/request right after the agent spoke (from anyone), or any
-        # line from someone who called the agent by name in the last 90 s,
-        # continues the conversation the room started with it.
+        # A question/request right after the agent spoke (from anyone) continues
+        # the conversation; the person it's engaged with never reaches this gate
+        # (engagement_gate lets their lines through first).
         req = asks or bool(self._REQUEST.search(body))
         if req and (now - self.last_agent_at) <= self.THREAD_WINDOW_S:
-            return None
-        if speaker and (now - eng.get(speaker, -1e9)) <= self.ENGAGED_WINDOW_S \
-                and not filler_only(body):
             return None
         partner = bool(speaker) and speaker == self.active_partner()
         to_you = asks and bool(self._TO_YOU.search(body))
@@ -464,6 +566,8 @@ class ConversationFloor:
         self.asked = (target, self.last_agent_at) if (text or "").rstrip().endswith("?") else None
         if self.direct and target == self.direct[0]:
             self.direct[2] = self.last_agent_at   # the window runs from her last reply
+        if self.engaged and target == self.engaged["who"]:
+            self.engaged["agent_at"] = self.last_agent_at
         if target and target not in ("user", "self"):
             self.partner, self.partner_at = target, self.clock()
 
@@ -490,6 +594,11 @@ class ConversationFloor:
         partner = self.active_partner()
         if not current or current == "user":
             return ""
+        eng = self.engaged_with()
+        if eng and current == eng and not names_agent(text, names):
+            return (f"ROOM: {current} called you by name a moment ago and you are in a "
+                    f"conversation with them. This line is {current} continuing it -- "
+                    "they don't need to say your name again. Answer them.")
         if not partner:
             others = [s for s, t in self.recent.items()
                       if s != current and self.clock() - t <= 60.0]
@@ -961,10 +1070,28 @@ _STATUS_FILL = re.compile(r"\b(nice|ok(ay)?|alright|all right|cool|yeah|yep|ya|k
                           r"like|just|um+|uh+|lol|haha|sorry|wait)\b", re.IGNORECASE)
 
 
+_CONN_GRIPE = re.compile(r"\bmy (?:internet|wifi|wi-fi|connection|ping|router)\b", re.IGNORECASE)
+
+
 def status_only(text: str, names: tuple[str, ...] = ()) -> bool:
     body = strip_label(text).strip()
     if not body or "?" in body or names_agent(text, names):
         return False
+    # Live sim 10-06: "anyway I'm gonna go make tea" after "okay thanks" got
+    # "Go make your tea." -- someone announcing they're stepping away needs no reply.
+    lm = ConversationFloor._LEAVING.search(body)
+    if lm and len(body.split()) <= 12:
+        tail = re.sub(r"[^a-z' ]+", " ", body[lm.end():].lower()).split()
+        # "gonna go make tea" / "brb" end the line; "gotta go to the dentist
+        # tomorrow" is news someone may want to talk about.
+        if len(tail) <= 2 and not any(w in ("to", "because", "cause", "but") for w in tail):
+            return True
+    # Live sim 10-06: "my ping is like three hundred right now" got "Three hundred?
+    # That's brutal." A complaint about one's own connection, asked of nobody,
+    # is a status line however it's phrased.
+    if (_CONN_GRIPE.search(body) and len(body.split()) <= 12
+            and not ConversationFloor._TO_YOU.search(body)):
+        return True
     if len(body.split()) > 9 or not _STATUS.search(body):
         return False
     rest = _STATUS_FILL.sub(" ", _STATUS.sub(" ", body.lower()))
