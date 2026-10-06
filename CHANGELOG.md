@@ -2,7 +2,7 @@
 
 ATLAS is early beta. See [SAFETY.md](SAFETY.md) for what an agent can do, what's tested and what isn't.
 
-## 0.4.0 — plugins for group calls (unreleased)
+## 0.4.0 — plugins for group calls
 
 Fifteen new plugins, each with its own switch and settings on the Plugins page. Each was
 tested live with two different agents on a 14B-class model: every result came
@@ -31,6 +31,27 @@ from the real tool, and small talk didn't trigger any of them.
 - Agents now track how much of the talking each person does (rolling 5 minutes, from real speech length) and hold back once they're over a fair share for the room size. Their name, a question to "you", or a reply to their own question always gets through.
 - The agent sees a one-line pacing summary (talk shares, typical turn length) and keeps answers to the room's length.
 - Replayed on six recorded group calls: agent share of the talking fell from 30-51% to 18-29%, with no reply to a named question removed.
+
+**Conversations**
+- Once someone names the agent, their follow-ups are its turn (no name needed) until the
+  conversation is dropped: "thanks", "never mind", leaving, turning to someone else, or ~90 s idle.
+  Other people's side remarks in the meantime aren't answered.
+- "Hey Perma, are you back?" and other greetings to a handle or nickname count as talking to
+  that person, not the agent.
+- A "yeah" or "okay" from the room no longer cancels a reply the agent is already speaking.
+- Memory recall skips lines from the last 15 minutes (already in context), bare questions about
+  the agent, and matches on its own name only — fewer repeated "memories".
+
+**Look and feel**
+- New flat, IDE-style interface: status bar, collapsible side panels, no blur or glow, lower
+  rendering cost. The Plugins page is a compact extension list; the setup wizard matches.
+
+**License**
+- ATLAS is now licensed under **AGPL-3.0-or-later** (see `LICENSE` and `NOTICE`). The ATLAS name
+  and logo are reserved; forks must rename. Earlier releases had no license.
+
+**In progress**
+- Spotify control (needs a login window) is not in this release.
 
 **Fixes**
 - Installer is 2.8 MB again (was 10.4 MB): website and marketing media are no longer bundled.

@@ -1,6 +1,6 @@
 # Safety
 
-ATLAS is **early beta** software (v0.2.x). It works well in the situations we test, listed
+ATLAS is **early beta** software (v0.4.x). It works well in the situations we test, listed
 below, and it has edges we haven't tested, also listed below. This page is meant to be
 read before you put an agent into a conversation with other people.
 

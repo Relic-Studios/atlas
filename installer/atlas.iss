@@ -5,7 +5,7 @@
   #error SrcDir must be defined (path to the public export)
 #endif
 #ifndef AppVersion
-  #define AppVersion "0.3.0"
+  #define AppVersion "0.4.0"
 #endif
 
 [Setup]
