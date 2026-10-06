@@ -1230,6 +1230,15 @@ class SpeechPipelineManager:
         except Exception as e:  # noqa: BLE001 - steering must never block a turn
             logger.warning("room context failed: %s", e)
             note = ""
+        # Pacing (owner 10-06): how much of the talking each person is doing, and
+        # how long a turn should be here. Length-only wording (never "stay quiet").
+        try:
+            _no = getattr(getattr(self, "people", None), "name_of", None) or (lambda s: None)
+            pn = self.floor.pacing_note(_no)
+            if pn:
+                note = (note + chr(10) + pn).strip() if note else pn
+        except Exception as e:  # noqa: BLE001
+            logger.debug("pacing note failed: %s", e)
         # Plugin notes stand on their own: a steering failure must not silently drop them.
         if True:
             try:

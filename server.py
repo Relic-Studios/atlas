@@ -1557,6 +1557,19 @@ class TranscriptionCallbacks:
         except Exception as e:  # noqa: BLE001 - labeling must never block a turn
             logger.debug(f"adopt final speaker failed: {e}")
 
+    def _pace_turn(self, speaker, text, audio, mgr) -> None:
+        """Pacing accounting + per-turn record (owner 10-06: talk less, match the
+        room's pacing; the record doubles as turn-taking training data)."""
+        import pacing as _pacing
+        feats = _pacing.audio_features(audio) if audio is not None else {}
+        rec = mgr.floor.pacing_turn(speaker, text, feats)
+        if not rec:
+            return
+        ov = self._agent_audible(audio)
+        if ov is not None:
+            rec["agent_audible"] = ov
+        _rec_event("pace", **rec)
+
     def _tag_speaker(self, audio) -> str | None:
         """Diarize one turn using the app-level Diarizer (browser or bridge)."""
         diarizer = getattr(self.app.state, "Diarizer", None)
@@ -1687,6 +1700,7 @@ class TranscriptionCallbacks:
                 ("voice_mail", lambda: _mail_heard(speaker, mgr)),
                 ("fact_check", lambda: _factcheck_heard(speaker, user_request_content, mgr)),
                 ("translate", lambda: _translate_heard(speaker, user_request_content, mgr)),
+                ("pacing", lambda: self._pace_turn(speaker, user_request_content, audio, mgr)),
             )
             for name, step in steps:
                 try:

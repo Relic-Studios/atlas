@@ -174,6 +174,9 @@ class ConversationFloor:
         self.side = None                 # (asker, addressee_label|None, t): human->human question
         self.asked = None                # (target, t): the agent's last reply ended in a question
         self.direct = None               # background mode: [speaker, follow-ups left, last t]
+        from pacing import Pacing
+        self.pacing = Pacing(clock=clock)  # rolling talk share (owner 10-06: talk less)
+        self.last_gate = None            # last turn_gate verdict (logged per turn)
 
     def reset(self) -> None:
         self.partner, self.partner_at, self.recent = None, 0.0, {}
@@ -185,6 +188,8 @@ class ConversationFloor:
         self.side = None
         self.asked = None
         self.direct = None
+        self.pacing.reset()
+        self.last_gate = None
 
     def _log_turn(self, who: str) -> None:
         self.turn_log.append((who, self.clock()))
@@ -224,6 +229,11 @@ class ConversationFloor:
 
     def turn_gate(self, text: str, speaker: str | None, names: tuple[str, ...]) -> str | None:
         """The single pre-LLM gate (server AND sims). Returns a HOLD reason or None."""
+        verdict = self._turn_gate(text, speaker, names)
+        self.last_gate = verdict or "pass"
+        return verdict
+
+    def _turn_gate(self, text: str, speaker: str | None, names: tuple[str, ...]) -> str | None:
         from conversation_dynamics import pre_llm_veto
         import owner_controls as _owner
         owner = _owner.gate(speaker, names_agent(text, names), self.clock)
@@ -259,7 +269,64 @@ class ConversationFloor:
             if veto.startswith("addressed to") and speaker:
                 self.side = (speaker, None, self.clock())
             return veto
-        return self.passive_gate(text, speaker, names)
+        passive = self.passive_gate(text, speaker, names)
+        if passive:
+            return passive
+        return self.pacing_gate(text, speaker, names)
+
+    # --- pacing (owner 10-06: "our agent needs to talk less") ------------------
+    # Live 10-06: 31% of all words in a 7-person room, ~7% of turns after its name.
+    # Once over its fair share the agent stops volunteering: soft tier keeps only
+    # its active partner and real questions to the room/agent; hard tier keeps
+    # only a question from the person it is already talking with. Its name, or
+    # an answer to its own question, always gets through.
+    _ASK = re.compile(r"\?|^\s*(?:what|who|whom|whose|why|how|when|where|which|can|could|"
+                      r"would|will|do|does|did|is|are|was|were|should|have|has|any)\b", re.I)
+    _TO_YOU = re.compile(r"\b(?:you|your|you're|ya|u)\b", re.I)
+
+    def talkativeness(self) -> float:
+        try:
+            return float(getattr(self.profile, "talkativeness", 0.35))
+        except Exception:  # noqa: BLE001
+            return 0.35
+
+    def pacing_gate(self, text: str, speaker: str | None,
+                    names: tuple[str, ...]) -> str | None:
+        if names_agent(text, names) or self._answers_agent(speaker):
+            return None
+        tier = self.pacing.tier(self.talkativeness())
+        if tier == "ok":
+            return None
+        body = strip_label(text)
+        asks = bool(self._ASK.search(body))
+        partner = bool(speaker) and speaker == self.active_partner()
+        to_you = asks and bool(self._TO_YOU.search(body))
+        if tier == "soft":
+            # over budget: stop volunteering on statements, but anything that
+            # could be a request (its partner, a 'you' question, a question to
+            # the room) still reaches the model, which decides if it's for it.
+            if partner or to_you or (asks and self._ROOM_Q.search(body)):
+                return None
+        elif (partner and asks) or to_you:
+            # well over budget: only questions from its partner or put to 'you'
+            return None
+        snap = self.pacing.snapshot(self.talkativeness())
+        return (f"pacing {tier} (agent {round(snap['agent_share'] * 100)}% "
+                f"vs target {round(snap['target_share'] * 100)}%)")
+
+    def pacing_turn(self, speaker: str | None, text: str, feats: dict | None = None) -> dict:
+        """Account a finished human turn; returns the per-turn pacing record."""
+        if speaker == "self":
+            return {}
+        rec = self.pacing.note_human(speaker, text, feats)
+        snap = self.pacing.snapshot(self.talkativeness())
+        rec.update({"agent_share": snap["agent_share"], "target_share": snap["target_share"],
+                    "pressure": snap["pressure"], "humans": snap["humans"],
+                    "gate": self.last_gate})
+        return rec
+
+    def pacing_note(self, name_of=lambda s: None) -> str:
+        return self.pacing.note(name_of, self.talkativeness())
 
     # --- background mode (owner 10-06) ----------------------------------------
     # The agent is a quiet helper: it answers only when spoken to. Saying its name
@@ -368,6 +435,10 @@ class ConversationFloor:
 
     def on_agent_spoke(self, target: str | None, text: str = "") -> None:
         self._log_turn('a')
+        try:
+            self.pacing.note_agent(text)
+        except Exception:  # noqa: BLE001
+            pass
         self.last_agent_at = self.clock()
         self.asked = (target, self.last_agent_at) if (text or "").rstrip().endswith("?") else None
         if self.direct and target == self.direct[0]:

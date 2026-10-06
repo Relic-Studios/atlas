@@ -27,6 +27,11 @@ from the real tool, and small talk didn't trigger any of them.
 **Background mode**
 - Click the active agent's icon to put it in background mode (moon badge). It only answers when you say its name, then keeps answering follow-ups to that person for a few turns without the name, and goes quiet again. Click again for normal conversation.
 
+**Pacing**
+- Agents now track how much of the talking each person does (rolling 5 minutes, from real speech length) and hold back once they're over a fair share for the room size. Their name, a question to "you", or a reply to their own question always gets through.
+- The agent sees a one-line pacing summary (talk shares, typical turn length) and keeps answers to the room's length.
+- Replayed on six recorded group calls: agent share of the talking fell from 30-51% to 18-29%, with no reply to a named question removed.
+
 **Fixes**
 - Installer is 2.8 MB again (was 10.4 MB): website and marketing media are no longer bundled.
 - Quoted speech in a translation is no longer cut by the "don't invent a life" guard.
