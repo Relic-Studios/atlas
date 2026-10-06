@@ -177,6 +177,8 @@ class ConversationFloor:
         self.direct = None               # background mode: [speaker, follow-ups left, last t]
         self.turned_away = None          # (speaker, t): they just turned to another human
         self.engaged = None              # live conversation: {"who", "since", "last", "agent_at"}
+        self.mono = None                 # floor-holder: {"spk", "start", "last", "words", "turns"}
+        self.mono_pending = None         # (speaker, text, t): reply held until the monologue ends
         from pacing import Pacing
         self.pacing = Pacing(clock=clock)  # rolling talk share (owner 10-06: talk less)
         self.last_gate = None            # last turn_gate verdict (logged per turn)
@@ -291,6 +293,9 @@ class ConversationFloor:
         bg = self.background_gate(text, speaker, names, veto)
         if bg is not None:
             return bg or None
+        mono = self.monologue_gate(text, speaker, names)
+        if mono:
+            return mono
         eng = self.engagement_gate(text, speaker, names, veto)
         if isinstance(eng, str):
             return eng
@@ -304,6 +309,67 @@ class ConversationFloor:
         if passive:
             return passive
         return self.pacing_gate(text, speaker, names)
+
+    # --- monologues (owner 10-07: "people keep complaining Fae is interrupting
+    # them when they are monologuing for a loooong time", all agents) -------------
+    # A long monologue reaches us as many finals: every breath pause ends a "turn"
+    # and the agent answered mid-thought ("Yeah, that's annoying.", replies to
+    # "What was meant to happen is that"). Two recorded calls: 27 agent replies
+    # landed inside 3+-turn, 40+-word runs; in 9 the speaker kept going.
+    # While one person holds the floor, their lines are held unless they name the
+    # agent or make an explicit request; the last held line is answered (through
+    # the normal gate) once they actually stop -- MONO_TAIL_S of silence, see
+    # server.start_monologue_tail. Turn detection also waits a little longer.
+    MONO_MIN_WORDS = int(os.environ.get("ATLAS_MONO_WORDS", "35"))
+    MONO_MIN_TURNS = 2
+    MONO_GAP_S = 8.0          # a pause longer than this ends the run
+    MONO_BREAK_WORDS = 4      # another person saying this much takes the floor
+    MONO_EXTRA_WAIT_S = 0.8   # extra end-of-turn silence while a run is live
+    MONO_PENDING_TTL_S = 30.0
+
+    def _note_monologue(self, speaker: str, text: str, now: float) -> None:
+        n = len(words(strip_label(text or "")))
+        m = self.mono
+        if m and m["spk"] == speaker and now - m["last"] <= self.MONO_GAP_S:
+            m["last"], m["words"], m["turns"] = now, m["words"] + n, m["turns"] + 1
+        elif m and m["spk"] != speaker and n < self.MONO_BREAK_WORDS and now - m["last"] <= self.MONO_GAP_S:
+            pass                      # a listener's "yeah" / "mm" doesn't take the floor
+        else:
+            self.mono = {"spk": speaker, "start": now, "last": now, "words": n, "turns": 1}
+            if self.mono_pending and self.mono_pending[0] != speaker:
+                self.mono_pending = None   # someone else took the floor: moment passed
+        p = self.mono_pending
+        if p and p[0] == speaker and text:
+            self.mono_pending = (speaker, text, now)   # answer their LAST (final) line
+
+    def monologue_active(self, speaker: str | None = None) -> bool:
+        m = self.mono
+        if not m or self.clock() - m["last"] > self.MONO_GAP_S:
+            return False
+        if m["turns"] < self.MONO_MIN_TURNS or m["words"] < self.MONO_MIN_WORDS:
+            return False
+        return speaker is None or speaker == m["spk"]
+
+    def monologue_extra_wait(self) -> float:
+        return self.MONO_EXTRA_WAIT_S if self.monologue_active() else 0.0
+
+    def monologue_gate(self, text: str, speaker: str | None, names: tuple[str, ...]) -> str | None:
+        if not speaker or not self.monologue_active(speaker):
+            return None
+        body = strip_label(text)
+        if names_agent(text, names) or self._REQUEST.search(body):
+            return None
+        self.mono_pending = (speaker, text, self.clock())
+        return f"monologue (letting {speaker} finish)"
+
+    def take_monologue_pending(self) -> tuple[str, str] | None:
+        """The held line, once the speaker has stopped; ends the run so the normal
+        gate decides whether to answer it."""
+        p, self.mono_pending = self.mono_pending, None
+        if not p or self.clock() - p[2] > self.MONO_PENDING_TTL_S:
+            return None
+        self.mono = None
+        return p[0], p[1]
 
     # --- engagement (owner 10-06: "he goes silent after the first mention of his
     # name and can't maintain a conversation ... it needs to be a stable
@@ -570,10 +636,14 @@ class ConversationFloor:
             return "not addressed (group)"
         return None
 
-    def on_user_turn(self, speaker: str | None) -> None:
+    def on_user_turn(self, speaker: str | None, text: str = "") -> None:
         if not speaker or speaker in ("self", "user"):
             return
         now = self.clock()
+        try:
+            self._note_monologue(speaker, text, now)
+        except Exception:  # noqa: BLE001
+            pass
         self.recent[speaker] = now
         self.last_user_at = now
         self._log_turn('u')
@@ -582,6 +652,13 @@ class ConversationFloor:
 
     def on_agent_spoke(self, target: str | None, text: str = "") -> None:
         self._log_turn('a')
+        # A reaction ("Yeah, that's rough.") doesn't end someone's monologue -- if they
+        # keep going, it's still theirs (live: replies landed mid-run and the run
+        # reset, so the next breath pause was answered too). A question hands them
+        # a new turn: that's dialogue, not a monologue.
+        self.mono_pending = None
+        if (text or "").rstrip().endswith("?"):
+            self.mono = None
         try:
             self.pacing.note_agent(text)
         except Exception:  # noqa: BLE001

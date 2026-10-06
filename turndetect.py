@@ -176,6 +176,9 @@ def interpolate_detection(prob: float) -> float:
 # test." are announcements that the real question is coming. A normal sentence-end pause
 # ended the turn there and the agent answered the setup ("Settle what?"). Hold longer.
 SETUP_TAIL_EXTRA_S = 0.9
+# Set by the server: extra end-of-turn silence while someone is monologuing
+# (floor.monologue_extra_wait). Breath pauses mid-monologue ended turns.
+EXTRA_WAIT_HOOK = None
 _SETUP_TAIL = re.compile(
     r"^(?:(?:okay|ok|all right|alright|so|um|uh)\s+)?"
     r"(?:settle (?:it|this)|quick (?:test|question|one|thing)|real quick|"
@@ -540,6 +543,14 @@ class TurnDetection:
             if setup_tail(processed_text):
                 final_pause += SETUP_TAIL_EXTRA_S
                 logger.info(f"🎤⏳ Setup phrase, holding the turn open +{SETUP_TAIL_EXTRA_S:.1f}s: \"{processed_text}\"")
+
+            try:
+                extra = EXTRA_WAIT_HOOK() if EXTRA_WAIT_HOOK else 0.0
+            except Exception:  # noqa: BLE001
+                extra = 0.0
+            if extra > 0:
+                final_pause += extra
+                logger.info(f"🎤⏳ Monologue, holding the turn open +{extra:.1f}s")
 
             # Suggest the calculated time via callback
             self.suggest_time(final_pause, processed_text) # Use processed_text for context

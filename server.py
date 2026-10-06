@@ -1731,7 +1731,7 @@ class TranscriptionCallbacks:
             steps = (
                 ("trim_history", lambda: mgr.trim_history()),
                 ("dynamics", lambda: mgr.dynamics.on_user_turn(user_request_content, speaker_id=speaker or "user")),
-                ("floor", lambda: mgr.floor.on_user_turn(speaker)),
+                ("floor", lambda: mgr.floor.on_user_turn(speaker, user_request_content)),
                 ("convo_log", lambda: mgr.convo.add_user(speaker, user_request_content)),
                 ("hypergraph", lambda: getattr(mgr, "hgmem", None) and mgr.hgmem.observe_user(
                     mgr.current_persona, (mgr.people.name_of(speaker) or ""),
@@ -2133,6 +2133,32 @@ def delivery_ready(mgr, callbacks, bridge, now: float, gap_s: float = DELIVERY_G
 
 
 RESUME_GAP_S = float(os.environ.get("ATLAS_RESUME_GAP_S", "1.2"))
+MONO_TAIL_S = float(os.environ.get("ATLAS_MONO_TAIL_S", "2.0"))
+
+
+def start_monologue_tail(mgr, callbacks, bridge, now: float):
+    """A monologue's last line was held; the speaker has now really stopped.
+    Answer it if the normal gate (engagement, passive, pacing) lets it through."""
+    floor = mgr.floor
+    if not getattr(floor, "mono_pending", None) or not delivery_ready(mgr, callbacks, bridge, now, MONO_TAIL_S):
+        return None
+    got = floor.take_monologue_pending()
+    if not got:
+        return None
+    speaker, text = got
+    if not text.lstrip().startswith("["):
+        text = f"[{speaker}] {text}"
+    why = floor.turn_gate(text, speaker, tuple(mgr.dynamics.agent_names))
+    if why:
+        logger.info(f"🖥️🎙️ monologue ended; still holding ({why}): '{text[-50:]}'")
+        return False
+    callbacks.reset_state()
+    callbacks.tts_to_client = True
+    callbacks.user_finished_turn = True
+    callbacks.user_history_committed = True
+    logger.info(f"🖥️🎙️➡️ monologue ended; answering: '{text[-60:]}'")
+    mgr.prepare_generation(text)
+    return True
 
 
 def start_resume(mgr, callbacks) -> bool:
@@ -2305,6 +2331,11 @@ def start_timer(mgr, callbacks, bridge, now: float) -> Optional[int]:
 
 async def _task_delivery(app: FastAPI, callbacks) -> None:
     """Bring finished background searches up when the call has an opening."""
+    try:
+        import turndetect as _td
+        _td.EXTRA_WAIT_HOOK = lambda: app.state.SpeechPipelineManager.floor.monologue_extra_wait()
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"🖥️🎙️ monologue wait hook: {e}")
     while True:
         await asyncio.sleep(0.5)
         try:
@@ -2316,6 +2347,8 @@ async def _task_delivery(app: FastAPI, callbacks) -> None:
             if start_mail(mgr, callbacks, bridge, now) is not None:
                 continue
             if start_bet(mgr, callbacks, bridge, now) is not None:
+                continue
+            if start_monologue_tail(mgr, callbacks, bridge, now) is not None:
                 continue
             if delivery_ready(mgr, callbacks, bridge, now, RESUME_GAP_S) and start_resume(mgr, callbacks):
                 continue
