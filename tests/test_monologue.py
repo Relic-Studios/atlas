@@ -86,7 +86,10 @@ class Mono(unittest.TestCase):
 
 class TurnWaitHook(unittest.TestCase):
     def test_hook_exists(self):
-        import turndetect
+        try:
+            import turndetect
+        except ImportError:  # light CI env has no transformers
+            self.skipTest("speech stack not installed")
         self.assertTrue(hasattr(turndetect, "EXTRA_WAIT_HOOK"))
 
 
