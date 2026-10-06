@@ -167,6 +167,7 @@ class ConversationFloor:
         self.recent: dict[str, float] = {}
         self.quiet_until = 0.0
         self.self_quiet = False          # quiet chosen by the agent (step_back)
+        self.parting_until = 0.0         # grace after quiet / close: farewells don't reopen
         self.last_user_at = 0.0          # previous user turn (any speaker)
         self.turn_log: list[tuple[str, float]] = []   # ('u'|'a', t), bounded
         self.profile = None              # AgentProfile (interests), set by runtime
@@ -184,6 +185,7 @@ class ConversationFloor:
         self.partner, self.partner_at, self.recent = None, 0.0, {}
         self.quiet_until = 0.0
         self.self_quiet = False
+        self.parting_until = 0.0
         self.last_user_at = 0.0
         self.turn_log = []
         self.last_agent_at = 0.0
@@ -213,6 +215,7 @@ class ConversationFloor:
         minutes = max(0.5, min(5.0, float(minutes or 2.0)))
         self.quiet_until = self.clock() + minutes * 60.0
         self.self_quiet = True
+        self._start_parting(self.quiet_until)
         return minutes
 
     # Quiet mode: "Max, stay quiet while we plan" must persist across the
@@ -221,6 +224,22 @@ class ConversationFloor:
     def set_quiet(self) -> None:
         self.quiet_until = self.clock() + self.quiet_ttl_s
         self.self_quiet = False
+        self._start_parting(self.quiet_until)
+
+    # Parting grace (owner 10-07: "silence requests and choices need a grace
+    # period so one final goodbye doesn't open her gates up again"). After a
+    # silence request, step_back, or a closed exchange, a line that NAMES the
+    # agent but only says goodbye / thanks / shh ("bye Fae", "night Fae, love
+    # you", "thanks Max") is held and keeps the gate closed. A real question
+    # or request (or the bare name) still wakes it.
+    PARTING_GRACE_S = 60.0
+    PARTING_AFTER_CLOSE_S = 90.0
+
+    def _start_parting(self, until: float) -> None:
+        self.parting_until = max(self.parting_until, until + self.PARTING_GRACE_S)
+
+    def in_parting_grace(self) -> bool:
+        return self.clock() < self.parting_until
 
     def is_quiet(self) -> bool:
         import owner_controls as _owner
@@ -261,6 +280,9 @@ class ConversationFloor:
                         and (len(words(text)) <= 8 or _command_leads(text)))):
                 self.set_quiet()
             return veto
+        if self.in_parting_grace() and parting_only(text, names):
+            self.parting_until = max(self.parting_until, self.clock() + 45.0)
+            return "parting (grace)"
         if self.is_quiet():
             if names_agent(text, names):
                 self.release_quiet()
@@ -377,6 +399,7 @@ class ConversationFloor:
             self.engaged = None                 # "ok thanks" / "never mind" / "gonna go make tea"
             if self.partner == speaker:
                 self.partner = None
+            self._start_parting(now + self.PARTING_AFTER_CLOSE_S - self.PARTING_GRACE_S)
             return "conversation closed"
         e["last"] = now
         if filler_only(body) or ack_only(text):
@@ -484,6 +507,7 @@ class ConversationFloor:
                 return veto
             if ack_only(text) or _thanks_only(text, names) or status_only(text, names):
                 self.direct = None          # "ok thanks" closes the exchange
+                self._start_parting(now + self.PARTING_AFTER_CLOSE_S - self.PARTING_GRACE_S)
                 return "background mode (exchange closed)"
             d[1] -= 1
             d[2] = now
@@ -1125,6 +1149,36 @@ def _thanks_only(text: str, names: tuple = ()) -> bool:
     return all(t in _THANKS for t in w) and any(t in ("thanks", "thank", "ty", "thx", "tysm",
                                                        "cheers", "appreciate", "needed", "bye")
                                                  for t in w)
+
+
+_PARTING_WORDS = _ACK | _THANKS | {
+    "bye", "byee", "byeee", "goodbye", "goodnight", "night", "nite", "gn", "later", "laters",
+    "see", "ya", "you", "u", "cya", "peace", "out", "take", "care", "have", "a", "good", "one",
+    "day", "evening", "sleep", "well", "sweet", "dreams", "talk", "soon", "catch", "love",
+    "shh", "shhh", "hush", "quiet", "be", "stay", "shut", "up", "stop", "enough", "now", "for",
+    "tonight", "everyone", "guys", "y'all", "yall", "bro", "dude", "man", "girl", "buddy",
+    "lol", "haha", "xoxo", "mwah", "oh", "and", "too", "again", "the", "rest", "of", "night's",
+    "just", "with", "me", "we're", "were", "done", "go", "to", "lil", "little", "friend",
+}
+_PARTING_MARK = {"bye", "byee", "byeee", "goodbye", "goodnight", "night", "nite", "gn", "later",
+                 "laters", "cya", "peace", "care", "dreams", "love", "shh", "shhh", "hush",
+                 "quiet", "shut", "stop", "thanks", "thank", "ty", "thx", "tysm", "cheers",
+                 "see", "enough", "done"}
+
+
+def parting_only(text: str, names: tuple = ()) -> bool:
+    """'bye Fae' / 'goodnight Max, love you' / 'thanks Fae' / 'shh Fae':
+    only a farewell, thanks or hush -- nothing asked, nothing requested."""
+    from conversation_dynamics import _is_agent_name
+    body = re.sub(r'"[^"]*"|“[^”]*”', '', strip_label(text)).strip()
+    if not body or "?" in body:
+        return False
+    toks = re.sub(r"[^a-z' ]+", " ", body.lower().replace("’", "'")).split()
+    w = [t for t in toks if not (len(t) >= 3 and _is_agent_name(t, names))
+         and t not in ("hey", "yo", "aw", "aww", "awww", "ok", "okay")]
+    if not w or len(w) > 10:
+        return False
+    return all(t in _PARTING_WORDS for t in w) and any(t in _PARTING_MARK for t in w)
 
 
 def ack_only(text: str) -> bool:
