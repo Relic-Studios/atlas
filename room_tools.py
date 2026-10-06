@@ -481,6 +481,13 @@ def intent(text: str, poll_open: Optional[bool] = None):
     if fr:
         return fr
     try:
+        import teach as _teach
+        tc = _teach.intent(t)
+    except Exception:  # noqa: BLE001
+        tc = None
+    if tc:
+        return tc
+    try:
         import game_info as _gi
         gi = _gi.intent(t)
     except Exception:  # noqa: BLE001
@@ -602,6 +609,17 @@ TOOLS_BY_PLUGIN: Dict[str, List[dict]] = {
               {"topic": {"type": "string", "description": "optional topic words to focus on"},
                "minutes": {"type": "number", "description": "window, default 15"}}),
     ],
+    "teach": [
+        _tool("learn_lesson", "Save something the room is teaching you about their own stuff (a game's "
+              "house rules, how their league scores, a group custom) so you use it next time. Only after "
+              "this returns say you've got it, then say it back in your own words.",
+              {"topic": {"type": "string", "description": "short name, e.g. 'league scoring'"},
+               "content": {"type": "string", "description": "the lesson, in their words"}}, ["content"]),
+        _tool("recall_lessons", "Look up what the room has taught you (optionally about one topic).",
+              {"topic": {"type": "string"}}),
+        _tool("forget_lesson", "Forget a lesson when someone says it's wrong or out of date.",
+              {"topic": {"type": "string"}, "id": {"type": "integer"}}),
+    ],
     "game_info": [
         _tool("game_info", "Live Steam info for a game: price, whether it's on sale, how many people are "
               "playing right now, release date. Never guess these numbers.",
@@ -614,7 +632,7 @@ TOOLS = [t for ts in TOOLS_BY_PLUGIN.values() for t in ts]
 
 def execute(name: str, args: dict, asker: str = "", voter_name: str = "",
             settings: Callable[[str], dict] = lambda pid: {},
-            name_of: Optional[Callable] = None, agent_names=()) -> str:
+            name_of: Optional[Callable] = None, agent_names=(), agent: str = "") -> str:
     a = args if isinstance(args, dict) else {}
     if name == "roll_dice":
         return roll_dice(str(a.get("dice") or a.get("spec") or "d20"))
@@ -673,6 +691,14 @@ def execute(name: str, args: dict, asker: str = "", voter_name: str = "",
         if name == "debate_sides":
             return fr.debate_sides(mins or fr.DEFAULT_MIN, str(a.get("topic") or ""), name_of=name_of)
         return fr.start_topic(str(a.get("topic") or ""), mins if mins is not None else 5, asker)
+    if name in ("learn_lesson", "recall_lessons", "forget_lesson"):
+        import teach
+        ag = agent or (agent_names[0] if agent_names else "") or "default"
+        if name == "learn_lesson":
+            return teach.learn(ag, str(a.get("topic") or ""), str(a.get("content") or ""), voter_name or "")
+        if name == "forget_lesson":
+            return teach.forget(ag, str(a.get("topic") or ""), a.get("id"))
+        return teach.recall(ag, str(a.get("topic") or ""))
     if name == "game_info":
         import game_info
         s = settings("game_info") or {}

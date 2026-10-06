@@ -888,7 +888,8 @@ class SpeechPipelineManager:
                     or (getattr(self, "current_persona", "") or "",)
                 out = _room.execute(name, args, asker, who, settings=_plugins.settings_of,
                                     name_of=getattr(getattr(self, "people", None), "name_of", None),
-                                    agent_names=_anames)
+                                    agent_names=_anames,
+                                    agent=getattr(self, "current_persona", "") or "")
                 logger.info("🎲 %s(%s) -> %s", name, ", ".join(f"{k}={str(v)[:40]!r}" for k, v in args.items()), out[:120])
                 return out
             if name in _self_tools.NAMES:
@@ -1237,6 +1238,15 @@ class SpeechPipelineManager:
                         note = (note + "\n" + qn).strip() if note else qn
             except Exception as e:  # noqa: BLE001
                 logger.debug("floor referee note failed: %s", e)
+            try:
+                import plugins as _plugins
+                if _plugins.is_enabled("teach"):
+                    import teach as _teach
+                    tn = _teach.note(getattr(self, "current_persona", "") or "", txt)
+                    if tn:
+                        note = (note + "\n" + tn).strip() if note else tn
+            except Exception as e:  # noqa: BLE001
+                logger.debug("teach note failed: %s", e)
             return note
         except Exception as e:  # noqa: BLE001 - steering must never block a turn
             logger.warning("room context failed: %s", e)

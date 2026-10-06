@@ -291,6 +291,15 @@ BUILTIN: List[dict] = [
         ],
     },
     {
+        "id": "teach", "name": "Teach-me mode", "icon": "book", "category": "Memory",
+        "summary": "'Let me teach you how our league scoring works: ...' The agent keeps it and uses it next time.",
+        "detail": "Lessons are per agent and stay on this PC (in that agent's memory folder). A lesson only "
+                  "comes back when the talk is about its topic. Private details are refused. Wiping an "
+                  "agent's memory clears its lessons too.",
+        "tools": ["learn_lesson", "recall_lessons", "forget_lesson"], "default": True,
+        "settings": [],
+    },
+    {
         "id": "game_info", "name": "Game info", "icon": "game", "category": "Games",
         "summary": "'Is it on sale?' 'How many people are playing?' Live Steam prices and player counts.",
         "detail": "Uses Steam's public store and player-count endpoints: free, no account, no key. "

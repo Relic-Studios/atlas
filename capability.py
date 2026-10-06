@@ -140,6 +140,8 @@ def abilities_note(eyes_on: bool, search_on: bool = True, persona: str = "", off
         can.append("referee a debate or meeting: who's talked most, timebox a topic, sum up each side fairly")
     if "bets" not in off:
         can.append("log friendly bets and bring them up when they can be settled (never deciding the winner yourself)")
+    if "teach" not in off:
+        can.append("be taught the room's own rules and customs and use them next time")
     if "game_info" not in off:
         can.append("look up live Steam prices, sales and player counts for games")
     if "self_check" not in off:

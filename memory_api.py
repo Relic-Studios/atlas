@@ -194,8 +194,15 @@ def wipe(aid: str, window: str, svc=None, root=None, now: float = None) -> dict:
         g = H.HyperMemory(aid, root=root, embedder=None)
         learned = g.forget_since(cutoff)
         g.save()
-    logger.info("memory wipe %s window=%s: %d items, %d learned", aid, window, items, learned)
-    return {"ok": True, "agent": aid, "window": window, "items": items, "learned": learned}
+    try:
+        import teach
+        lessons = teach.forget_since(aid, cutoff, root)
+    except Exception as e:  # noqa: BLE001 - lessons are optional
+        logger.warning("lesson wipe failed: %s", e)
+        lessons = 0
+    logger.info("memory wipe %s window=%s: %d items, %d learned, %d lessons", aid, window, items, learned, lessons)
+    return {"ok": True, "agent": aid, "window": window, "items": items, "learned": learned,
+            "lessons": lessons}
 
 
 @router.post("/api/memory/{aid}/wipe")
