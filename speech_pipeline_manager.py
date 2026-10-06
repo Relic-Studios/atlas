@@ -1245,6 +1245,15 @@ class SpeechPipelineManager:
                 logger.debug("floor referee note failed: %s", e)
             try:
                 import plugins as _plugins
+                if _plugins.is_enabled("room_energy"):
+                    import room_energy as _re
+                    en = _re.note()
+                    if en:
+                        note = (note + "\n" + en).strip() if note else en
+            except Exception as e:  # noqa: BLE001
+                logger.debug("room energy note failed: %s", e)
+            try:
+                import plugins as _plugins
                 if _plugins.is_enabled("teach"):
                     import teach as _teach
                     tn = _teach.note(getattr(self, "current_persona", "") or "", txt)

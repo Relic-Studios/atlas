@@ -63,6 +63,9 @@ async def feed(pid: str, request: Request):
     if pid == "fact_check":
         import factcheck
         return {"items": factcheck.feed()}
+    if pid == "room_energy":
+        import room_energy
+        return {"items": room_energy.feed(), "heading": "Right now"}
     if pid == "live_translate":
         import translate
         return {"items": translate.feed(), "heading": "Captions"}

@@ -361,6 +361,17 @@ BUILTIN: List[dict] = [
         ],
     },
     {
+        "id": "room_energy", "name": "Room-energy sense", "icon": "pulse", "category": "Senses",
+        "summary": "Reads the room: lively, tense or heavy. The agent matches its tone; it never adds actions.",
+        "detail": "Looks at the last few minutes of this session's transcript: laughter, how fast people "
+                  "are trading turns, people talking over each other, frustration, and someone going "
+                  "through something hard. Tense room: calm, kind, brief, no jokes at anyone's expense. "
+                  "Heavy: gentle and slow. Lively: quick and playful. It only changes tone, never whether "
+                  "the agent speaks. Text and timing only for now (no audio analysis); nothing is saved.",
+        "tools": [], "default": True, "feed": True,
+        "settings": [],
+    },
+    {
         "id": "live_translate", "name": "Live translate", "icon": "globe", "category": "Senses",
         "summary": "'What did she just say?' Translates lines from people speaking another language.",
         "detail": "On request: ask 'what did Riley say?' or 'translate that' and the agent translates "
