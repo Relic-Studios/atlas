@@ -2,6 +2,14 @@
 
 ATLAS is early beta. See [SAFETY.md](SAFETY.md) for what an agent can do, what's tested and what isn't.
 
+## Unreleased
+
+- **Web search no longer scrapes from your PC.** The keyless fallbacks (a parallel
+  scraper over DuckDuckGo/Brave/Google pages, and local SearXNG) are gone: they could
+  get your connection rate-limited or flagged by network security. Search now only
+  uses the Exa or Brave API with your own key (Plugins > Web search). Without a key,
+  agents don't get a search tool and say so if asked.
+
 ## 0.4.0 — plugins for group calls
 
 Fifteen new plugins, each with its own switch and settings on the Plugins page. Each was

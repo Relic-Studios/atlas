@@ -1129,7 +1129,7 @@ class SpeechPipelineManager:
             import capability as _cap
             import plugins as _plugins
             _off = {p for p in ('web_search', 'eyes', 'clock', 'notes', 'step_back', 'self_check')
-                    if not _plugins.is_enabled(p)}
+                    if not _plugins.usable(p)}
             eyes_on = bool(_screen is not None and _screen.status().get("enabled")) and 'eyes' not in _off
             ctx = getattr(self, "_ctx_text", "")
             room = (room + chr(10) + _cap.abilities_note(eyes_on, bool(WEB_SEARCH_TOOLS) and 'web_search' not in _off,

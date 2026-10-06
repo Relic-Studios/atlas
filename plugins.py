@@ -55,6 +55,8 @@ def _apply_search(settings: dict) -> None:
 def _test_search(settings: dict) -> dict:
     import time
     import websearch
+    if not websearch.available():
+        return {"ok": False, "message": "No search key yet. Add an Exa or Brave API key below."}
     t = time.time()
     r = websearch.search("weather today") or {}
     ms = round((time.time() - t) * 1000)
@@ -153,14 +155,14 @@ BUILTIN: List[dict] = [
     {
         "id": "web_search", "name": "Web search", "icon": "search", "category": "Knowledge",
         "summary": "Look things up on the web and read pages from the results.",
-        "detail": "Tries Exa, then Brave, then a local SearXNG, then a free fallback. "
+        "detail": "Uses the Exa or Brave search API with your own key (no scraping from your PC). "
+                  "Without a key, agents don't get a search tool. "
                   "Search results are treated as untrusted text, never as instructions.",
         "tools": ["web_search", "read_page"], "default": True,
         "settings": [
             {"key": "provider", "label": "Provider", "type": "select", "default": "auto",
              "options": [{"value": "auto", "label": "Best available (recommended)"},
-                         {"value": "exa", "label": "Exa only"}, {"value": "brave", "label": "Brave only"},
-                         {"value": "free", "label": "Free search only (no key)"}],
+                         {"value": "exa", "label": "Exa only"}, {"value": "brave", "label": "Brave only"}],
              "help": "Auto uses the first provider that has a key and answers."},
             {"key": "exa", "label": "Exa API key", "type": "secret", "file": "exa",
              "help": "Fastest and most accurate. Get one at dashboard.exa.ai.", "link": "https://dashboard.exa.ai/api-keys",
@@ -501,11 +503,29 @@ def _secret_info(f: dict) -> dict:
     return {"set": bool(v), "last4": v[-4:] if len(v) >= 8 else "", "source": src}
 
 
+def _search_ready() -> bool:
+    try:
+        import websearch
+        return websearch.available()
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def usable(pid: str, state: Optional[dict] = None) -> bool:
+    """Enabled AND able to run. Web search without an API key is not usable:
+    there is no scraping fallback (owner 10-06), so the agent must not offer it."""
+    if not is_enabled(pid, state):
+        return False
+    if pid == "web_search" and not _search_ready():
+        return False
+    return True
+
+
 def tool_names_disabled() -> set:
     st = _load()
     out = set()
     for p in BUILTIN:
-        if not is_enabled(p["id"], st):
+        if not usable(p["id"], st):
             out.update(_builtin_tools(p))
     return out
 

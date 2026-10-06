@@ -33,7 +33,6 @@ sounddevice==0.5.6
 soundfile==0.13.1
 PyAudio==0.2.14
 echoff==0.3.0
-ddgs==9.14.4
 trafilatura==2.0.0
 wordfreq==3.1.1
 mss==10.1.0

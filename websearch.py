@@ -1,15 +1,14 @@
 """Web search backend for the agent.
 
-Provider chain (first with results wins): Exa -> Brave (each only if a key is
-present: ATLAS_EXA_KEY / ATLAS_BRAVE_KEY, or private|user/<name>.key) -> then the
-two keyless backends below, picked automatically:
-- SearXNG (self-hosted metasearch, zero per-call fee, nothing leaves the box) —
-  preferred when reachable, since it keeps queries off third-party services.
-- DuckDuckGo via `ddgs` (already installed, no API key) — fallback so the agent
-  can search on first boot without standing up Docker.
+Keyed search APIs only: Exa, then Brave (each used only if a key is present:
+ATLAS_EXA_KEY / ATLAS_BRAVE_KEY, or private|user/<name>.key). One HTTPS call per
+search to the provider's API.
 
-Both return a uniform list of {title, url, snippet} plus a short combined text
-suitable for injecting into the LLM context.
+Owner 10-06: no scraping from the user's PC. The old keyless fallbacks (ddgs, which
+raced Brave/DuckDuckGo/Google HTML in parallel, and a local SearXNG, which scrapes
+engines the same way) got users rate-limited and flagged by network security.
+With no key, web search is simply unavailable: the tool is hidden from the agent
+and the Plugins page says a key is needed.
 """
 from __future__ import annotations
 
@@ -18,97 +17,6 @@ import re
 from typing import List, Dict
 
 logger = logging.getLogger(__name__)
-for _noisy in ("ddgs", "primp", "ddgs.ddgs", "ddgs.base"):
-    logging.getLogger(_noisy).setLevel(logging.WARNING)
-
-# SearXNG endpoint candidates (docker default; also common host-mapped port).
-SEARXNG_URLS = [
-    "http://localhost:8080",
-    "http://127.0.0.1:8080",
-    "http://localhost:8888",
-]
-
-
-_SEARX_CACHE = {"t": 0.0, "base": None}
-
-
-def _searxng_available() -> str | None:
-    """Probe SearXNG at most once a minute (a dead probe used to cost ~4.5s per search)."""
-    import time
-    import urllib.request
-    now = time.monotonic()
-    if now - _SEARX_CACHE["t"] < 60.0:
-        return _SEARX_CACHE["base"]
-    found = None
-    for base in SEARXNG_URLS:
-        try:
-            urllib.request.urlopen(f"{base}/config", timeout=0.3).close()
-            found = base
-            break
-        except Exception:
-            continue
-    _SEARX_CACHE.update(t=now, base=found)
-    return found
-
-
-def _search_searxng(base: str, query: str, max_results: int = 5) -> List[Dict[str, str]]:
-    import urllib.parse
-    import urllib.request
-    import json
-    url = f"{base}/search?q={urllib.parse.quote(query)}&format=json"
-    req = urllib.request.Request(url, headers={"User-Agent": "atlas-agent/1.0"})
-    with urllib.request.urlopen(req, timeout=10.0) as r:
-        data = json.loads(r.read().decode("utf-8"))
-    out = []
-    for res in data.get("results", [])[:max_results]:
-        out.append({
-            "title": res.get("title", ""),
-            "url": res.get("url", ""),
-            "snippet": (res.get("content") or "")[:500],
-        })
-    return out
-
-
-def _ddgs_backend(query: str, backend: str, max_results: int) -> List[Dict[str, str]]:
-    from ddgs import DDGS
-    rows = DDGS(timeout=6).text(query, max_results=max_results, backend=backend)
-    return [{
-        "title": r.get("title", ""),
-        "url": r.get("href", r.get("url", "")),
-        "snippet": (r.get("body", "") or "")[:400],
-    } for r in rows or []]
-
-
-# Backends race in parallel; the first non-empty answer wins. Sequential
-# fallback cost up to ~15s live (brave empty -> auto multi-engine).
-RACE_BACKENDS = ("brave", "duckduckgo", "google", "auto")
-RACE_TIMEOUT_S = 9.0
-
-
-def _search_ddgs(query: str, max_results: int = 5) -> List[Dict[str, str]]:
-    import concurrent.futures as cf
-    pool = cf.ThreadPoolExecutor(max_workers=len(RACE_BACKENDS), thread_name_prefix="search")
-    futs = {pool.submit(_ddgs_backend, query, be, max_results): be for be in RACE_BACKENDS}
-    last_err = None
-    try:
-        for fut in cf.as_completed(futs, timeout=RACE_TIMEOUT_S):
-            try:
-                out = fut.result()
-            except Exception as e:  # noqa: BLE001
-                last_err = e
-                continue
-            if out:
-                logger.info("web search: %s won the race", futs[fut])
-                return out
-    except cf.TimeoutError:
-        last_err = last_err or TimeoutError(f"no backend answered in {RACE_TIMEOUT_S}s")
-    finally:
-        pool.shutdown(wait=False, cancel_futures=True)
-    if last_err:
-        raise last_err
-    return []
-
-
 _YEAR = re.compile(r"\b(20[0-9]{2})\b")
 
 
@@ -129,7 +37,7 @@ def freshen_query(query: str, user_text: str = "", today=None) -> str:
 
 
 # ---------------------------------------------------------------- keyed providers
-# Owner 10-05: "something PERFECT". Chain = Exa -> Brave -> SearXNG -> ddgs; the first
+# Owner 10-05: "something PERFECT". Chain = Exa -> Brave (keyed APIs only); the first
 # that returns results wins. Keys are never bundled: env var, or a one-line file in
 # private/ (dev) or user/ (public installs). No key -> that provider is skipped.
 import json as _json
@@ -141,7 +49,7 @@ from pathlib import Path as _Path
 
 _HERE = _Path(__file__).resolve().parent
 PROVIDER_TIMEOUT_S = 6.0
-PREFERRED = "auto"   # plugins.py: auto | exa | brave | free
+PREFERRED = "auto"   # plugins.py: auto | exa | brave
 MAX_RESULTS = 4
 
 
@@ -193,21 +101,23 @@ def _search_brave(key: str, query: str, max_results: int) -> List[Dict[str, str]
 
 def providers() -> List[str]:
     """Which providers would be tried, in order (for status/telemetry)."""
-    order = [n for n in ("exa", "brave") if _key(n)]
-    if _searxng_available():
-        order.append("searxng")
-    order.append("ddgs")
-    return order
+    allowed = {"auto": ("exa", "brave"), "exa": ("exa",), "brave": ("brave",)}.get(PREFERRED, ("exa", "brave"))
+    return [n for n in allowed if _key(n)]
+
+
+def available() -> bool:
+    """True when at least one keyed provider is configured (no scraping fallback)."""
+    return bool(providers())
+
+
+NO_KEY_TEXT = ("Web search isn't set up: it needs an Exa or Brave API key "
+               "(Plugins > Web search). Tell the person that plainly.")
 
 
 def _run_chain(query: str, max_results: int):
     tried = []
-    keyed = {"auto": ("exa", "brave"), "exa": ("exa",), "brave": ("brave",),
-             "free": ()}.get(PREFERRED, ("exa", "brave"))
-    for name in keyed:
+    for name in providers():
         k = _key(name)
-        if not k:
-            continue
         t = _time.time()
         try:
             fn = _search_exa if name == "exa" else _search_brave
@@ -220,18 +130,10 @@ def _run_chain(query: str, max_results: int):
         except Exception as e:  # noqa: BLE001  network/quota/auth -> next provider
             code = getattr(e, "code", "")
             tried.append(f"{name}:{code or type(e).__name__}")
-            logger.warning("web search via %s failed (%s), falling back", name, code or e)
-    base = _searxng_available()
-    if base:
-        try:
-            res = _search_searxng(base, query, max_results)
-            if res:
-                return res, "searxng"
-        except Exception as e:  # noqa: BLE001
-            tried.append(f"searxng:{type(e).__name__}")
+            logger.warning("web search via %s failed (%s), trying next", name, code or e)
     if tried:
-        logger.info("web search %r: keyed providers unavailable (%s), using ddgs", query, ", ".join(tried))
-    return _search_ddgs(query, max_results), "ddgs"
+        logger.info("web search %r: no provider answered (%s)", query, ", ".join(tried))
+    return [], (tried[-1].split(":")[0] if tried else "none")
 
 
 def search(query: str, max_results: int = 4) -> Dict:
@@ -244,6 +146,8 @@ def search(query: str, max_results: int = 4) -> Dict:
     if not query:
         return {"ok": False, "query": query, "results": [], "text": ""}
 
+    if not available():
+        return {"ok": False, "query": query, "results": [], "text": NO_KEY_TEXT, "backend": "none"}
     try:
         results, backend = _run_chain(query, max_results if max_results != 4 else MAX_RESULTS)
     except Exception as e:  # noqa: BLE001

@@ -759,7 +759,7 @@ def execute(name: str, args: dict, asker: str = "", voter_name: str = "",
     if name == "check_claim":
         import factcheck
         import plugins as _pl
-        if not _pl.is_enabled("web_search"):
+        if not _pl.usable("web_search"):
             return "Fact-checking needs the Web search plugin, which is switched off. Say so."
         s = settings("fact_check") or {}
         return factcheck.check(str(a.get("claim") or ""), daily=int(s.get("daily") or factcheck.DEFAULT_DAILY))

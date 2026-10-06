@@ -32,6 +32,14 @@ class Base(unittest.TestCase):
 
 
 class Registry(Base):
+    def setUp(self):
+        super().setUp()
+        import unittest.mock as _m
+        import websearch as _ws
+        self._keyed = _m.patch.object(_ws, "available", return_value=True)   # as if a key were set
+        self._keyed.start()
+        self.addCleanup(self._keyed.stop)
+
     def test_every_agent_tool_belongs_to_a_plugin(self):
         try:
             import speech_pipeline_manager as S
@@ -111,20 +119,17 @@ class Settings(Base):
         self.assertEqual(P.settings_of("web_search"), {"provider": "brave", "max_results": 6})
         self.assertEqual((self.ws.PREFERRED, self.ws.MAX_RESULTS), ("brave", 6))  # applied live
 
-    def test_free_provider_skips_keys(self):
-        P.USER.mkdir(parents=True, exist_ok=True)
-        (P.USER / "exa.key").write_text("exa-test-key-123456789")
-        called = []
-        self.ws.PREFERRED = "free"
-        old = (self.ws._search_exa, self.ws._search_ddgs, self.ws._searxng_available)
-        self.ws._search_exa = lambda *a: called.append("exa") or [{"title": "x", "href": "u", "body": "b"}]
-        self.ws._search_ddgs = lambda q, n=5: [{"title": "free", "href": "u", "body": "b"}]
-        self.ws._searxng_available = lambda: None
-        try:
-            self.ws._run_chain("q", 2)
-        finally:
-            self.ws._search_exa, self.ws._search_ddgs, self.ws._searxng_available = old
-        self.assertEqual(called, [])
+    def test_free_provider_option_removed(self):
+        self.assertFalse(P.save_settings("web_search", {"provider": "free"})["ok"])
+
+    def test_search_tool_hidden_without_key(self):
+        import unittest.mock as m
+        with m.patch.object(self.ws, "available", return_value=False):
+            self.assertIn("web_search", P.tool_names_disabled())
+            self.assertFalse(P.usable("web_search"))
+            self.assertTrue(P.is_enabled("web_search"))   # switch itself stays on
+        with m.patch.object(self.ws, "available", return_value=True):
+            self.assertNotIn("web_search", P.tool_names_disabled())
 
     def test_key_test_without_key(self):
         self.assertFalse(P.test("web_search", "exa")["ok"])

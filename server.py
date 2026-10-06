@@ -2187,7 +2187,7 @@ def _factcheck_heard(speaker, text: str, mgr) -> None:
     if not _plugins.is_enabled("fact_check") or speaker == "self":
         return
     s = _plugins.settings_of("fact_check") or {}
-    bg = (s.get("background") or "on") == "on" and _plugins.is_enabled("web_search")
+    bg = (s.get("background") or "on") == "on" and _plugins.usable("web_search")
     factcheck.observe(text, mgr.people.name_of(speaker) or speaker or "",
                       gap_s=float(s.get("gap") or factcheck.DEFAULT_GAP_S),
                       daily=int(s.get("daily") or factcheck.DEFAULT_DAILY), background=bg)
