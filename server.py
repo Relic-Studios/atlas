@@ -1679,6 +1679,7 @@ class TranscriptionCallbacks:
                 ("room_vote", lambda: _passive_vote(speaker, user_request_content, mgr)),
                 ("voice_mail", lambda: _mail_heard(speaker, mgr)),
                 ("fact_check", lambda: _factcheck_heard(speaker, user_request_content, mgr)),
+                ("translate", lambda: _translate_heard(speaker, user_request_content, mgr)),
             )
             for name, step in steps:
                 try:
@@ -2123,6 +2124,24 @@ def _factcheck_heard(speaker, text: str, mgr) -> None:
     factcheck.observe(text, mgr.people.name_of(speaker) or speaker or "",
                       gap_s=float(s.get("gap") or factcheck.DEFAULT_GAP_S),
                       daily=int(s.get("daily") or factcheck.DEFAULT_DAILY), background=bg)
+
+
+def _translate_heard(speaker, text: str, mgr) -> None:
+    """Live translate plugin: remember each line with its detected language; in captions
+    mode, translate foreign lines in the background (shown in the plugin, never spoken)."""
+    import plugins as _plugins
+    if not _plugins.is_enabled("live_translate") or speaker == "self":
+        return
+    import languages
+    import translate
+    det, prob = languages.ROOM.last_detect
+    lang = det if (det and prob >= languages.CONFIDENT) else languages.guess_text(text, languages.ROOM.current())
+    who = mgr.people.name_of(speaker) or speaker or ""
+    translate.note(speaker or "", text, lang)
+    s = _plugins.settings_of("live_translate") or {}
+    if (s.get("mode") or "request") == "captions":
+        translate.caption(who, text, lang, max(prob or 0.0, languages.CONFIDENT if not det else 0.0),
+                          languages.primary(), daily=int(s.get("daily") or translate.CAPTION_DAILY))
 
 
 def _mail_heard(speaker, mgr) -> None:

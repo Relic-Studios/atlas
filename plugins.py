@@ -361,6 +361,23 @@ BUILTIN: List[dict] = [
         ],
     },
     {
+        "id": "live_translate", "name": "Live translate", "icon": "globe", "category": "Senses",
+        "summary": "'What did she just say?' Translates lines from people speaking another language.",
+        "detail": "On request: ask 'what did Riley say?' or 'translate that' and the agent translates "
+                  "the real line (who said it, in what language). Captions mode also translates every "
+                  "line not in your main language in the background and lists it here; nothing is "
+                  "spoken. Uses your own model; lines are kept in memory for this session only. "
+                  "Works best with the Languages plugin on.",
+        "tools": ["translate_line"], "default": False, "feed": True,
+        "settings": [
+            {"key": "mode", "label": "Mode", "type": "select", "default": "request",
+             "options": [{"value": "request", "label": "Only when asked"},
+                         {"value": "captions", "label": "Also caption every foreign line here"}]},
+            {"key": "daily", "label": "Max captions per day", "type": "number", "default": 500,
+             "min": 10, "max": 5000},
+        ],
+    },
+    {
         "id": "game_info", "name": "Game info", "icon": "game", "category": "Games",
         "summary": "'Is it on sale?' 'How many people are playing?' Live Steam prices and player counts.",
         "detail": "Uses Steam's public store and player-count endpoints: free, no account, no key. "

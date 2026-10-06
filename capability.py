@@ -148,6 +148,8 @@ def abilities_note(eyes_on: bool, search_on: bool = True, persona: str = "", off
         can.append("after calls, propose small changes to how you talk; the owner approves them before they apply")
     if "fact_check" not in off:
         can.append("fact-check claims made in the call when someone asks if they're true (you stay quiet otherwise)")
+    if "live_translate" not in off:
+        can.append("translate what someone said in another language for the room ('what did she say?')")
     if "game_info" not in off:
         can.append("look up live Steam prices, sales and player counts for games")
     if "self_check" not in off:

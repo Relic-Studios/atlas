@@ -226,3 +226,32 @@ class WeSpeechAIDenial(unittest.TestCase):
         for t in ["We're not robots, we're a team.", "We is not a fan of fish.",
                   "We're not a robot vacuum family."]:
             self.assertFalse(R._AI_DENY.search(t), t)
+
+
+class LifeScreenQuotedSpeech(unittest.TestCase):
+    """Live translate 10-06: Max's translation of Ana's 'Yo llevo la pizza' ("I'll bring
+    the pizza") was cut by the invented-life backstop. Quoted speech isn't a claim."""
+
+    def setUp(self):
+        import response_decision as R
+        self.R = R
+        self._old = R._LIFE_CHARACTER
+        R._LIFE_CHARACTER = False
+
+    def tearDown(self):
+        self.R._LIFE_CHARACTER = self._old
+
+    def run_screen(self, chunks):
+        return "".join(self.R._life_screen(iter(chunks), None))
+
+    def test_quote_spanning_sentences_kept(self):
+        out = self.run_screen(['She said, "Does anyone know when the raid starts? ', "I'll bring the pizza.\""])
+        self.assertIn("bring the pizza", out)
+
+    def test_own_claim_still_dropped(self):
+        out = self.run_screen(["Sure. I'll bring my controller."])
+        self.assertNotIn("controller", out)
+
+    def test_curly_quotes(self):
+        out = self.run_screen(["Ana said \u201cI went to the store.\u201d"])
+        self.assertIn("went to the store", out)

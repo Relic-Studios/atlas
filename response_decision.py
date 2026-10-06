@@ -626,8 +626,27 @@ _LIFE_CLAIM = re.compile(
 _LIFE_FALLBACK = "I can't do that part, I don't have a body. But I'm right here with you."
 
 
-def claims_life(sentence: str) -> bool:
-    return bool(sentence and _LIFE_CLAIM.search(sentence))
+def _outside_quotes(sentence: str, inq: bool = False):
+    """Text of `sentence` that is NOT inside quotation marks, and the quote state after it.
+    Live translate 10-06: Max relaying Ana's "Yo llevo la pizza" as "I'll bring the
+    pizza" is quoting her, not claiming a body, so quoted speech is never screened."""
+    out = []
+    for ch in sentence or "":
+        if ch in '"“”':
+            if ch == '“':
+                inq = True
+            elif ch == '”':
+                inq = False
+            else:
+                inq = not inq
+            continue
+        if not inq:
+            out.append(ch)
+    return "".join(out), inq
+
+
+def claims_life(sentence: str, inq: bool = False) -> bool:
+    return bool(sentence and _LIFE_CLAIM.search(_outside_quotes(sentence, inq)[0]))
 
 
 def _life_screen(source, decision):
@@ -637,6 +656,7 @@ def _life_screen(source, decision):
     buf = ''
     dropped = []
     said = False
+    inq = False
     for chunk in source:
         buf += chunk
         parts = _SENTENCE.findall(buf)
@@ -644,14 +664,16 @@ def _life_screen(source, decision):
             continue
         done, tail = (parts, '') if re.search(r"[.!?]\s*$", buf) else (parts[:-1], parts[-1])
         for s in done:
-            if claims_life(s):
+            hit = claims_life(s, inq)
+            inq = _outside_quotes(s, inq)[1]
+            if hit:
                 dropped.append(s.strip())
             else:
                 yield _rejoin(s, dropped, said)
                 said = said or bool(s.strip())
         buf = tail
     if buf:
-        if claims_life(buf):
+        if claims_life(buf, inq):
             dropped.append(buf.strip())
         else:
             yield _rejoin(buf, dropped, said)

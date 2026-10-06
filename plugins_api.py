@@ -63,6 +63,9 @@ async def feed(pid: str, request: Request):
     if pid == "fact_check":
         import factcheck
         return {"items": factcheck.feed()}
+    if pid == "live_translate":
+        import translate
+        return {"items": translate.feed(), "heading": "Captions"}
     if pid == "lore":
         import lore
         return {"items": await asyncio.to_thread(lore.feed)}

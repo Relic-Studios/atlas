@@ -502,6 +502,13 @@ def intent(text: str, poll_open: Optional[bool] = None):
     if fc:
         return fc
     try:
+        import translate as _tr
+        tr = _tr.intent(t)
+    except Exception:  # noqa: BLE001
+        tr = None
+    if tr:
+        return tr
+    try:
         import game_info as _gi
         gi = _gi.intent(t)
     except Exception:  # noqa: BLE001
@@ -652,6 +659,13 @@ TOOLS_BY_PLUGIN: Dict[str, List[dict]] = {
               "empty for the latest claim. It returns evidence; you judge it plainly and kindly.",
               {"claim": {"type": "string", "description": "the exact claim, or empty for the latest one"}}),
     ],
+    "live_translate": [
+        _tool("translate_line", "Get the real line someone just said in another language so you can "
+              "translate it ('what did she say?', 'translate that', 'what did Riley say in English?'). "
+              "Never guess a translation without calling this.",
+              {"to": {"type": "string", "description": "target language, default the owner's main language"},
+               "who": {"type": "string", "description": "the speaker's name, if they asked about someone"}}),
+    ],
     "game_info": [
         _tool("game_info", "Live Steam info for a game: price, whether it's on sale, how many people are "
               "playing right now, release date. Never guess these numbers.",
@@ -749,6 +763,15 @@ def execute(name: str, args: dict, asker: str = "", voter_name: str = "",
             return "Fact-checking needs the Web search plugin, which is switched off. Say so."
         s = settings("fact_check") or {}
         return factcheck.check(str(a.get("claim") or ""), daily=int(s.get("daily") or factcheck.DEFAULT_DAILY))
+    if name == "translate_line":
+        import translate
+        try:
+            import languages
+            prim = languages.primary()
+        except Exception:  # noqa: BLE001
+            prim = "en"
+        return translate.translate_line(str(a.get("to") or ""), str(a.get("who") or ""),
+                                        primary=prim, name_of=name_of)
     if name == "game_info":
         import game_info
         s = settings("game_info") or {}
