@@ -1639,6 +1639,11 @@ class TranscriptionCallbacks:
         logger.info(f"🖥️🧠 Adding user request to history: '{user_request_content}'")
         if speaker != "self":
             _rec_event("user", spk=speaker or "user", text=user_request_content)
+            try:   # Call summary plugin: in-memory session transcript
+                import call_summary as _cs
+                _cs.note(speaker or "user", user_request_content)
+            except Exception:  # noqa: BLE001
+                pass
         if speaker == "self":
             logger.info("🖥️🙉 Ignoring own voice (self) — not adding to history.")
         else:
@@ -1908,6 +1913,11 @@ class TranscriptionCallbacks:
             if cleaned_answer: # Ensure it's not empty after cleaning
                 logger.info(f"\n{Colors.apply('🖥️✅ FINAL ASSISTANT ANSWER (Sending): ').green}{cleaned_answer}")
                 _rec_event("agent", persona=self.app.state.SpeechPipelineManager.current_persona, text=cleaned_answer)
+                try:
+                    import call_summary as _cs
+                    _cs.note(self.app.state.SpeechPipelineManager.current_persona or "", cleaned_answer, agent=True)
+                except Exception:  # noqa: BLE001
+                    pass
                 self.message_queue.put_nowait({
                     "type": "final_assistant_answer",
                     "content": cleaned_answer,

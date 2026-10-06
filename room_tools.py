@@ -444,6 +444,13 @@ def intent(text: str, poll_open: Optional[bool] = None):
             msg = re.sub(r"^(?:us|me|everyone|you)\s+(?:to\s+)?", "", (msg or "").strip(" ,.!?"))
             if mins > 0:
                 return ("set_timer", {"minutes": round(mins, 2), "message": msg or "time's up"})
+    try:
+        import call_summary as _cs
+        rc = _cs.intent(t)
+    except Exception:  # noqa: BLE001
+        rc = None
+    if rc:
+        return rc
     if _WEATHER_RE.search(t) and not _PAST_RE.search(t):
         pm = _PLACE_RE.search(t)
         place = _STOP.sub("", pm[1]).strip(" ,.?!") if pm else ""
@@ -508,13 +515,21 @@ TOOLS_BY_PLUGIN: Dict[str, List[dict]] = {
               "owner's default location.",
               {"place": {"type": "string", "description": "city or town, e.g. 'Seattle' or 'Osaka, Japan'"}}),
     ],
+    "call_summary": [
+        _tool("recap_call", "Get the real transcript of the last N minutes of this call so you can "
+              "recap it ('what did we decide?', 'what did I miss?', 'sum up the last 10 minutes'). "
+              "Never recap from memory alone.",
+              {"minutes": {"type": "number", "description": "how far back, default 10"},
+               "focus": {"type": "string", "description": "optional topic to focus on"}}),
+    ],
 }
 NAMES = {t["function"]["name"] for ts in TOOLS_BY_PLUGIN.values() for t in ts}
 TOOLS = [t for ts in TOOLS_BY_PLUGIN.values() for t in ts]
 
 
 def execute(name: str, args: dict, asker: str = "", voter_name: str = "",
-            settings: Callable[[str], dict] = lambda pid: {}) -> str:
+            settings: Callable[[str], dict] = lambda pid: {},
+            name_of: Optional[Callable] = None) -> str:
     a = args if isinstance(args, dict) else {}
     if name == "roll_dice":
         return roll_dice(str(a.get("dice") or a.get("spec") or "d20"))
@@ -537,4 +552,9 @@ def execute(name: str, args: dict, asker: str = "", voter_name: str = "",
     if name == "check_weather":
         s = settings("weather") or {}
         return check_weather(str(a.get("place") or ""), s.get("units", "auto"), s.get("home", ""))
+    if name == "recap_call":
+        import call_summary
+        s = settings("call_summary") or {}
+        return call_summary.recap(a.get("minutes") or s.get("minutes") or call_summary.DEFAULT_MIN,
+                                  str(a.get("focus") or ""), name_of=name_of)
     return f"unknown tool: {name}"

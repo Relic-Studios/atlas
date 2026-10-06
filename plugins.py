@@ -237,6 +237,18 @@ BUILTIN: List[dict] = [
         "test": _test_weather,
     },
     {
+        "id": "call_summary", "name": "Call summary", "icon": "note", "category": "Productivity",
+        "summary": "'What did we decide?' A recap of the last few minutes, from what was really said.",
+        "detail": "Keeps this session's transcript in memory only (never saved by this plugin, gone "
+                  "when ATLAS closes) and gives the agent the real lines to summarise. Nothing leaves this PC "
+                  "unless you use a cloud model.",
+        "tools": ["recap_call"], "default": True,
+        "settings": [
+            {"key": "minutes", "label": "Default recap window (minutes)", "type": "number", "default": 10,
+             "min": 1, "max": 240, "help": "Used when someone just says 'recap'."},
+        ],
+    },
+    {
         "id": "notes", "name": "Notes & follow-ups", "icon": "note", "category": "Memory",
         "summary": "A private task board: notes to self, promises, finished searches.",
         "detail": "Notes stay on this PC with the agent's other state.",

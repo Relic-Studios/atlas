@@ -883,7 +883,8 @@ class SpeechPipelineManager:
                     who = self.people.name_of(asker) or ""
                 except Exception:  # noqa: BLE001
                     pass
-                out = _room.execute(name, args, asker, who, settings=_plugins.settings_of)
+                out = _room.execute(name, args, asker, who, settings=_plugins.settings_of,
+                                    name_of=getattr(getattr(self, "people", None), "name_of", None))
                 logger.info("🎲 %s(%s) -> %s", name, ", ".join(f"{k}={str(v)[:40]!r}" for k, v in args.items()), out[:120])
                 return out
             if name in _self_tools.NAMES:
