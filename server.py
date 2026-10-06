@@ -620,44 +620,6 @@ def _owner_status() -> dict:
     return out
 
 
-@app.get("/api/panel")
-async def panel_get():
-    from agent_panel import PANEL
-    return PANEL.snapshot()
-
-
-@app.post("/api/panel")
-async def panel_set(request: Request):
-    """Agent panel: {"members": [lead, co_host]} (2 ids) or {"members": []} to end it."""
-    if not _is_owner(request):
-        return JSONResponse({"error": "owner only"}, status_code=403)
-    from agent_panel import PANEL, MAX_MEMBERS
-    from speech_pipeline_manager import PERSONAS, display_name
-    body = await request.json()
-    ids = [str(x).strip().lower() for x in (body.get("members") or [])][:MAX_MEMBERS]
-    bad = [i for i in ids if i not in PERSONAS]
-    if bad:
-        return JSONResponse({"error": f"unknown agent(s): {', '.join(bad)}"}, status_code=400)
-    if len(ids) == 1 or (len(ids) == 2 and ids[0] == ids[1]):
-        return JSONResponse({"error": "a panel needs two different agents"}, status_code=400)
-    mgr = getattr(app.state, "SpeechPipelineManager", None)
-    names = {}
-    for i in ids:
-        al = {display_name(i), i}
-        try:
-            if mgr is not None:
-                mgr._runtime()
-                al |= set(mgr.agents.get(i).profile.names or ())
-        except Exception:  # noqa: BLE001
-            pass
-        names[i] = tuple(al)
-    PANEL.set_members(ids, names)
-    if ids and mgr is not None and mgr.current_persona != ids[0]:
-        mgr.set_persona(ids[0])
-    logger.info(f"🖥️🎙️ panel {'set: ' + ' + '.join(ids) if ids else 'ended'}")
-    return PANEL.snapshot()
-
-
 @app.get("/api/owner")
 async def owner_get():
     return _owner_status()
@@ -1452,7 +1414,6 @@ class TranscriptionCallbacks:
         if speaker and txt and not txt.lstrip().startswith("["):
             txt = f"[{speaker}] {txt}"
         self.live_speaker = speaker
-        _panel_route(mgr, getattr(self.app.state, "CallBridge", None), txt)
         from conversation_dynamics import pre_llm_veto
         veto = mgr.floor.turn_gate(txt, speaker, tuple(mgr.dynamics.agent_names)) if txt else None
         if veto:
@@ -1729,7 +1690,6 @@ class TranscriptionCallbacks:
                 ("dynamics", lambda: mgr.dynamics.on_user_turn(user_request_content, speaker_id=speaker or "user")),
                 ("floor", lambda: mgr.floor.on_user_turn(speaker)),
                 ("convo_log", lambda: mgr.convo.add_user(speaker, user_request_content)),
-                ("panel", lambda: _panel_heard(mgr, speaker, user_request_content)),
                 ("hypergraph", lambda: getattr(mgr, "hgmem", None) and mgr.hgmem.observe_user(
                     mgr.current_persona, (mgr.people.name_of(speaker) or ""),
                     user_request_content)),
@@ -1815,7 +1775,6 @@ class TranscriptionCallbacks:
         from floor import filler_only
         from conversation_dynamics import pre_llm_veto
         m = re.match(r'^\s*\[(S\d+)\]', final_text)
-        _panel_route(mgr, getattr(self.app.state, "CallBridge", None), final_text)
         if filler_only(final_text) or mgr.floor.turn_gate(
                 final_text, m[1] if m else None, tuple(mgr.dynamics.agent_names)):
             return
@@ -2036,7 +1995,6 @@ class TranscriptionCallbacks:
                 if safe_answer:
                     history_answer = f"[SPEAK to={target or 'user'}] {safe_answer}"
                     app.state.SpeechPipelineManager.convo.add_agent(target, safe_answer)
-                    _panel_spoke(app.state.SpeechPipelineManager, safe_answer)
                     try:
                         _m = app.state.SpeechPipelineManager
                         if getattr(_m, "hgmem", None) is not None:
@@ -2267,73 +2225,6 @@ def start_bet(mgr, callbacks, bridge, now: float) -> Optional[int]:
     return b["id"]
 
 
-# ---------------------------------------------------------------- agent panel
-def _panel_route(mgr, bridge, txt: str) -> None:
-    """Agent panel: hand this line to the panel member it's for, before the gate
-    (the gate judges addressing against the ACTIVE agent's names)."""
-    try:
-        from agent_panel import PANEL
-        if not PANEL.active:
-            return
-        body = re.sub(r"^\s*\[[^\]]*\]\s*", "", txt or "")
-        target = PANEL.route(body)
-        if not target or target == mgr.current_persona:
-            return
-        if bridge is not None and bridge.is_speaking():
-            return  # never yank the voice mid-sentence; barge-in rules handle that
-        if mgr.panel_swap(target):
-            logger.info(f"🖥️🎙️ panel: '{body[:40]}' -> {target}")
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"panel route failed: {e}")
-
-
-def _panel_heard(mgr, speaker, text: str) -> None:
-    from agent_panel import PANEL
-    if not PANEL.active:
-        return
-    PANEL.on_human_turn()
-    mgr.panel_mirror_user(speaker, text)
-
-
-def _panel_spoke(mgr, text: str) -> None:
-    try:
-        from agent_panel import PANEL
-        if not PANEL.active:
-            return
-        mgr.panel_mirror_agent(text)
-        to = PANEL.on_agent_spoke(mgr.current_persona, text)
-        if to:
-            logger.info(f"🖥️🎙️ panel hand-off {mgr.current_persona} -> {to}")
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"panel spoke hook failed: {e}")
-
-
-HANDOFF_GAP_S = 0.6
-
-
-def start_handoff(mgr, callbacks, bridge, now: float) -> bool:
-    """The other panel agent answers a question the speaking agent put to it."""
-    try:
-        from agent_panel import PANEL, cue_text
-        from speech_pipeline_manager import display_name
-    except Exception:  # noqa: BLE001
-        return False
-    if not PANEL.active or PANEL.peek_handoff() is None:
-        return False
-    if not delivery_ready(mgr, callbacks, bridge, now, HANDOFF_GAP_S):
-        return False
-    p = PANEL.take_handoff()
-    if not p or not mgr.panel_swap(p["to"]):
-        return False
-    callbacks.reset_state()
-    callbacks.tts_to_client = True
-    callbacks.user_finished_turn = True
-    callbacks.user_history_committed = True
-    logger.info(f"🖥️🎙️ panel: {p['from']} handed the floor to {p['to']}")
-    mgr.prepare_generation(cue_text(p, display_name))
-    return True
-
-
 TIMER_GAP_S = float(os.environ.get("ATLAS_TIMER_GAP_S", "1.0"))
 TIMER_OVERDUE_GAP_S = 0.5    # once a reminder is 20 s late, any short pause will do
 
@@ -2375,8 +2266,6 @@ async def _task_delivery(app: FastAPI, callbacks) -> None:
             bridge = getattr(app.state, "CallBridge", None)
             now = time.time()
             if start_timer(mgr, callbacks, bridge, now) is not None:
-                continue
-            if start_handoff(mgr, callbacks, bridge, now):
                 continue
             if start_mail(mgr, callbacks, bridge, now) is not None:
                 continue

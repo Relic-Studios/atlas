@@ -307,13 +307,6 @@ def _filter_response(source, decision):
                     header = stripped[:end + 1]
                     decision.header = header
                     match = re.fullmatch(r'\[SPEAK to=(user|S\d+)\]', header)
-                    if not match:
-                        # Agent panel hand-off (10-06): the model addresses the other agent by
-                        # name ('[SPEAK to=Max]'). A one-word name target is still a reply;
-                        # route it to the expected target instead of dropping it as INVALID.
-                        nm = re.fullmatch(r"\[SPEAK to=([A-Za-z][\w'-]{0,23})\]", header)
-                        if nm and decision.expected_target:
-                            match = (header, decision.expected_target)
                     if header == '[HOLD]':
                         decision.action = 'HOLD'
                     elif match:

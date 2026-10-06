@@ -1282,13 +1282,6 @@ class SpeechPipelineManager:
             except Exception as e:  # noqa: BLE001
                 logger.debug("lore note failed: %s", e)
             try:
-                from agent_panel import PANEL as _panel
-                pnote = _panel.note(getattr(self, "current_persona", "") or "", display_name)
-                if pnote:
-                    note = (note + chr(10) + pnote).strip() if note else pnote
-            except Exception as e:  # noqa: BLE001
-                logger.debug("panel note failed: %s", e)
-            try:
                 import plugins as _plugins
                 if _plugins.is_enabled("soul_reflection"):
                     import soul_reflection as _soul
@@ -2138,45 +2131,7 @@ class SpeechPipelineManager:
             logger.warning("🗣️🧠⚠️ memory recall failed: %s", e)
             return ""
 
-    def panel_swap(self, name: str) -> bool:
-        """Agent panel: hand the next turn to another panel member WITHOUT the
-        persona-switch reset (floor/threads keep their state; both members keep
-        hearing the room through panel_mirror_*)."""
-        name = (name or "").strip().lower()
-        if not name or name == self.current_persona or name not in PERSONAS:
-            return False
-        return self.set_persona(name, fresh_session=False)
-
-    def _panel_others(self):
-        try:
-            from agent_panel import PANEL
-        except Exception:
-            return []
-        if not PANEL.active or self.current_persona not in PANEL.members:
-            return []
-        self._runtime()
-        return [self.agents.get(a) for a in PANEL.members if a != self.current_persona]
-
-    def panel_mirror_user(self, speaker, text: str) -> None:
-        """Panel: the other member(s) hear the same human line."""
-        for rt in self._panel_others():
-            try:
-                rt.convo.add_user(speaker, text)
-                if rt.floor is not None:
-                    rt.floor.on_user_turn(speaker)
-            except Exception as e:  # noqa: BLE001
-                logger.debug(f"panel mirror (user) failed: {e}")
-
-    def panel_mirror_agent(self, text: str) -> None:
-        """Panel: the other member(s) hear what this agent said, under its name."""
-        who = display_name(self.current_persona)
-        for rt in self._panel_others():
-            try:
-                rt.convo.add_user(who, text)
-            except Exception as e:  # noqa: BLE001
-                logger.debug(f"panel mirror (agent) failed: {e}")
-
-    def set_persona(self, name: str, fresh_session: bool = True) -> bool:
+    def set_persona(self, name: str) -> bool:
         """Swap the active persona (system prompt) and reset conversation state.
 
         Each persona has its own identity, so switching must also clear history
@@ -2188,15 +2143,6 @@ class SpeechPipelineManager:
             logger.warning(f"🗣️❓ Unknown persona '{name}'. Available: {list(PERSONAS)}.")
             return False
         self.current_persona = name
-        if fresh_session:
-            # A manual switch to an agent outside the panel ends the panel.
-            try:
-                from agent_panel import PANEL as _panel
-                if _panel.active and name not in _panel.members:
-                    _panel.clear()
-                    logger.info("🗣️🎙️ panel ended (manual switch to a non-member)")
-            except Exception:  # noqa: BLE001
-                pass
         from identity import note as _id_note
         try:
             import response_decision as _rd_life; _rd_life.set_agent(name)
@@ -2214,15 +2160,12 @@ class SpeechPipelineManager:
             self.llm.system_prompt = self.system_prompt
             self.llm.system_prompt_message = {"role": "system", "content": self.system_prompt}
         # Clear history so the new identity starts fresh (also aborts any live gen).
-        # Panel swaps happen on the live turn path: cap the wait so a slow abort can't
-        # stall the hand-over (the draft being aborted was for the other agent anyway).
-        self.abort_generation(wait_for_completion=True, timeout=(7.0 if fresh_session else 1.5),
-                              reason=f"{'set_persona' if fresh_session else 'panel_swap'}:{name}")
+        self.abort_generation(wait_for_completion=True, timeout=7.0, reason=f"set_persona:{name}")
         # Each agent owns its own runtime: the previous agent keeps its memory,
         # this one resumes its own (fresh if stale). Nothing is shared except
         # people's names (same humans) and the per-persona task boards.
         self._runtime()  # ensure registry exists
-        rt = self.agents.activate(name, fresh_session=fresh_session)
+        rt = self.agents.activate(name)
         self.dynamics.agent_names = rt.profile.names
         # Agents created after startup (e.g. with +) must count as agent names in the
         # name book too, or 'Hi Wren. I'm Riley.' is misjudged (demo take 10).

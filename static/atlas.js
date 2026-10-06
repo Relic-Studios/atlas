@@ -75,7 +75,7 @@ function renderDock() {
       d.style.setProperty('--pc', p.accent); d.textContent = initial(p);
       d.setAttribute('aria-label', p.name);
       if (p.custom) { const c = document.createElement('i'); c.className = 'cu'; d.appendChild(c); }
-      d.onclick = (e) => (e.shiftKey ? panelClick(p) : avClick(p));
+      d.onclick = () => avClick(p);
       d.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); avClick(p); } };
       d.onmouseenter = () => showTip(d, p); d.onmouseleave = hideTip; d.onfocus = () => showTip(d, p); d.onblur = hideTip;
       d.oncontextmenu = (e) => { e.preventDefault(); hideTip(); openMemory(p); };
@@ -93,28 +93,8 @@ function renderDock() {
     el.classList.toggle('switching', S.switching === id);
     el.classList.toggle('speaking', id === S.persona && !!S.fast.speaking);
     el.classList.toggle('bg', isBackground(id));
-    el.classList.toggle('panel', (S.panel?.members || []).includes(id));
   }
 }
-// Agent panel (owner 10-06): Shift+click another agent to bring it on as co-host;
-// Shift+click a panel member to end the panel. One agent speaks per turn.
-async function refreshPanel() {
-  try { S.panel = await (await fetch('/api/panel')).json(); renderDock(); } catch (_) {}
-}
-async function panelClick(p) {
-  const members = S.panel?.members || [];
-  const end = members.includes(p.id) || p.id === S.persona;
-  const body = { members: end ? [] : [S.persona, p.id] };
-  try {
-    const r = await fetch('/api/panel', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    const j = await r.json();
-    if (!r.ok) return toast(j.error || 'could not change the panel');
-    S.panel = j; renderDock(); hideTip();
-    const nm = (id) => ((S.personas.find((x) => x.id === id) || {}).name || id).toUpperCase();
-    toast(j.active ? `PANEL · ${j.members.map(nm).join(' + ')}` : 'panel ended', p.accent);
-  } catch (_) { toast('could not change the panel'); }
-}
-refreshPanel(); setInterval(refreshPanel, 5000);
 // Background mode (owner 10-06): click the ACTIVE agent to toggle it. The agent then
 // only answers when spoken to; its name opens a short direct exchange.
 const isBackground = (id) => ((S.snap?.owner?.background) || []).includes(id);
@@ -133,7 +113,7 @@ function showTip(el, p) {
   const st = p.id ? (S.switching === p.id ? 'switching…' : p.id === S.persona ? (S.fast.speaking ? 'speaking' : (bgm ? 'background mode · click for conversation' : 'active · click for background mode')) : (bgm ? 'click to switch · background' : 'click to switch')) : '';
   t.innerHTML = `<div class="n" style="color:${esc(p.accent || 'var(--accent)')}">${esc((p.name || '').toUpperCase())}</div>`
     + `<div class="r">${esc(p.role || '')}</div>`
-    + (p.voice || st ? `<div class="m">${p.voice ? 'voice · ' + esc(p.voice) : ''}${p.voice && st ? ' — ' : ''}${esc(st)}${p.id ? ' · right-click: memory · shift-click: panel' : ''}</div>` : '');
+    + (p.voice || st ? `<div class="m">${p.voice ? 'voice · ' + esc(p.voice) : ''}${p.voice && st ? ' — ' : ''}${esc(st)}${p.id ? ' · right-click: memory' : ''}</div>` : '');
   t.style.left = Math.max(8, Math.min(innerWidth - 250, r.left + r.width / 2 - 80)) + 'px';
   t.style.top = (r.bottom + 10) + 'px';
   t.classList.add('show');

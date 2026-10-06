@@ -15,8 +15,7 @@ def load_method(filename, classname, method, bindings=None):
     tree = ast.parse((ROOT / filename).read_text(encoding='utf-8'))
     cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == classname)
     node = next(n for n in cls.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == method)
-    # server.py helpers the extracted methods call (agent panel inactive in these tests)
-    ns = {'logger': logging.getLogger('test'), '_panel_route': lambda *a, **k: None, **(bindings or {})}
+    ns = {'logger': logging.getLogger('test'), **(bindings or {})}
     exec(compile(ast.Module(body=[node], type_ignores=[]), filename, 'exec'), ns)
     return ns[method]
 

@@ -328,13 +328,6 @@ def cue_note(text: str) -> str:
     bn = bets.cue_note(text)
     if bn:
         return bn
-    try:
-        import agent_panel
-        pn = agent_panel.cue_note(text)
-        if pn:
-            return pn
-    except Exception:  # noqa: BLE001
-        pass
     if ROOM_CUE_RE.search(text or ""):
         return ("REMINDER: this turn is your own timer going off, not someone speaking. Say the "
                 "reminder now in one short line, in character. Do not [HOLD].")
