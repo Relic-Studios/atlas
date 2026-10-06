@@ -98,7 +98,10 @@ Every number here comes from a test that ships with the code or from the
 
 ## Forks
 
-ATLAS is open source, so anyone can fork it and remove every guardrail on this page.
+ATLAS is open source (AGPL-3.0-or-later), so anyone can fork it and remove every
+guardrail on this page. The license requires that anyone who distributes a modified
+version, or runs one as a network service, publishes their changes under the same
+license, so forks stay visible. Forks may not use the ATLAS name or logo.
 The official releases at
 [github.com/Relic-Studios/atlas/releases](https://github.com/Relic-Studios/atlas/releases),
 with matching checksums, are the builds that ship with them on. If someone removes them

@@ -125,6 +125,22 @@ python -m unittest discover -s tests
 
 About 340 unit tests cover turn-taking, name learning, bait and repeat guards, memory isolation and privacy, setup, and the local-only security layer. They need no GPU or models and run on every push ([tests workflow](https://github.com/Relic-Studios/atlas/actions/workflows/tests.yml)). Releases are only built when they pass.
 
+## License
+
+ATLAS is licensed under the **GNU Affero General Public License v3.0 or later**
+(AGPL-3.0-or-later). See [LICENSE](LICENSE). Copyright (C) 2026 Relic Studios.
+
+In plain terms (the LICENSE file is what counts):
+- You may use, study, modify and share ATLAS, including commercially.
+- If you distribute a modified version, **or run one as a service other people use
+  over a network**, you must release your source code under the same license.
+- There is no warranty.
+
+The name "ATLAS" as used for this project and the Relic Studios logo are not
+covered by the code license. Forks must use a different name and make clear they
+are not the official release. See [SAFETY.md](SAFETY.md) for the guardrails the
+official builds ship with and the use rules for the official community.
+
 ## Privacy
 
 Audio, transcripts and memories stay on your PC. The server only listens on this computer (127.0.0.1).

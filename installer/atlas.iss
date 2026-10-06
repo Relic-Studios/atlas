@@ -12,13 +12,14 @@
 AppId={{6E4C2B7A-1F3D-4C8E-9A51-ATLAS0000001}
 AppName=ATLAS
 AppVersion={#AppVersion}
-AppPublisher=ATLAS
+AppPublisher=Relic Studios
 DefaultDirName={localappdata}\ATLAS
 DisableDirPage=no
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 OutputBaseFilename=ATLAS-Setup-{#AppVersion}
 SetupIconFile={#SrcDir}\static\favicon.ico
+LicenseFile={#SrcDir}\LICENSE
 UninstallDisplayIcon={app}\static\favicon.ico
 Compression=lzma2/max
 SolidCompression=yes

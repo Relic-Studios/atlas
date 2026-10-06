@@ -1,0 +1,17 @@
+ATLAS
+Copyright (C) 2026 Relic Studios
+
+This program is free software: you can redistribute it and/or modify it under the
+terms of the GNU Affero General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU Affero General Public License for more details.
+
+"ATLAS" (as the name of this project) and the Relic Studios logo are trademarks of
+Relic Studios and are not licensed under the AGPL. Modified versions must not be
+presented as the official ATLAS release.
+
+Third-party components keep their own licenses (MIT, Apache-2.0, BSD and others);
+models downloaded at install time are governed by their own model licenses.
