@@ -687,7 +687,9 @@ def detect_other_addressee(text: str, names: tuple[str, ...]) -> Optional[str]:
             continue
         # lower-case after a greeting is often just a noun ("so pizza, you in?");
         # only rare words (handles like "perma") or names the room used count.
-        if w[0].islower() and not _is_room_name(w) and _zipf and _zipf(w.lower(), "en") >= 3.2:
+        # Without wordfreq we can't tell a handle from a noun, so only names the
+        # room already used count (errs toward answering, never toward silence).
+        if w.islower() and not _is_room_name(w) and (not _zipf or _zipf(w.lower(), "en") >= 3.2):
             continue
         return w
     m = _MID_VOCATIVE_RE.search(body)

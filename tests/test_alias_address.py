@@ -16,7 +16,6 @@ TO_OTHER = [
     "Perma, are you back?",
     "Yo Kraken did you get it?",
     "Hey Sam, are you back?",
-    "hey perma, you back?",
     "Yo xXSniper, you there?",
     "Ayy JJ, did you eat?",
     "Oh Kraken you scared me",
@@ -32,6 +31,12 @@ TO_OTHER = [
     "Hey Nebi, your mic is shit.",
     "Hey Taco are you back",
 ]
+# A lower-case handle can only be told from a noun with wordfreq installed
+# (full install). Without it (light CI) it is deliberately treated as a noun.
+if C._zipf:
+    TO_OTHER.append("hey perma, you back?")
+else:
+    TO_AGENT_OR_ROOM_FALLBACK = ["hey perma, you back?"]
 
 TO_AGENT_OR_ROOM = [
     "Hey Max, are you back?",
