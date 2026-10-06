@@ -142,6 +142,13 @@ def _test_weather(settings: dict) -> dict:
     return {"ok": ok, "message": out.split(" Today:")[0] if ok else out}
 
 
+def _test_game(settings: dict) -> dict:
+    import game_info
+    out = game_info.lookup("Counter-Strike 2", settings.get("cc", "us"))
+    ok = "(Steam)" in out
+    return {"ok": ok, "message": out.split("\n")[0] if ok else out}
+
+
 BUILTIN: List[dict] = [
     {
         "id": "web_search", "name": "Web search", "icon": "search", "category": "Knowledge",
@@ -247,6 +254,20 @@ BUILTIN: List[dict] = [
             {"key": "minutes", "label": "Default recap window (minutes)", "type": "number", "default": 10,
              "min": 1, "max": 240, "help": "Used when someone just says 'recap'."},
         ],
+    },
+    {
+        "id": "game_info", "name": "Game info", "icon": "game", "category": "Games",
+        "summary": "'Is it on sale?' 'How many people are playing?' Live Steam prices and player counts.",
+        "detail": "Uses Steam's public store and player-count endpoints: free, no account, no key. "
+                  "Only the game's name is sent to Steam. Player counts are Steam only.",
+        "tools": ["game_info"], "default": True,
+        "settings": [
+            {"key": "cc", "label": "Store region (prices)", "type": "select", "default": "us",
+             "options": [{"value": c, "label": l} for c, l in (
+                 ("us", "United States ($)"), ("ca", "Canada (CA$)"), ("gb", "United Kingdom (£)"),
+                 ("de", "Europe (€)"), ("au", "Australia (A$)"), ("jp", "Japan (¥)"))]},
+        ],
+        "test": _test_game,
     },
     {
         "id": "notes", "name": "Notes & follow-ups", "icon": "note", "category": "Memory",

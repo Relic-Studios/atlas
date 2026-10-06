@@ -451,6 +451,13 @@ def intent(text: str, poll_open: Optional[bool] = None):
         rc = None
     if rc:
         return rc
+    try:
+        import game_info as _gi
+        gi = _gi.intent(t)
+    except Exception:  # noqa: BLE001
+        gi = None
+    if gi:
+        return gi
     if _WEATHER_RE.search(t) and not _PAST_RE.search(t):
         pm = _PLACE_RE.search(t)
         place = _STOP.sub("", pm[1]).strip(" ,.?!") if pm else ""
@@ -522,6 +529,11 @@ TOOLS_BY_PLUGIN: Dict[str, List[dict]] = {
               {"minutes": {"type": "number", "description": "how far back, default 10"},
                "focus": {"type": "string", "description": "optional topic to focus on"}}),
     ],
+    "game_info": [
+        _tool("game_info", "Live Steam info for a game: price, whether it's on sale, how many people are "
+              "playing right now, release date. Never guess these numbers.",
+              {"game": {"type": "string", "description": "the game's name, e.g. 'Helldivers 2'"}}, ["game"]),
+    ],
 }
 NAMES = {t["function"]["name"] for ts in TOOLS_BY_PLUGIN.values() for t in ts}
 TOOLS = [t for ts in TOOLS_BY_PLUGIN.values() for t in ts]
@@ -557,4 +569,8 @@ def execute(name: str, args: dict, asker: str = "", voter_name: str = "",
         s = settings("call_summary") or {}
         return call_summary.recap(a.get("minutes") or s.get("minutes") or call_summary.DEFAULT_MIN,
                                   str(a.get("focus") or ""), name_of=name_of)
+    if name == "game_info":
+        import game_info
+        s = settings("game_info") or {}
+        return game_info.lookup(str(a.get("game") or a.get("name") or ""), s.get("cc", "us"))
     return f"unknown tool: {name}"

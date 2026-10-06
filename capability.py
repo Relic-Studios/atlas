@@ -132,6 +132,10 @@ def abilities_note(eyes_on: bool, search_on: bool = True, persona: str = "", off
         can.append("set timers and reminders for the room that go off on their own")
     if "weather" not in off:
         can.append("check live weather anywhere")
+    if "call_summary" not in off:
+        can.append("recap what was said in this call when asked (from the real transcript)")
+    if "game_info" not in off:
+        can.append("look up live Steam prices, sales and player counts for games")
     if "self_check" not in off:
         can.append("log predictions that could turn out wrong and check your track record later")
         can.append("read (not change) the actual source code that runs you, to see where your "
