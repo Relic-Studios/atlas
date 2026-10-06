@@ -31,14 +31,17 @@ const S = {
 
 /* ---------------------------------------------------------------- theme */
 function hexRgb(h) { const m = h.replace('#', ''); const n = parseInt(m.length === 3 ? m.split('').map((c) => c + c).join('') : m, 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; }
-let accentRGB = hexRgb('#22d3ee'), targetRGB = accentRGB.slice();
-function persona(id) { return S.personas.find((p) => p.id === id) || { id, name: id, accent: '#22d3ee', role: '', voice: '' }; }
+let accentRGB = hexRgb('#5ed3c6'), targetRGB = accentRGB.slice();
+function persona(id) { return S.personas.find((p) => p.id === id) || { id, name: id, accent: '#5ed3c6', role: '', voice: '' }; }
 function applyTheme() { targetRGB = hexRgb(persona(S.persona).accent); $('orbName').textContent = persona(S.persona).name.toUpperCase(); }
+let _themeKey = '';
 function tickTheme() {
-  accentRGB = accentRGB.map((v, i) => lerp(v, targetRGB[i], 0.06));
-  const r = accentRGB.map(Math.round);
-  document.documentElement.style.setProperty('--accent', `rgb(${r.join(',')})`);
-  document.documentElement.style.setProperty('--accent-rgb', r.join(','));
+  accentRGB = accentRGB.map((v, i) => lerp(v, targetRGB[i], 0.12));
+  const r = accentRGB.map(Math.round), k = r.join(',');
+  if (k === _themeKey) return;           // converged: no style writes, no restyle of the page
+  _themeKey = k;
+  document.documentElement.style.setProperty('--accent', `rgb(${k})`);
+  document.documentElement.style.setProperty('--accent-rgb', k);
 }
 const rgba = (a) => `rgba(${accentRGB.map(Math.round).join(',')},${a})`;
 const SPK_COLORS = ['#5eead4', '#fbbf24', '#f472b6', '#60a5fa', '#a3e635', '#fb7185', '#c084fc', '#38bdf8'];
@@ -385,7 +388,7 @@ function renderChat() {
   const keep = new Set(shown.map((m) => m._k));
   for (const [k, el] of chatEls) if (!keep.has(k)) { el.remove(); chatEls.delete(k); }
   const empty = !S.chat.length && !S.typingUser && !S.typingAssistant;
-  if (empty && !chatEmptyEl) { chatEmptyEl = document.createElement('div'); chatEmptyEl.className = 'empty-chat'; chatEmptyEl.innerHTML = 'NO MESSAGES YET<br><br>talk in the call — transcripts stream here live'; feed.appendChild(chatEmptyEl); }
+  if (empty && !chatEmptyEl) { chatEmptyEl = document.createElement('div'); chatEmptyEl.className = 'empty-chat'; chatEmptyEl.innerHTML = 'No messages yet<br>talk in the call — transcripts stream here live'; feed.appendChild(chatEmptyEl); }
   if (!empty && chatEmptyEl) { chatEmptyEl.remove(); chatEmptyEl = null; }
   let prev = null;   // keep DOM order == chat order (backlog can prepend)
   for (const m of shown) {
@@ -606,10 +609,14 @@ function renderSnap(s) {
   $('roster').innerHTML = roster.length ? roster.map((r) => {
     const col = spkColor(r.id), d = dz[r.id];
     const nm = r.name || _spkNames[r.id] || '';
-    const tags = [r.addressed ? `<span class="tag hot">called ${r.addressed}×</span>` : '', r.id === fl.partner ? '<span class="tag hot">partner</span>' : ''].join('');
+    const tags = [r.addressed ? `<span class="tag hot">called ${r.addressed}×</span>` : ''].join('');
     const muted = (s.owner?.muted_speakers || []).includes(String(r.id).toUpperCase());
-    return `<div class="spk ${r.id === liveSpk ? 'live' : ''} ${r.id === fl.partner ? 'partner' : ''} ${muted ? 'muted' : ''}"><div class="av" style="background:${col};box-shadow:0 0 ${r.idle_s < 10 ? 14 : 0}px ${col}" title="${esc(r.id)}">${esc(nm ? nm.slice(0, 2) : r.id)}</div>
-      <div style="min-width:0"><div style="font-size:11.5px;font-family:var(--mono)">${nm ? `<b>${esc(nm)}</b> · ` : ''}${r.turns} turns · ${r.words} w${d ? ` · ${d.speech_s}s voice` : ''} · ${r.idle_s < 60 ? r.idle_s.toFixed(0) + 's ago' : Math.round(r.idle_s / 60) + 'm ago'}</div><div class="line">${esc(r.last)}</div></div><div>${tags}<span class="mutebtn ${muted ? 'on' : ''}" data-mute="${esc(r.id)}" title="${muted ? 'Unmute' : 'Ignore this speaker (agent never answers them)'}">${muted ? 'muted' : 'mute'}</span></div></div>`;
+    const ago = r.idle_s < 60 ? r.idle_s.toFixed(0) + 's' : Math.round(r.idle_s / 60) + 'm';
+    const meta = `${r.turns} turns${d ? ` · ${d.speech_s}s` : ''} · ${ago}`;
+    return `<div class="spk ${r.id === liveSpk ? 'live' : ''} ${r.id === fl.partner ? 'partner' : ''} ${muted ? 'muted' : ''}" title="${esc(r.id)} · ${r.words} words">
+      <div class="sav" style="--c:${col}">${esc((nm || r.id).slice(0, 2))}</div>
+      <div class="sbody"><div class="sname"><span>${esc(nm || 'Unknown voice')}</span>${tags}<span class="smeta">${meta}</span></div><div class="line">${esc(r.last)}</div></div>
+      <span class="mutebtn ${muted ? 'on' : ''}" data-mute="${esc(r.id)}" title="${muted ? 'Unmute' : 'Ignore this speaker (agent never answers them)'}">${muted ? 'muted' : 'mute'}</span></div>`;
   }).join('') : `<div class="stats">${(s.speakers || []).map((x) => `${esc(x.label)} · ${x.speech_s}s`).join('<br>') || 'nobody has spoken yet'}</div>`;
 
   // threads
@@ -664,70 +671,35 @@ document.querySelectorAll('.tabs span').forEach((t) => t.onclick = () => {
 /* ---------------------------------------------------------------- canvases */
 function fit(c) { const r = c.getBoundingClientRect(), dpr = window.devicePixelRatio || 1; const w = Math.max(1, Math.round(r.width * dpr)), h = Math.max(1, Math.round(r.height * dpr)); if (c.width !== w || c.height !== h) { c.width = w; c.height = h; } return [c.getContext('2d'), w, h, dpr]; }
 
-// background: drifting constellation tinted by persona
-const bgP = Array.from({ length: 70 }, () => ({ x: Math.random(), y: Math.random(), vx: (Math.random() - .5) * 2e-4, vy: (Math.random() - .5) * 2e-4, r: Math.random() * 1.6 + .4 }));
-function drawBg(t) {
-  const [g, w, h] = fit($('bg'));
-  g.clearRect(0, 0, w, h);
-  const e = S.sm.energy;
-  const grd = g.createRadialGradient(w * .22, h * .35, 0, w * .22, h * .35, w * .6);
-  grd.addColorStop(0, rgba(.10 + e * .12)); grd.addColorStop(1, 'rgba(0,0,0,0)');
-  g.fillStyle = grd; g.fillRect(0, 0, w, h);
-  const grd2 = g.createRadialGradient(w * .85, h * 1.1, 0, w * .85, h * 1.1, w * .5);
-  grd2.addColorStop(0, 'rgba(99,102,241,.08)'); grd2.addColorStop(1, 'rgba(0,0,0,0)'); g.fillStyle = grd2; g.fillRect(0, 0, w, h);
-  for (const p of bgP) {
-    p.x = (p.x + p.vx * (1 + e * 6) + 1) % 1; p.y = (p.y + p.vy * (1 + e * 6) + 1) % 1;
-    g.beginPath(); g.arc(p.x * w, p.y * h, p.r * (window.devicePixelRatio || 1), 0, 7); g.fillStyle = rgba(.25 + e * .4); g.fill();
-  }
-  g.lineWidth = 1;
-  for (let i = 0; i < bgP.length; i++) for (let j = i + 1; j < bgP.length; j++) {
-    const dx = (bgP[i].x - bgP[j].x) * w, dy = (bgP[i].y - bgP[j].y) * h, d = Math.hypot(dx, dy);
-    if (d < 140) { g.strokeStyle = rgba((1 - d / 140) * (.08 + e * .15)); g.beginPath(); g.moveTo(bgP[i].x * w, bgP[i].y * h); g.lineTo(bgP[j].x * w, bgP[j].y * h); g.stroke(); }
-  }
-}
-
-// orb: spectrum ring (call in) + voice-out halo + thinking orbiters
+// orb: thin status ring. Spectrum ticks (call in), output-level arc, thinking sweep.
 function drawOrb(t) {
   const [g, w, h, dpr] = fit($('orb'));
   g.clearRect(0, 0, w, h);
-  const cx = w / 2, cy = h * .5, R = Math.min(w, h) * .26, sm = S.sm;
+  const cx = w / 2, cy = h * .5, R = Math.min(w, h) * .36, sm = S.sm;
   const out = clamp((db(sm.out) + 55) / 50), inn = clamp((db(sm.clean) + 55) / 50);
-  // halo
-  const halo = g.createRadialGradient(cx, cy, R * .4, cx, cy, R * (1.9 + out * .8));
-  halo.addColorStop(0, rgba(.22 + out * .35)); halo.addColorStop(1, 'rgba(0,0,0,0)');
-  g.fillStyle = halo; g.beginPath(); g.arc(cx, cy, R * 2.8, 0, 7); g.fill();
-  // rotating dashed rings
-  for (let k = 0; k < 3; k++) {
-    g.save(); g.translate(cx, cy); g.rotate(t / (3000 + k * 1700) * (k % 2 ? -1 : 1));
-    g.setLineDash([4 * dpr, (10 + k * 6) * dpr]); g.strokeStyle = rgba(.18 + k * .05); g.lineWidth = dpr;
-    g.beginPath(); g.arc(0, 0, R * (1.32 + k * .16), 0, 7); g.stroke(); g.restore();
-  }
-  g.setLineDash([]);
-  // spectrum petals (mirrored)
+  g.lineCap = 'round';
+  g.lineWidth = 1 * dpr; g.strokeStyle = 'rgba(255,255,255,.07)';
+  g.beginPath(); g.arc(cx, cy, R, 0, 7); g.stroke();
+  // spectrum ticks around the ring
   const spec = sm.spec, n = spec.length * 2;
+  g.lineWidth = 1.6 * dpr;
   for (let i = 0; i < n; i++) {
     const v = spec[i < spec.length ? i : n - 1 - i] || 0;
-    const a = (i / n) * Math.PI * 2 - Math.PI / 2 + t / 9000;
-    const r0 = R * 1.05, r1 = r0 + R * (.06 + v * .75 * (0.35 + inn));
-    g.strokeStyle = `rgba(94,234,212,${.25 + v * .7})`; g.lineWidth = 2.2 * dpr; g.lineCap = 'round';
+    const a = (i / n) * Math.PI * 2 - Math.PI / 2;
+    const r0 = R + 5 * dpr, r1 = r0 + 2 * dpr + v * R * .32 * (0.4 + inn);
+    g.strokeStyle = `rgba(121,192,255,${.18 + v * .7})`;
     g.beginPath(); g.moveTo(cx + Math.cos(a) * r0, cy + Math.sin(a) * r0); g.lineTo(cx + Math.cos(a) * r1, cy + Math.sin(a) * r1); g.stroke();
   }
-  // voice-out blob
-  g.beginPath();
-  for (let i = 0; i <= 90; i++) {
-    const a = i / 90 * Math.PI * 2;
-    const wob = Math.sin(a * 5 + t / 180) * .5 + Math.sin(a * 3 - t / 260) * .5;
-    const rr = R * (.86 + out * .14 * wob + .02 * Math.sin(t / 700));
-    const x = cx + Math.cos(a) * rr, y = cy + Math.sin(a) * rr; i ? g.lineTo(x, y) : g.moveTo(x, y);
+  // voice-out level as an arc on the ring
+  if (out > .01) {
+    g.lineWidth = 2.5 * dpr; g.strokeStyle = rgba(.95);
+    g.beginPath(); g.arc(cx, cy, R, -Math.PI / 2, -Math.PI / 2 + out * Math.PI * 2); g.stroke();
   }
-  const core = g.createRadialGradient(cx - R * .3, cy - R * .3, R * .1, cx, cy, R);
-  core.addColorStop(0, rgba(.5 + out * .4)); core.addColorStop(.55, rgba(.14)); core.addColorStop(1, 'rgba(8,10,15,.9)');
-  g.fillStyle = core; g.fill(); g.strokeStyle = rgba(.7); g.lineWidth = 1.5 * dpr; g.stroke();
-  // thinking orbiters
-  if (sm.think > .02) for (let k = 0; k < 3; k++) {
-    const a = t / 280 + k * 2.094;
-    g.beginPath(); g.arc(cx + Math.cos(a) * R * 1.2, cy + Math.sin(a) * R * 1.2, 4 * dpr * sm.think, 0, 7);
-    g.fillStyle = `rgba(167,139,250,${sm.think})`; g.shadowColor = '#a78bfa'; g.shadowBlur = 14 * dpr; g.fill(); g.shadowBlur = 0;
+  // thinking: a short arc that sweeps
+  if (sm.think > .02) {
+    const a = t / 260;
+    g.lineWidth = 2 * dpr; g.strokeStyle = `rgba(164,139,250,${sm.think})`;
+    g.beginPath(); g.arc(cx, cy, R - 7 * dpr, a, a + 1.1); g.stroke();
   }
 }
 function drawSpec() {
@@ -735,8 +707,7 @@ function drawSpec() {
   const s = S.sm.spec, n = s.length, bw = w / n;
   for (let i = 0; i < n; i++) {
     const v = s[i], bh = Math.max(2, v * h);
-    const gr = g.createLinearGradient(0, h, 0, h - bh); gr.addColorStop(0, rgba(.25)); gr.addColorStop(1, 'rgba(94,234,212,.95)');
-    g.fillStyle = gr; g.fillRect(i * bw + 1, h - bh, bw - 2, bh);
+    g.fillStyle = `rgba(121,192,255,${.25 + v * .6})`; g.fillRect(i * bw + 1, h - bh, bw - 2, bh);
   }
 }
 function drawScope() {
@@ -747,7 +718,7 @@ function drawScope() {
     d.forEach((p, i) => { const x = (i / 179) * w, y = h - clamp((db(p[idx]) + 60) / 60) * (h - 2) - 1; i ? g.lineTo(x, y) : g.moveTo(x, y); });
     g.strokeStyle = col; g.lineWidth = 1.5; g.stroke();
   };
-  line(0, 'rgba(94,234,212,.85)'); line(1, rgba(.95));
+  line(0, 'rgba(121,192,255,.8)'); line(1, rgba(.95));
 }
 function spark(id, data, col) {
   const [g, w, h] = fit($(id)); g.clearRect(0, 0, w, h);
@@ -760,12 +731,12 @@ function spark(id, data, col) {
 const ringV = { util: 0, mem: 0 }, ringT = { util: 0, mem: 0 }, ringLbl = { util: '—', mem: '—' };
 function drawRing(id, v, lbl, sub, col) {
   const c = $(id), g = c.getContext('2d'), w = c.width, cx = w / 2, r = w * .38;
-  g.clearRect(0, 0, w, w); g.lineCap = 'round'; g.lineWidth = w * .07;
-  g.strokeStyle = 'rgba(255,255,255,.06)'; g.beginPath(); g.arc(cx, cx, r, .75 * Math.PI, 2.25 * Math.PI); g.stroke();
-  const gr = g.createLinearGradient(0, 0, w, w); gr.addColorStop(0, col); gr.addColorStop(1, v > .9 ? '#f87171' : v > .75 ? '#fbbf24' : col);
-  g.strokeStyle = gr; g.shadowColor = col; g.shadowBlur = 12; g.beginPath(); g.arc(cx, cx, r, .75 * Math.PI, (.75 + 1.5 * v) * Math.PI); g.stroke(); g.shadowBlur = 0;
-  g.fillStyle = '#e3e8f0'; g.font = `600 ${w * .17}px Cascadia Code, Consolas, monospace`; g.textAlign = 'center'; g.fillText(lbl, cx, cx + w * .05);
-  g.fillStyle = '#8792a4'; g.font = `${w * .085}px Segoe UI, sans-serif`; g.fillText(sub, cx, cx + w * .2);
+  g.clearRect(0, 0, w, w); g.lineCap = 'round'; g.lineWidth = w * .06;
+  g.strokeStyle = 'rgba(255,255,255,.07)'; g.beginPath(); g.arc(cx, cx, r, .75 * Math.PI, 2.25 * Math.PI); g.stroke();
+  g.strokeStyle = v > .9 ? '#f85149' : v > .75 ? '#d29922' : col;
+  g.beginPath(); g.arc(cx, cx, r, .75 * Math.PI, (.75 + 1.5 * v) * Math.PI); g.stroke();
+  g.fillStyle = '#d5dbe4'; g.font = `600 ${w * .17}px Cascadia Code, Consolas, monospace`; g.textAlign = 'center'; g.fillText(lbl, cx, cx + w * .05);
+  g.fillStyle = '#566070'; g.font = `${w * .085}px Segoe UI, sans-serif`; g.fillText(sub, cx, cx + w * .2);
 }
 let gpuHist = [];
 function drawGpuHist() {
@@ -773,7 +744,7 @@ function drawGpuHist() {
   if (gpuHist.length < 2) return;
   const tot = S.snap?.gpu?.mem_total || 24;
   const plot = (f, col, fill) => { g.beginPath(); gpuHist.forEach((p, i) => { const x = i / (gpuHist.length - 1) * w, y = h - clamp(f(p)) * (h - 2) - 1; i ? g.lineTo(x, y) : g.moveTo(x, y); }); g.strokeStyle = col; g.lineWidth = 1.5; g.stroke(); if (fill) { g.lineTo(w, h); g.lineTo(0, h); g.fillStyle = fill; g.fill(); } };
-  plot((p) => p[2] / tot, 'rgba(167,139,250,.9)', 'rgba(167,139,250,.08)');
+  plot((p) => p[2] / tot, 'rgba(164,139,250,.9)', 'rgba(164,139,250,.06)');
   plot((p) => p[1] / 100, rgba(.95));
 }
 
@@ -786,18 +757,18 @@ function frame(t) {
   sm.energy = lerp(sm.energy, clamp(Math.max((db(sm.clean) + 50) / 50, (db(sm.out) + 50) / 50)), .08);
   sm.think = lerp(sm.think, f.thinking ? 1 : 0, .1);
   tickTheme();
-  drawBg(t); drawOrb(t); drawSpec(); drawScope();
-  if (t - lastSlow > 90) {
+  if (t - lastT >= 32 && !document.hidden) { lastT = t; drawOrb(t); drawSpec(); drawScope(); }
+  if (t - lastSlow > 250) {
     lastSlow = t;
     meter('mIn', 'vIn', sm.in); meter('mClean', 'vClean', sm.clean); meter('mOut', 'vOut', sm.out);
     ringV.util = lerp(ringV.util, ringT.util, .3); ringV.mem = lerp(ringV.mem, ringT.mem, .3);
     const ac = `rgb(${accentRGB.map(Math.round).join(',')})`;
-    drawRing('rUtil', ringV.util, ringLbl.util, 'GPU LOAD', ac); drawRing('rMem', ringV.mem, ringLbl.mem, 'VRAM', '#a78bfa');
+    drawRing('rUtil', ringV.util, ringLbl.util, 'GPU LOAD', ac); drawRing('rMem', ringV.mem, ringLbl.mem, 'VRAM', '#a48bfa');
     spark('sE2E', series.e2e, 'rgba(52,211,153,.9)'); spark('sHdr', series.hdr, rgba(.9)); spark('sPause', series.pause, 'rgba(251,191,36,.9)');
     drawGpuHist();
     $('curSpk').textContent = S.typingUserSpk ? `speaker ${S.typingUserSpk}` : '—';
   }
-  lastT = t; requestAnimationFrame(frame);
+  requestAnimationFrame(frame);
 }
 
 /* ---------------------------------------------------------------- boot */
@@ -811,7 +782,7 @@ function renderEyes(sc) {
   const el = $('pEyes'); if (!el) return;
   if (!sc) { el.className = 'pill eyes'; return; }
   el.className = 'pill eyes ' + (sc.enabled ? 'ok' : 'warn');
-  el.childNodes[1].textContent = sc.enabled ? 'EYES' : 'EYES OFF';
+  el.childNodes[1].textContent = sc.enabled ? 'eyes' : 'eyes off';
   const meta = $('eyeMeta'), img = $('eyeImg');
   if (sc.last_ts) {
     if (sc.last_ts !== _eyeTs) {
@@ -831,7 +802,7 @@ function renderBrain(tb) {
   const remote = b.mode === 'remote', busy = b.switching || S.brainBusy;
   const r = b.remote || {};
   el.className = 'pill brain ' + (busy ? 'busy' : remote ? (r.healthy === false ? 'warn' : 'ok') : '');
-  $('brainLbl').textContent = busy ? 'SWITCHING…' : remote ? 'REMOTE' : 'LOCAL';
+  $('brainLbl').textContent = busy ? 'switching…' : remote ? 'remote llm' : 'local llm';
   const lines = [];
   lines.push(remote ? `<b>${esc(_brainInfo.remote_label || 'Remote')}</b>` : `<b>Local</b> · ${esc(_brainInfo.local_model || '')}`);
   if (remote) {
@@ -869,9 +840,9 @@ async function ownerPost(body) {
 function renderOwner(o) {
   if (!o) return;
   const m = $('pMute'), q = $('pQuiet'); if (!m || !q) return;
-  m.classList.toggle('on', !!o.mute); $('muteLbl').textContent = o.mute ? 'MUTED' : 'LIVE';
+  m.classList.toggle('on', !!o.mute); $('muteLbl').textContent = o.mute ? 'Muted' : 'Live';
   q.classList.toggle('on', o.quiet_s > 0);
-  $('quietLbl').textContent = o.quiet_s > 0 ? `QUIET ${Math.ceil(o.quiet_s / 60)}m` : 'QUIET';
+  $('quietLbl').textContent = o.quiet_s > 0 ? `Quiet ${Math.ceil(o.quiet_s / 60)}m` : 'Quiet';
   const sl = $('talkSlider'), pid = S.persona || o.active;
   const v = (o.talkativeness || {})[pid] ?? o.active_talkativeness;
   if (sl && document.activeElement !== sl && v != null) { sl.value = v; $('talkVal').textContent = Number(v).toFixed(2); }
@@ -928,3 +899,22 @@ async function refreshGuide(action) {
 }
 document.getElementById('guideHide').onclick = () => refreshGuide('hide');
 refreshGuide(); setInterval(refreshGuide, 30000);
+
+/* ---------------------------------------------------------------- collapsible sections */
+(() => {
+  const KEY = 'atlas.collapsed.v1';
+  let saved; try { saved = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch { saved = null; }
+  // first run: keep the busy diagnostics folded so the column reads cleanly
+  const DEFAULT = ['GPU', 'Models', 'Threads', 'Model context', 'Audio routing'];
+  const name = (p) => (p.querySelector('.ptitle')?.childNodes[0]?.textContent || '').trim();
+  const closed = new Set(saved || DEFAULT);
+  document.querySelectorAll('.side > .panel').forEach((p) => {
+    if (closed.has(name(p))) p.classList.add('collapsed');
+    p.querySelector('.ptitle').addEventListener('click', (e) => {
+      if (e.target.closest('.tabs')) return;
+      p.classList.toggle('collapsed');
+      const now = [...document.querySelectorAll('.side > .panel.collapsed')].map(name);
+      try { localStorage.setItem(KEY, JSON.stringify(now)); } catch {}
+    });
+  });
+})();
