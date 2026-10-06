@@ -14,6 +14,18 @@ setup_logging(logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+_REC_NAMES: dict = {}
+
+
+def _rec_name(speaker, mgr):
+    """Write a {"k": "name"} event the first time a speaker's name is known (or changes),
+    so offline tools (Highlight reel) can show real names instead of S-labels."""
+    name = mgr.people.name_of(speaker) if speaker else None
+    if name and _REC_NAMES.get(speaker) != name:
+        _REC_NAMES[speaker] = name
+        _rec_event("name", spk=speaker, name=name)
+
+
 def _rec_event(kind, **fields):
     """Best-effort call recording (call_recorder.py); never raises."""
     try:
@@ -1662,6 +1674,7 @@ class TranscriptionCallbacks:
                     mgr.current_persona, (mgr.people.name_of(speaker) or ""),
                     user_request_content)),
                 ("name_learning", lambda: mgr.people.learn(speaker, user_request_content)),
+                ("name_record", lambda: _rec_name(speaker, mgr)),
                 ("remember", lambda: mgr.remember(user_request_content)),
                 ("room_vote", lambda: _passive_vote(speaker, user_request_content, mgr)),
                 ("voice_mail", lambda: _mail_heard(speaker, mgr)),

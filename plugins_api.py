@@ -70,6 +70,10 @@ async def feed(pid: str, request: Request):
         import soul_reflection
         return {"items": await asyncio.to_thread(soul_reflection.feed),
                 "run": {"label": "Reflect on the last call"}}
+    if pid == "highlights":
+        import highlights
+        return {"items": await asyncio.to_thread(highlights.feed),
+                "run": {"label": "Find highlights in the last call"}, "heading": "Moments"}
     return {"items": []}
 
 
@@ -79,12 +83,13 @@ async def feed_action(pid: str, request: Request):
     if not _owner(request):
         return _deny()
     d = await _body(request)
-    if pid not in ("soul_reflection", "lore"):
+    if pid not in ("soul_reflection", "lore", "highlights"):
         return JSONResponse({"error": "this plugin has no actions"}, status_code=404)
     import importlib
     mod = importlib.import_module(pid)
     try:
-        ok = mod.action(str(d.get("agent") or ""), str(d.get("id") or ""), str(d.get("act") or ""))
+        ok = await asyncio.to_thread(mod.action, str(d.get("agent") or ""), str(d.get("id") or ""),
+                                     str(d.get("act") or ""))
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     return {"ok": ok} if ok else JSONResponse({"error": "not found"}, status_code=404)
@@ -95,6 +100,15 @@ async def feed_run(pid: str, request: Request):
     """Run a plugin's off-call job (Soul reflection: reflect on the last call)."""
     if not _owner(request):
         return _deny()
+    if pid == "highlights":
+        import plugins as _P
+        if not _P.is_enabled("highlights"):
+            return JSONResponse({"error": "Turn Highlight reel on first."}, status_code=409)
+        import highlights
+        res = await asyncio.to_thread(highlights.find)
+        if res.get("error"):
+            return JSONResponse({"error": res["error"]}, status_code=409)
+        return {"ok": True, "added": res["moments"], "agents": ["call"], "errors": []}
     if pid != "soul_reflection":
         return JSONResponse({"error": "nothing to run"}, status_code=404)
     import plugins as _P

@@ -326,6 +326,24 @@ BUILTIN: List[dict] = [
         "settings": [],
     },
     {
+        "id": "highlights", "name": "Highlight reel", "icon": "film", "category": "Creative",
+        "summary": "Finds the best moments of a finished call and turns them into captioned vertical clips.",
+        "detail": "Press 'Find highlights in the last call'. Moments are ranked from the call transcript: "
+                  "laughter and big reactions right after the agent spoke, short punchy replies, being called "
+                  "by name. Moments with insults, slurs or private details are never offered. The list is "
+                  "private to you; a clip is only made after you confirm below that everyone in your calls "
+                  "agreed to appear. Clips are captions on a plain card, saved next to the call recording. "
+                  "Runs only when no call is live.",
+        "tools": [], "default": False, "feed": True,
+        "settings": [
+            {"key": "consent", "label": "People in my calls", "type": "select", "default": "not_confirmed",
+             "options": [{"value": "not_confirmed", "label": "Not confirmed (list moments only, no clips)"},
+                         {"value": "agreed", "label": "Everyone agreed to appear in clips"}]},
+            {"key": "count", "label": "Moments to find per call", "type": "number", "default": 6,
+             "min": 1, "max": 12},
+        ],
+    },
+    {
         "id": "fact_check", "name": "Quiet fact-check", "icon": "check", "category": "Knowledge",
         "summary": "Checks public claims in the background. The agent only speaks up when asked 'was that true?'",
         "detail": "When someone states a checkable public fact (a number, a date, 'the tallest...'), it's "

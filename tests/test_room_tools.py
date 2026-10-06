@@ -171,6 +171,9 @@ class Wiring(Base):
         mgr = SimpleNamespace(prepare_generation=started.append)
         cb = SimpleNamespace(reset_state=lambda: None)
         orig = server.delivery_ready
+        import plugins as _pl
+        orig_en = _pl.is_enabled
+        _pl.is_enabled = lambda pid: True   # never depend on the owner's live user/plugins.json
         try:
             server.delivery_ready = lambda *a, **k: False
             self.assertIsNone(server.start_timer(mgr, cb, None, now))   # busy room: waits
@@ -178,6 +181,7 @@ class Wiring(Base):
             self.assertIsNotNone(server.start_timer(mgr, cb, None, now))
         finally:
             server.delivery_ready = orig
+            _pl.is_enabled = orig_en
         self.assertEqual(len(started), 1)
         self.assertIn("stretch", started[0])
         self.assertIsNone(server.start_timer(mgr, cb, None, now))       # only once
