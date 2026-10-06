@@ -37,7 +37,7 @@ TIMER_STALE_S = 15 * 60      # a reminder that couldn't be said for 15 min is dr
 
 # Our own "a timer went off" cue. Never a real user line (floor.steering_note and
 # the pipeline treat it like a TASK CUE: no passivity HOLD, no bait checks).
-ROOM_CUE_RE = re.compile(r"\(ROOM CUE #(\d+)\)")
+ROOM_CUE_RE = re.compile(r"\((?:ROOM|MAIL) CUE #(\d+)\)")
 
 
 # ------------------------------------------------------------------ state
@@ -320,6 +320,10 @@ def claim(tid: int, clock: Callable[[], float] = time.time) -> str:
 
 
 def cue_note(text: str) -> str:
+    import voice_mail
+    mn = voice_mail.cue_note(text)
+    if mn:
+        return mn
     if ROOM_CUE_RE.search(text or ""):
         return ("REMINDER: this turn is your own timer going off, not someone speaking. Say the "
                 "reminder now in one short line, in character. Do not [HOLD].")
@@ -452,6 +456,13 @@ def intent(text: str, poll_open: Optional[bool] = None):
     if rc:
         return rc
     try:
+        import voice_mail as _vm
+        vm = _vm.intent(t)
+    except Exception:  # noqa: BLE001
+        vm = None
+    if vm:
+        return vm
+    try:
         import game_info as _gi
         gi = _gi.intent(t)
     except Exception:  # noqa: BLE001
@@ -529,6 +540,16 @@ TOOLS_BY_PLUGIN: Dict[str, List[dict]] = {
               {"minutes": {"type": "number", "description": "how far back, default 10"},
                "focus": {"type": "string", "description": "optional topic to focus on"}}),
     ],
+    "voice_mail": [
+        _tool("leave_message", "Save a message for someone who isn't here (or not listening) to pass on "
+              "the next time you hear their voice: 'tell Riley the raid moved to 9 when she joins'.",
+              {"to": {"type": "string", "description": "the recipient's first name"},
+               "message": {"type": "string", "description": "what to pass on, in the sender's words"}},
+              ["to", "message"]),
+        _tool("list_messages", "List messages waiting to be passed on.", {}),
+        _tool("cancel_message", "Cancel a waiting message by id, recipient name or words from it.",
+              {"id": {"type": "integer"}, "words": {"type": "string"}}),
+    ],
     "game_info": [
         _tool("game_info", "Live Steam info for a game: price, whether it's on sale, how many people are "
               "playing right now, release date. Never guess these numbers.",
@@ -541,7 +562,7 @@ TOOLS = [t for ts in TOOLS_BY_PLUGIN.values() for t in ts]
 
 def execute(name: str, args: dict, asker: str = "", voter_name: str = "",
             settings: Callable[[str], dict] = lambda pid: {},
-            name_of: Optional[Callable] = None) -> str:
+            name_of: Optional[Callable] = None, agent_names=()) -> str:
     a = args if isinstance(args, dict) else {}
     if name == "roll_dice":
         return roll_dice(str(a.get("dice") or a.get("spec") or "d20"))
@@ -569,6 +590,15 @@ def execute(name: str, args: dict, asker: str = "", voter_name: str = "",
         s = settings("call_summary") or {}
         return call_summary.recap(a.get("minutes") or s.get("minutes") or call_summary.DEFAULT_MIN,
                                   str(a.get("focus") or ""), name_of=name_of)
+    if name in ("leave_message", "list_messages", "cancel_message"):
+        import voice_mail
+        days = float((settings("voice_mail") or {}).get("days") or voice_mail.DEFAULT_DAYS)
+        if name == "list_messages":
+            return voice_mail.list_messages(days)
+        if name == "cancel_message":
+            return voice_mail.cancel(a.get("id"), str(a.get("words") or ""))
+        return voice_mail.leave(str(a.get("to") or ""), str(a.get("message") or ""),
+                                voter_name or "", agent_names=agent_names, days=days)
     if name == "game_info":
         import game_info
         s = settings("game_info") or {}

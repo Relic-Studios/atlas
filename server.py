@@ -1664,6 +1664,7 @@ class TranscriptionCallbacks:
                 ("name_learning", lambda: mgr.people.learn(speaker, user_request_content)),
                 ("remember", lambda: mgr.remember(user_request_content)),
                 ("room_vote", lambda: _passive_vote(speaker, user_request_content, mgr)),
+                ("voice_mail", lambda: _mail_heard(speaker, mgr)),
             )
             for name, step in steps:
                 try:
@@ -2096,6 +2097,41 @@ def _passive_vote(speaker, text: str, mgr) -> None:
         logger.info("🗳️ %s", room_tools.cast_vote(pf[1]["choice"], who)[:80])
 
 
+def _mail_heard(speaker, mgr) -> None:
+    """Voice mail plugin: note that a recognised person just spoke."""
+    import voice_mail
+    import plugins as _plugins
+    if not _plugins.is_enabled("voice_mail") or not speaker or speaker == "self":
+        return
+    voice_mail.heard(mgr.people.name_of(speaker), speaker)
+
+
+def start_mail(mgr, callbacks, bridge, now: float) -> Optional[int]:
+    """Pass on a voice-addressed message once its recipient has spoken and the room pauses."""
+    try:
+        import voice_mail
+        import plugins as _plugins
+        if not _plugins.is_enabled("voice_mail"):
+            return None
+        days = float((_plugins.settings_of("voice_mail") or {}).get("days") or voice_mail.DEFAULT_DAYS)
+        m = voice_mail.due(days)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"📬 mail check failed: {e}")
+        return None
+    if not m or not delivery_ready(mgr, callbacks, bridge, now, TIMER_GAP_S):
+        return None
+    cue = voice_mail.claim(m["id"])
+    if not cue:
+        return None
+    callbacks.reset_state()
+    callbacks.tts_to_client = True
+    callbacks.user_finished_turn = True
+    callbacks.user_history_committed = True
+    logger.info(f"🖥️📬 message #{m['id']} for {m['to']} ({m['text'][:50]!r}); delivering")
+    mgr.prepare_generation(cue)
+    return m["id"]
+
+
 TIMER_GAP_S = float(os.environ.get("ATLAS_TIMER_GAP_S", "1.0"))
 TIMER_OVERDUE_GAP_S = 0.5    # once a reminder is 20 s late, any short pause will do
 
@@ -2137,6 +2173,8 @@ async def _task_delivery(app: FastAPI, callbacks) -> None:
             bridge = getattr(app.state, "CallBridge", None)
             now = time.time()
             if start_timer(mgr, callbacks, bridge, now) is not None:
+                continue
+            if start_mail(mgr, callbacks, bridge, now) is not None:
                 continue
             if delivery_ready(mgr, callbacks, bridge, now, RESUME_GAP_S) and start_resume(mgr, callbacks):
                 continue

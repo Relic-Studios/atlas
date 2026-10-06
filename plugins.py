@@ -256,6 +256,19 @@ BUILTIN: List[dict] = [
         ],
     },
     {
+        "id": "voice_mail", "name": "Voice mail", "icon": "mail", "category": "Social",
+        "summary": "'Tell Riley the raid moved to 9 when she joins.' Messages addressed to a voice, not an account.",
+        "detail": "The agent passes a message on the next time it recognises that person's voice, even days "
+                  "later. Messages are kept on this PC only and expire. Phone numbers, emails, addresses "
+                  "and keys are refused. Recognition is only as good as the voice match, so the agent says "
+                  "the name out loud when it delivers.",
+        "tools": ["leave_message", "list_messages", "cancel_message"], "default": True,
+        "settings": [
+            {"key": "days", "label": "Keep undelivered messages (days)", "type": "number", "default": 7,
+             "min": 1, "max": 30},
+        ],
+    },
+    {
         "id": "game_info", "name": "Game info", "icon": "game", "category": "Games",
         "summary": "'Is it on sale?' 'How many people are playing?' Live Steam prices and player counts.",
         "detail": "Uses Steam's public store and player-count endpoints: free, no account, no key. "

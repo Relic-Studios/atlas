@@ -134,6 +134,8 @@ def abilities_note(eyes_on: bool, search_on: bool = True, persona: str = "", off
         can.append("check live weather anywhere")
     if "call_summary" not in off:
         can.append("recap what was said in this call (from the real transcript, never from memory alone)")
+    if "voice_mail" not in off:
+        can.append("take messages for people who aren't here and pass them on when you next hear their voice")
     if "game_info" not in off:
         can.append("look up live Steam prices, sales and player counts for games")
     if "self_check" not in off:
