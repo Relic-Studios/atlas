@@ -63,6 +63,9 @@ async def feed(pid: str, request: Request):
     if pid == "fact_check":
         import factcheck
         return {"items": factcheck.feed()}
+    if pid == "lore":
+        import lore
+        return {"items": await asyncio.to_thread(lore.feed)}
     if pid == "soul_reflection":
         import soul_reflection
         return {"items": await asyncio.to_thread(soul_reflection.feed),
@@ -76,11 +79,12 @@ async def feed_action(pid: str, request: Request):
     if not _owner(request):
         return _deny()
     d = await _body(request)
-    if pid != "soul_reflection":
+    if pid not in ("soul_reflection", "lore"):
         return JSONResponse({"error": "this plugin has no actions"}, status_code=404)
-    import soul_reflection
+    import importlib
+    mod = importlib.import_module(pid)
     try:
-        ok = soul_reflection.action(str(d.get("agent") or ""), str(d.get("id") or ""), str(d.get("act") or ""))
+        ok = mod.action(str(d.get("agent") or ""), str(d.get("id") or ""), str(d.get("act") or ""))
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     return {"ok": ok} if ok else JSONResponse({"error": "not found"}, status_code=404)

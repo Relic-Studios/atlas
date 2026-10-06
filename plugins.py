@@ -300,6 +300,20 @@ BUILTIN: List[dict] = [
         "settings": [],
     },
     {
+        "id": "lore", "name": "Lore keeper", "icon": "scroll", "category": "Memory",
+        "summary": "Keeps your group's shared canon - running jokes, nicknames, campaign events - and calls back to it later.",
+        "detail": "Say 'add that to the lore' or 'that's canon: ...'. By default each new entry waits here for "
+                  "your approval before the agent ever uses it. Approved lore comes back only when the talk "
+                  "touches it, at most one callback per turn and not the same one twice in 20 minutes. Lore is "
+                  "per agent and stays on this PC; private details are refused; wiping an agent's memory clears it.",
+        "tools": ["add_lore", "recall_lore", "forget_lore"], "default": True, "feed": True,
+        "settings": [
+            {"key": "approval", "label": "New lore", "type": "select", "default": "owner",
+             "options": [{"value": "owner", "label": "Waits for my approval"},
+                         {"value": "auto", "label": "Used right away"}]},
+        ],
+    },
+    {
         "id": "soul_reflection", "name": "Soul reflection", "icon": "spark", "category": "Memory",
         "summary": "After a call, the agent proposes small changes to how it talks. You approve or reject each one.",
         "detail": "Press 'Reflect on the last call' after a call. The agent reads its own part of the "

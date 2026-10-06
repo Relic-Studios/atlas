@@ -1254,6 +1254,17 @@ class SpeechPipelineManager:
                 logger.debug("teach note failed: %s", e)
             try:
                 import plugins as _plugins
+                if _plugins.is_enabled("lore"):
+                    import lore as _lore
+                    _no = getattr(getattr(self, "people", None), "name_of", None)
+                    _who = _no(m[1]) if (m and _no) else None
+                    ln = _lore.note(getattr(self, "current_persona", "") or "", txt, [_who] if _who else [])
+                    if ln:
+                        note = (note + chr(10) + ln).strip() if note else ln
+            except Exception as e:  # noqa: BLE001
+                logger.debug("lore note failed: %s", e)
+            try:
+                import plugins as _plugins
                 if _plugins.is_enabled("soul_reflection"):
                     import soul_reflection as _soul
                     sn = _soul.note(getattr(self, "current_persona", "") or "")

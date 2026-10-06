@@ -488,6 +488,13 @@ def intent(text: str, poll_open: Optional[bool] = None):
     if tc:
         return tc
     try:
+        import lore as _lore
+        lr = _lore.intent(t)
+    except Exception:  # noqa: BLE001
+        lr = None
+    if lr:
+        return lr
+    try:
         import factcheck as _fc
         fc = _fc.intent(t)
     except Exception:  # noqa: BLE001
@@ -627,6 +634,18 @@ TOOLS_BY_PLUGIN: Dict[str, List[dict]] = {
         _tool("forget_lesson", "Forget a lesson when someone says it's wrong or out of date.",
               {"topic": {"type": "string"}, "id": {"type": "integer"}}),
     ],
+    "lore": [
+        _tool("add_lore", "Keep a piece of this group's shared canon (a running joke, a nickname, a memorable "
+              "event, a campaign moment) when someone asks you to remember it as lore / says it's canon.",
+              {"title": {"type": "string", "description": "short name, e.g. 'Sam's roof incident'"},
+               "story": {"type": "string", "description": "what happened / the joke, in a sentence or two"},
+               "people": {"type": "array", "items": {"type": "string"},
+                          "description": "names of people in it"}}, ["story"]),
+        _tool("recall_lore", "Look up the group's lore (optionally about one topic or person).",
+              {"topic": {"type": "string"}}),
+        _tool("forget_lore", "Drop a lore entry when someone says it's wrong or they want it gone.",
+              {"title": {"type": "string"}, "id": {"type": "integer"}}),
+    ],
     "fact_check": [
         _tool("check_claim", "Fact-check a claim someone made in this call with a web search. Use only when "
               "someone asks whether something is true ('was that true?', 'fact-check that'). Leave claim "
@@ -712,6 +731,17 @@ def execute(name: str, args: dict, asker: str = "", voter_name: str = "",
         if name == "forget_lesson":
             return teach.forget(ag, str(a.get("topic") or ""), a.get("id"))
         return teach.recall(ag, str(a.get("topic") or ""))
+    if name in ("add_lore", "recall_lore", "forget_lore"):
+        import lore
+        ag = agent or (agent_names[0] if agent_names else "") or "default"
+        if name == "add_lore":
+            ppl = a.get("people") or []
+            if isinstance(ppl, str):
+                ppl = [p.strip() for p in ppl.split(",")]
+            return lore.add(ag, str(a.get("title") or ""), str(a.get("story") or ""), ppl, voter_name or "")
+        if name == "forget_lore":
+            return lore.forget(ag, str(a.get("title") or ""), a.get("id"))
+        return lore.recall(ag, str(a.get("topic") or ""))
     if name == "check_claim":
         import factcheck
         import plugins as _pl

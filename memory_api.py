@@ -201,6 +201,11 @@ def wipe(aid: str, window: str, svc=None, root=None, now: float = None) -> dict:
         logger.warning("lesson wipe failed: %s", e)
         lessons = 0
     try:
+        import lore
+        lore.forget_since(aid, cutoff, root)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("lore wipe failed: %s", e)
+    try:
         import soul_reflection
         soul_reflection.forget_since(aid, cutoff, root)
     except Exception as e:  # noqa: BLE001
