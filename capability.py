@@ -133,7 +133,7 @@ def abilities_note(eyes_on: bool, search_on: bool = True, persona: str = "", off
     if "weather" not in off:
         can.append("check live weather anywhere")
     if "call_summary" not in off:
-        can.append("recap what was said in this call when asked (from the real transcript)")
+        can.append("recap what was said in this call (from the real transcript, never from memory alone)")
     if "game_info" not in off:
         can.append("look up live Steam prices, sales and player counts for games")
     if "self_check" not in off:
