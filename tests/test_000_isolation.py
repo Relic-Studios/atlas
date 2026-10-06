@@ -4,8 +4,14 @@ throwaway location so no test reads or writes the owner's live choices.
 Found 10-06: the owner switched plugins off on the Plugins page and a server test that
 assumed "timers on" failed, because it read the real user/plugins.json.
 """
+import os
 import tempfile
 import unittest
+# Hypergraph live recall skips lines younger than 15 min (they're already in the
+# conversation log). Unit tests store-then-recall instantly, so they opt out here;
+# test_recall_freshness covers the real setting explicitly.
+os.environ.setdefault("ATLAS_HG_RECALL_MIN_AGE", "0")
+
 from pathlib import Path
 
 _TMP = Path(tempfile.mkdtemp(prefix="atlas_test_state_"))

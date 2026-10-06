@@ -396,7 +396,7 @@ class ConversationFloor:
         # the controller" -> "yeah it's in my bag"): their exchange is theirs even if
         # the agent talked a moment ago, or this speaker is its partner (first_run sim 10-04: 14B narrated it).
         if (self.side and now - self.side[2] <= self.SIDE_TTL_S
-                and self.side[2] > self.last_agent_at):
+                and self.side[2] >= self.last_agent_at):  # same clock tick = after (Windows ~15ms)
             asker, target, _ = self.side
             if speaker != asker and (target is None or speaker == target):
                 self.side = (asker, speaker, now)

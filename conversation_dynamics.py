@@ -608,6 +608,56 @@ if _zipf:  # load the frequency table at import, not on the first live turn
 _SECOND_PERSON_CUE = re.compile(r"\b(?:you|your|you're|u|ya|yours)\b|\?", re.I)
 
 
+# ---- aliases / gamer tags (live 10-06: "Hey Perma, I think you were muted
+# before. Did you, are you back?" got "Yeah, I'm back." from Max). People in
+# these rooms go by handles, not given names, and Whisper writes them after a
+# greeting, sometimes lowercase. Names the room has actually used (learned
+# intros, heard vocatives) are trusted even when they are common words
+# ("Ghost", "Will", "Toast").
+_ROOM_NAMES: dict = {}          # lower-case name -> last time seen
+_ROOM_NAME_TTL = 6 * 3600.0
+
+
+def note_room_name(name: str, when: Optional[float] = None) -> None:
+    """Record a human name/alias used in this room (people.NameBook feeds it)."""
+    import time as _t
+    n = (name or "").strip().lower()
+    if 2 <= len(n) <= 24 and n not in _NOT_NAMES:
+        _ROOM_NAMES[n] = _t.time() if when is None else when
+
+
+def _is_room_name(word: str) -> bool:
+    import time as _t
+    at = _ROOM_NAMES.get((word or "").lower())
+    return at is not None and _t.time() - at < _ROOM_NAME_TTL
+
+
+_GREETING_LEAD_RE = re.compile(
+    r"^\s*(?:(?:hey|hi|hello|yo|oi|ay+|ok|okay|alright|so|wait|oh|and|but|well|"
+    r"listen|look|bro|dude|man)\b[,!.]?\s+)+", re.I)
+# Name after a greeting, any case: "hey perma, ..." / "Yo Kraken did you ...".
+_GREETED_NAME_RE = re.compile(
+    r"^([A-Za-z][A-Za-z0-9]{1,15})(?:(?P<p>\s*[,!?]|\s*$)|\s+(?:you|u|ya|your|you're)\b|"
+    r"\s+(?:did|do|can|could|would|will|are|were|have)\s+(?:you|u|ya)\b)", re.I)
+# Mid-sentence vocative set off by commas, aimed at someone:
+# "...and now I've heard, Perma, you were talking about your brain."
+_MID_VOCATIVE_RE = re.compile(
+    r",\s*([A-Z][A-Za-z0-9]{1,15})\s*,\s*(?:you|your|you're|did|do|are|were|can|"
+    r"could|would|will|have)\b")
+
+
+# Words people use for the agent itself ("Yo, AI!", "hey Atlas, ...").
+_AGENT_GENERIC = frozenset({"ai", "atlas", "bot", "robot", "computer", "assistant"})
+
+
+def _alias_ok(word: str, names: tuple[str, ...]) -> bool:
+    if _is_agent_name(word, names) or word.lower() in _AGENT_GENERIC:
+        return False
+    if _is_room_name(word):
+        return True
+    return _looks_like_other_name(word, names)
+
+
 def detect_other_addressee(text: str, names: tuple[str, ...]) -> Optional[str]:
     """Return the other person's name if the turn is vocatively addressed to
     someone who is not the agent, else None. Never fires if the agent is also
@@ -616,13 +666,46 @@ def detect_other_addressee(text: str, names: tuple[str, ...]) -> Optional[str]:
         return None
     body = _SPEAKER_LABEL_RE.sub("", text)
     for token in re.findall(r"[A-Za-z]+", body):
-        if _is_agent_name(token, names) and token[0].isupper():
+        if _is_agent_name(token, names) and (token[0].isupper()
+                                             or token.lower() in tuple(n.lower() for n in names)):
             return None
     if any(p.search(body) for p in _GENERIC_ALIAS_PATTERNS):
         return None
+    # Greeting + handle, per sentence ("I'm here. Hey Perma, you back?").
+    for sent in re.split(r"(?<=[.!?])\s+", body):
+        g = _GREETING_LEAD_RE.match(sent)
+        if not g:
+            continue
+        m = _GREETED_NAME_RE.match(sent[g.end():])
+        if not m or not _alias_ok(m.group(1), names):
+            continue
+        w = m.group(1)
+        # A bare exclamation ("Well, voila!", "Yo, weee!") only counts as a
+        # name when it is capitalised.
+        rest = sent[g.end() + m.end():].strip()
+        if m.group("p") is not None and not rest and w[0].islower() and not _is_room_name(w):
+            continue
+        # lower-case after a greeting is often just a noun ("so pizza, you in?");
+        # only rare words (handles like "perma") or names the room used count.
+        if w[0].islower() and not _is_room_name(w) and _zipf and _zipf(w.lower(), "en") >= 3.2:
+            continue
+        return w
+    m = _MID_VOCATIVE_RE.search(body)
+    if m and _alias_ok(m.group(1), names):
+        # "Paris, France, you should go" is apposition, not address: skip when
+        # the word before the first comma is itself capitalised mid-sentence.
+        prev = re.findall(r"([A-Za-z']+)\s*$", body[:m.start()])
+        start = body[:m.start()].rstrip()
+        sent_start = not start or start[-1] in ".!?" or len(start.split()) <= 1
+        if not (prev and prev[0][0].isupper() and not sent_start):
+            return m.group(1)
     for rx in (_LEAD_VOCATIVE_RE, _TAIL_VOCATIVE_RE, _LEAD_BARE_VOCATIVE_RE):
         m = rx.search(body)
-        if not m or not _looks_like_other_name(m.group(1), names):
+        if not m or not _alias_ok(m.group(1), names):
+            continue
+        # A comma-less "Will you ..." stays a question to the room even when a
+        # friend is called Will: room-name trust only applies to rare words here.
+        if rx is _LEAD_BARE_VOCATIVE_RE and not _looks_like_other_name(m.group(1), names):
             continue
         # A trailing capitalised word ("Yeah, Munich.") is only address when the
         # line is actually aimed at someone: a question or a 2nd-person word.

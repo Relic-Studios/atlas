@@ -195,6 +195,11 @@ class NameBook:
             if other is not p and other.name == name and source != "voice":
                 other.name, other.source = None, ""
         changed = p.name != name
+        try:
+            import conversation_dynamics as _cd
+            _cd.note_room_name(name)
+        except Exception:  # noqa: BLE001
+            pass
         p.name, p.source, p.probable, p.declined = name, source, None, False
         self.heard.pop(name.lower(), None)
         if changed:
@@ -293,6 +298,11 @@ class NameBook:
         if name and name.lower() not in self.agent_names \
                 and name not in {p.name for p in self.people.values()}:
             self.heard[name.lower()] = self.clock()
+            try:
+                import conversation_dynamics as _cd
+                _cd.note_room_name(name)
+            except Exception:  # noqa: BLE001
+                pass
 
     def note_agent_reply(self, target: str | None, text: str) -> None:
         """Record that the agent asked this voice who they are."""

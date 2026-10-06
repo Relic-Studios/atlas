@@ -57,7 +57,27 @@ PIN_FLOOR = 0.6       # approved memories never decay below this
 PRUNE_W = 0.04        # unpinned memories weaker than this (and old) are dropped
 PRUNE_MIN_AGE_S = 6 * 3600.0
 MAX_EDGES = int(os.environ.get("ATLAS_HG_MAX", "4000"))
-MIN_SIM = float(os.environ.get("ATLAS_HG_MIN_SIM", "0.53"))   # relevance gate (calibrated: sim_hypergraph)
+MIN_SIM = float(os.environ.get("ATLAS_HG_MIN_SIM", "0.53"))
+# Live call 10-06 ("he's remembering too much"): recall kept handing back lines from the
+# last few minutes, which are already in the conversation log. Seeing them twice made the
+# agent fixate (the "Canadian" loop) and even recalled the very line being answered.
+# Live recall skips anything younger than this; the conversation log already covers it.
+RECALL_MIN_AGE_S = float(os.environ.get("ATLAS_HG_RECALL_MIN_AGE", "900"))
+RECALL_K = int(os.environ.get("ATLAS_HG_RECALL_K", "3"))
+
+
+def strip_agent_name(agent: str, text: str) -> str:
+    """'Max, ...' would match every stored line that ever named him."""
+    if not agent or not text:
+        return text or ""
+    return re.sub(r"(?i)\b" + re.escape(agent) + r"\b[,!?.]*", " ", text).strip()
+
+
+def _only_questions(text: str) -> bool:
+    """A line that is nothing but questions ('Max, do you have hair?') says what someone
+    asked, not anything worth remembering; live recall of these confused who said what."""
+    parts = [x.strip() for x in re.split(r"(?<=[.!?])\s+", (text or "").strip()) if x.strip()]
+    return bool(parts) and all(x.endswith("?") for x in parts)   # relevance gate (calibrated: sim_hypergraph)
 NAME_SIM = 0.42      # gate when the query names the memory's person
 SPREAD_SIM = 0.33     # a spread-reached memory still needs this much direct similarity
 SEEDS = 12
@@ -552,7 +572,8 @@ class HyperMemory:
                     self._dirty = True
 
     # ---- reading ----------------------------------------------------------
-    def retrieve(self, query: str, k: int = 4, qvec: np.ndarray = None, mark_active: bool = True) -> list:
+    def retrieve(self, query: str, k: int = 4, qvec: np.ndarray = None, mark_active: bool = True,
+                 min_age_s: float = 0.0) -> list:
         """Top-k relevant memories: [{id,text,who,score,sim,age_s}]. Empty if nothing relevant."""
         query = _clean(query)
         if not query.strip():
@@ -652,6 +673,10 @@ class HyperMemory:
                 if tscore is not None and float(tscore[i]) < NAMED_TOPIC:
                     continue
                 e = self.edges[i]
+                if min_age_s and now - e["created"] < min_age_s:
+                    continue      # still in the conversation log: recalling it is an echo
+                if min_age_s and _only_questions(e["text"]):
+                    continue      # live recall: a bare question isn't a memory
                 s = float(sims[i])
                 node_hit = len(qnodes & set(e["nodes"])) / max(1, len(qnodes)) if qnodes else 0.0
                 named = bool(qpeople & set(e["nodes"]))
@@ -803,10 +828,12 @@ class MemoryService:
                 pass
 
     # ---- recall prefetch ---------------------------------------------------
-    def prefetch(self, agent: str, text: str, k: int = 4):
+    def prefetch(self, agent: str, text: str, k: int = None):
         """Start recall for a PARTIAL transcript in the background (never blocks).
         When the turn's final text matches, recall_note() reuses the result, so memory
         costs ~0 ms at turn end instead of ~140 ms (embedding is ~85% of it)."""
+        k = RECALL_K if k is None else k
+        text = strip_agent_name(agent, text)
         if not ENABLED or not text or len(content_nodes(text)) < 1:
             return
         a, key = (agent or "").lower(), qkey(text)
@@ -837,7 +864,7 @@ class MemoryService:
                 self._pf_running = (a, key)
             hits = None
             try:
-                hits = self.graph(a).retrieve(text, k=k, mark_active=False)
+                hits = self.graph(a).retrieve(text, k=k, mark_active=False, min_age_s=RECALL_MIN_AGE_S)
             except Exception as ex:  # noqa: BLE001
                 logger.warning("hypergraph prefetch failed: %s", ex)
             with self._pf_cv:
@@ -872,10 +899,14 @@ class MemoryService:
         with self._pf_cv:
             self._pf.pop((agent or "").lower(), None)
 
-    def recall_note(self, agent: str, query: str, k: int = 4, budget_s: float = 0.35,
+    def recall_note(self, agent: str, query: str, k: int = None, budget_s: float = 0.35,
                     exclude: set = None) -> str:
         """Retrieve within a time budget; on timeout the turn simply goes without memory."""
         if not ENABLED or not query or len(content_nodes(query)) < 1:
+            return ""
+        k = RECALL_K if k is None else k
+        query = strip_agent_name(agent, query)
+        if len(content_nodes(query)) < 1:
             return ""
         t0 = time.monotonic()
         hits = self._pf_take(agent, query, k, budget_s)
@@ -890,7 +921,7 @@ class MemoryService:
 
             def work():
                 try:
-                    box["hits"] = self.graph(agent).retrieve(query, k=k)
+                    box["hits"] = self.graph(agent).retrieve(query, k=k, min_age_s=RECALL_MIN_AGE_S)
                 except Exception as ex:  # noqa: BLE001
                     logger.warning("hypergraph recall failed: %s", ex)
             t = threading.Thread(target=work, daemon=True)
