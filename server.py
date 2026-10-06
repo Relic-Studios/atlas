@@ -2132,6 +2132,31 @@ def start_mail(mgr, callbacks, bridge, now: float) -> Optional[int]:
     return m["id"]
 
 
+def start_bet(mgr, callbacks, bridge, now: float) -> Optional[int]:
+    """Bring up a logged bet once it can be settled (Bet tracker plugin)."""
+    try:
+        import bets
+        import plugins as _plugins
+        if not _plugins.is_enabled("bets"):
+            return None
+        b = bets.due()
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"🎰 bet check failed: {e}")
+        return None
+    if not b or not delivery_ready(mgr, callbacks, bridge, now, TIMER_GAP_S):
+        return None
+    cue = bets.claim(b["id"])
+    if not cue:
+        return None
+    callbacks.reset_state()
+    callbacks.tts_to_client = True
+    callbacks.user_finished_turn = True
+    callbacks.user_history_committed = True
+    logger.info(f"🖥️🎰 bet #{b['id']} is due ({b['claim'][:50]!r}); bringing it up")
+    mgr.prepare_generation(cue)
+    return b["id"]
+
+
 TIMER_GAP_S = float(os.environ.get("ATLAS_TIMER_GAP_S", "1.0"))
 TIMER_OVERDUE_GAP_S = 0.5    # once a reminder is 20 s late, any short pause will do
 
@@ -2175,6 +2200,8 @@ async def _task_delivery(app: FastAPI, callbacks) -> None:
             if start_timer(mgr, callbacks, bridge, now) is not None:
                 continue
             if start_mail(mgr, callbacks, bridge, now) is not None:
+                continue
+            if start_bet(mgr, callbacks, bridge, now) is not None:
                 continue
             if delivery_ready(mgr, callbacks, bridge, now, RESUME_GAP_S) and start_resume(mgr, callbacks):
                 continue

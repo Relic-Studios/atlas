@@ -269,6 +269,15 @@ BUILTIN: List[dict] = [
         ],
     },
     {
+        "id": "bets", "name": "Bet tracker", "icon": "trophy", "category": "Games",
+        "summary": "'I bet you five bucks the Lakers win tonight.' Logs who bet what and calls it when it's due.",
+        "detail": "Bets are kept on this PC only. When one can be settled, the agent brings it up at a gap "
+                  "in the talk and asks how it went (or checks a public result with search). It never "
+                  "decides a winner on its own. Keeps a running scoreboard.",
+        "tools": ["record_bet", "list_bets", "settle_bet"], "default": True,
+        "settings": [],
+    },
+    {
         "id": "game_info", "name": "Game info", "icon": "game", "category": "Games",
         "summary": "'Is it on sale?' 'How many people are playing?' Live Steam prices and player counts.",
         "detail": "Uses Steam's public store and player-count endpoints: free, no account, no key. "

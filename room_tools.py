@@ -37,7 +37,7 @@ TIMER_STALE_S = 15 * 60      # a reminder that couldn't be said for 15 min is dr
 
 # Our own "a timer went off" cue. Never a real user line (floor.steering_note and
 # the pipeline treat it like a TASK CUE: no passivity HOLD, no bait checks).
-ROOM_CUE_RE = re.compile(r"\((?:ROOM|MAIL) CUE #(\d+)\)")
+ROOM_CUE_RE = re.compile(r"\((?:ROOM|MAIL|BET) CUE #(\d+)\)")
 
 
 # ------------------------------------------------------------------ state
@@ -324,6 +324,10 @@ def cue_note(text: str) -> str:
     mn = voice_mail.cue_note(text)
     if mn:
         return mn
+    import bets
+    bn = bets.cue_note(text)
+    if bn:
+        return bn
     if ROOM_CUE_RE.search(text or ""):
         return ("REMINDER: this turn is your own timer going off, not someone speaking. Say the "
                 "reminder now in one short line, in character. Do not [HOLD].")
@@ -463,6 +467,13 @@ def intent(text: str, poll_open: Optional[bool] = None):
     if vm:
         return vm
     try:
+        import bets as _bets
+        bt = _bets.intent(t)
+    except Exception:  # noqa: BLE001
+        bt = None
+    if bt:
+        return bt
+    try:
         import game_info as _gi
         gi = _gi.intent(t)
     except Exception:  # noqa: BLE001
@@ -550,6 +561,28 @@ TOOLS_BY_PLUGIN: Dict[str, List[dict]] = {
         _tool("cancel_message", "Cancel a waiting message by id, recipient name or words from it.",
               {"id": {"type": "integer"}, "words": {"type": "string"}}),
     ],
+    "bets": [
+        _tool("record_bet", "Log a bet someone makes ('I bet you five bucks the Lakers win tonight'). "
+              "The bettor is the speaker unless they say otherwise. It comes back up on its own when "
+              "it can be settled. Only say it's logged after this returns.",
+              {"claim": {"type": "string", "description": "what the bettor says will happen"},
+               "who": {"type": "string", "description": "the bettor's name, if not the speaker"},
+               "against": {"type": "string", "description": "who took the other side, if anyone"},
+               "stakes": {"type": "string", "description": "what's on the line, e.g. 'five bucks'"},
+               "settle_by": {"type": "string", "description": "when it can be settled: 'tonight', "
+                             "'Sunday', 'end of the month', '2026-10-20'"}}, ["claim"]),
+        _tool("list_bets", "List open bets (all=true includes settled ones) and the scoreboard.",
+              {"all": {"type": "boolean"}}),
+        _tool("settle_bet", "Settle a bet once the room says (or search shows) how it went. Give the "
+              "winner's name (or the loser's) and ATLAS works out the rest; use outcome only for a push "
+              "(tie) or void (called off). Never guess who won. Only say a bet is settled after this returns.",
+              {"winner": {"type": "string", "description": "name of the person who won the bet"},
+               "loser": {"type": "string", "description": "name of the person who lost, if easier"},
+               "id": {"type": "integer"}, "words": {"type": "string", "description": "words from the bet if no id"},
+               "outcome": {"type": "string", "enum": ["push", "void", "won", "lost"],
+                           "description": "push/void; or won/lost from the bettor's side"},
+               "note": {"type": "string", "description": "e.g. the final score"}}),
+    ],
     "game_info": [
         _tool("game_info", "Live Steam info for a game: price, whether it's on sale, how many people are "
               "playing right now, release date. Never guess these numbers.",
@@ -599,6 +632,20 @@ def execute(name: str, args: dict, asker: str = "", voter_name: str = "",
             return voice_mail.cancel(a.get("id"), str(a.get("words") or ""))
         return voice_mail.leave(str(a.get("to") or ""), str(a.get("message") or ""),
                                 voter_name or "", agent_names=agent_names, days=days)
+    if name in ("record_bet", "list_bets", "settle_bet"):
+        import bets
+        if name == "list_bets":
+            out = bets.list_bets(bool(a.get("all")))
+            return out + " " + bets.scoreboard()
+        if name == "settle_bet":
+            me = voter_name or asker or ""
+            w = str(a.get("winner") or "").replace("@speaker", me)
+            lo = str(a.get("loser") or "").replace("@speaker", me)
+            return bets.settle_bet(a.get("id"), str(a.get("outcome") or ""), str(a.get("note") or ""),
+                                   str(a.get("words") or ""), winner=w, loser=lo)
+        return bets.record_bet(str(a.get("claim") or ""), str(a.get("who") or "") or voter_name or "",
+                               str(a.get("against") or ""), str(a.get("stakes") or ""),
+                               str(a.get("settle_by") or a.get("when") or ""))
     if name == "game_info":
         import game_info
         s = settings("game_info") or {}
