@@ -55,6 +55,17 @@ async def market(request: Request):
     return {"plugins": P.marketplace()}
 
 
+@router.get("/api/plugins/{pid}/feed")
+async def feed(pid: str, request: Request):
+    """Read-only activity list for plugins that keep one (Quiet fact-check)."""
+    if not _owner(request):
+        return _deny()
+    if pid == "fact_check":
+        import factcheck
+        return {"items": factcheck.feed()}
+    return {"items": []}
+
+
 @router.post("/api/plugins/{pid}/enabled")
 async def set_enabled(pid: str, request: Request):
     if not _owner(request):

@@ -300,6 +300,23 @@ BUILTIN: List[dict] = [
         "settings": [],
     },
     {
+        "id": "fact_check", "name": "Quiet fact-check", "icon": "check", "category": "Knowledge",
+        "summary": "Checks public claims in the background. The agent only speaks up when asked 'was that true?'",
+        "detail": "When someone states a checkable public fact (a number, a date, 'the tallest...'), it's "
+                  "looked up in the background with your web search. Results show here, not out loud. "
+                  "Personal statements, plans and opinions are ignored; private details are never searched. "
+                  "Kept in memory for this session only. Off by default: it uses search credits.",
+        "tools": ["check_claim"], "default": False, "feed": True,
+        "settings": [
+            {"key": "background", "label": "Check claims in the background", "type": "select", "default": "on",
+             "options": [{"value": "on", "label": "On (results ready before anyone asks)"},
+                         {"value": "off", "label": "Off (only check when asked)"}]},
+            {"key": "daily", "label": "Max checks per day", "type": "number", "default": 30, "min": 1, "max": 500},
+            {"key": "gap", "label": "Min seconds between background checks", "type": "number",
+             "default": 60, "min": 10, "max": 3600},
+        ],
+    },
+    {
         "id": "game_info", "name": "Game info", "icon": "game", "category": "Games",
         "summary": "'Is it on sale?' 'How many people are playing?' Live Steam prices and player counts.",
         "detail": "Uses Steam's public store and player-count endpoints: free, no account, no key. "
@@ -476,7 +493,7 @@ def listing() -> List[dict]:
             "id": p["id"], "name": p["name"], "icon": p["icon"], "category": p["category"],
             "summary": p["summary"], "detail": p.get("detail", ""),
             "tools": _builtin_tools(p), "enabled": is_enabled(p["id"], st),
-            "builtin": True, "testable": bool(p.get("test")),
+            "builtin": True, "testable": bool(p.get("test")), "feed": bool(p.get("feed")),
             "settings": [_field_view(f) for f in p.get("settings", [])],
             "values": settings_of(p["id"], st),
         })

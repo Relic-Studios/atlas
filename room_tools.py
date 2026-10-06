@@ -488,6 +488,13 @@ def intent(text: str, poll_open: Optional[bool] = None):
     if tc:
         return tc
     try:
+        import factcheck as _fc
+        fc = _fc.intent(t)
+    except Exception:  # noqa: BLE001
+        fc = None
+    if fc:
+        return fc
+    try:
         import game_info as _gi
         gi = _gi.intent(t)
     except Exception:  # noqa: BLE001
@@ -620,6 +627,12 @@ TOOLS_BY_PLUGIN: Dict[str, List[dict]] = {
         _tool("forget_lesson", "Forget a lesson when someone says it's wrong or out of date.",
               {"topic": {"type": "string"}, "id": {"type": "integer"}}),
     ],
+    "fact_check": [
+        _tool("check_claim", "Fact-check a claim someone made in this call with a web search. Use only when "
+              "someone asks whether something is true ('was that true?', 'fact-check that'). Leave claim "
+              "empty for the latest claim. It returns evidence; you judge it plainly and kindly.",
+              {"claim": {"type": "string", "description": "the exact claim, or empty for the latest one"}}),
+    ],
     "game_info": [
         _tool("game_info", "Live Steam info for a game: price, whether it's on sale, how many people are "
               "playing right now, release date. Never guess these numbers.",
@@ -699,6 +712,13 @@ def execute(name: str, args: dict, asker: str = "", voter_name: str = "",
         if name == "forget_lesson":
             return teach.forget(ag, str(a.get("topic") or ""), a.get("id"))
         return teach.recall(ag, str(a.get("topic") or ""))
+    if name == "check_claim":
+        import factcheck
+        import plugins as _pl
+        if not _pl.is_enabled("web_search"):
+            return "Fact-checking needs the Web search plugin, which is switched off. Say so."
+        s = settings("fact_check") or {}
+        return factcheck.check(str(a.get("claim") or ""), daily=int(s.get("daily") or factcheck.DEFAULT_DAILY))
     if name == "game_info":
         import game_info
         s = settings("game_info") or {}

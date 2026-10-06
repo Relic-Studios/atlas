@@ -49,7 +49,7 @@ class Registry(Base):
         self.assertTrue(all(p["enabled"] == dflt[p["id"]] for p in P.listing()))
         off_tools = {t for p in P.BUILTIN if not p.get("default", True) for t in p["tools"]}
         self.assertEqual(P.tool_names_disabled(), off_tools)
-        self.assertEqual(off_tools, {"floor_stats", "start_topic", "debate_sides"})
+        self.assertEqual(off_tools, {"floor_stats", "start_topic", "debate_sides", "check_claim"})
 
     def test_switch_off_removes_tools(self):
         P.set_enabled("web_search", False)

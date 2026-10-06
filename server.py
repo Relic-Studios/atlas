@@ -1665,6 +1665,7 @@ class TranscriptionCallbacks:
                 ("remember", lambda: mgr.remember(user_request_content)),
                 ("room_vote", lambda: _passive_vote(speaker, user_request_content, mgr)),
                 ("voice_mail", lambda: _mail_heard(speaker, mgr)),
+                ("fact_check", lambda: _factcheck_heard(speaker, user_request_content, mgr)),
             )
             for name, step in steps:
                 try:
@@ -2095,6 +2096,20 @@ def _passive_vote(speaker, text: str, mgr) -> None:
     if pf and pf[0] == "cast_vote":
         who = mgr.people.name_of(speaker) or speaker or ""
         logger.info("🗳️ %s", room_tools.cast_vote(pf[1]["choice"], who)[:80])
+
+
+def _factcheck_heard(speaker, text: str, mgr) -> None:
+    """Quiet fact-check plugin: every line is remembered; checkable claims are looked up in
+    the background (never spoken unless someone asks)."""
+    import factcheck
+    import plugins as _plugins
+    if not _plugins.is_enabled("fact_check") or speaker == "self":
+        return
+    s = _plugins.settings_of("fact_check") or {}
+    bg = (s.get("background") or "on") == "on" and _plugins.is_enabled("web_search")
+    factcheck.observe(text, mgr.people.name_of(speaker) or speaker or "",
+                      gap_s=float(s.get("gap") or factcheck.DEFAULT_GAP_S),
+                      daily=int(s.get("daily") or factcheck.DEFAULT_DAILY), background=bg)
 
 
 def _mail_heard(speaker, mgr) -> None:
