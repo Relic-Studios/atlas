@@ -142,6 +142,8 @@ def abilities_note(eyes_on: bool, search_on: bool = True, persona: str = "", off
         can.append("log friendly bets and bring them up when they can be settled (never deciding the winner yourself)")
     if "teach" not in off:
         can.append("be taught the room's own rules and customs and use them next time")
+    if "soul_reflection" not in off:
+        can.append("after calls, propose small changes to how you talk; the owner approves them before they apply")
     if "fact_check" not in off:
         can.append("fact-check claims made in the call when someone asks if they're true (you stay quiet otherwise)")
     if "game_info" not in off:

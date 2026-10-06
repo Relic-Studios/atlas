@@ -104,6 +104,11 @@ button{font-family:var(--font)}
 .feed .m{font-size:11px;color:var(--muted);margin-top:3px}
 .feed ul{margin:6px 0 0;padding-left:16px;font-size:12px;color:var(--muted);line-height:1.45}
 .feed .empty{font-size:12.5px;color:var(--muted)}
+.feed .acts{display:flex;gap:6px;margin-top:8px}
+.feed .acts button,.feed .run{font:inherit;font-size:12px;padding:5px 11px;border-radius:7px;border:1px solid var(--line);background:transparent;color:inherit;cursor:pointer}
+.feed .acts button:hover,.feed .run:hover{border-color:var(--accent)}
+.feed .run{margin-bottom:10px}
+.feed .note{font-size:12px;color:var(--muted);margin:-4px 0 10px}
 .f label{display:block;font-size:12px;font-weight:600;margin-bottom:6px}
 .f .help{font-size:11.5px;color:var(--muted);margin-top:6px;line-height:1.45}
 .inp,.f select{width:100%;background:rgba(6,8,12,.7);color:var(--text);border:1px solid var(--line-2);border-radius:9px;padding:9px 11px;font-size:13px;font-family:var(--font);outline:none;transition:border-color .2s,box-shadow .2s}
@@ -185,6 +190,7 @@ const ICONS = {
   pause:'<circle cx="12" cy="12" r="9"/><path d="M10 9v6M14 9v6"/>',
   code:'<path d="M8 8l-4 4 4 4M16 8l4 4-4 4M13.5 6l-3 12"/>',
   check:'<path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="9"/>',
+  spark:'<path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/>',
   book:'<path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M4 21V5M8 7h7M8 11h5"/>',
   scale:'<path d="M12 3v18M5 21h14M4 7h16"/><path d="M7 7l-3 7a3 3 0 0 0 6 0zM17 7l-3 7a3 3 0 0 0 6 0z"/>',
   trophy:'<path d="M8 4h8v5a4 4 0 0 1-8 0z"/><path d="M8 6H5a3 3 0 0 0 3 4M16 6h3a3 3 0 0 1-3 4"/><path d="M12 13v4M9 20h6"/>',
@@ -334,10 +340,31 @@ async function loadFeed(p) {
     const d = await api(`/api/plugins/${encodeURIComponent(p.id)}/feed`);
     if (current !== p) return;
     const items = d.items || [];
-    el.innerHTML = '<h4>Recent activity</h4>' + (items.length ? items.map((it) =>
+    const head = d.run ? '<h4>Proposals</h4><button class="run" id="fRun">' + esc(d.run.label) + '</button><div class="note" id="fNote"></div>'
+                       : '<h4>Recent activity</h4>';
+    el.innerHTML = head + (items.length ? items.map((it, i) =>
       `<div class="it"><div class="t">${esc(it.title)}</div><div class="m">${esc(it.meta || '')}</div>` +
       ((it.items || []).length ? '<ul>' + it.items.map((x) => `<li>${esc(x.text)}</li>`).join('') + '</ul>' : '') +
-      '</div>').join('') : '<div class="empty">Nothing yet this session.</div>');
+      ((it.actions || []).length ? '<div class="acts">' + it.actions.map((a) =>
+        `<button data-i="${i}" data-act="${esc(a.act)}">${esc(a.label)}</button>`).join('') + '</div>' : '') +
+      '</div>').join('') : '<div class="empty">' + (d.run ? 'No proposals yet.' : 'Nothing yet this session.') + '</div>');
+    el.querySelectorAll('.acts button').forEach((b) => b.onclick = async () => {
+      const it = items[+b.dataset.i]; b.disabled = true;
+      try { await api(`/api/plugins/${encodeURIComponent(p.id)}/action`, {act: b.dataset.act, id: it.id, agent: it.agent}); }
+      catch (e) { b.disabled = false; return; }
+      loadFeed(p);
+    });
+    const run = $('fRun');
+    if (run) run.onclick = async () => {
+      run.disabled = true; $('fNote').textContent = 'Reflecting… this can take a minute.';
+      try {
+        const r = await api(`/api/plugins/${encodeURIComponent(p.id)}/run`, {});
+        if (current !== p) return;
+        await loadFeed(p);
+        const n = $('fNote'); if (n) n.textContent = r.added ? `${r.added} new proposal(s).` :
+          (r.agents && r.agents.length ? 'Nothing to change this time.' : 'No new call to reflect on.');
+      } catch (e) { const n = $('fNote'); if (n) n.textContent = e.message || 'Couldn’t reflect.'; run.disabled = false; }
+    };
   } catch (e) { el.innerHTML = '<h4>Recent activity</h4><div class="empty">Couldn’t load activity.</div>'; }
 }
 function closeWin() {

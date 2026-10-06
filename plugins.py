@@ -300,6 +300,18 @@ BUILTIN: List[dict] = [
         "settings": [],
     },
     {
+        "id": "soul_reflection", "name": "Soul reflection", "icon": "spark", "category": "Memory",
+        "summary": "After a call, the agent proposes small changes to how it talks. You approve or reject each one.",
+        "detail": "Press 'Reflect on the last call' after a call. The agent reads its own part of the "
+                  "transcript and suggests up to three first-person notes ('I'd like to ask more questions "
+                  "instead of guessing'). Nothing changes until you approve a note; approved notes are added "
+                  "on top of the persona, which is never edited. Notes that deny being an AI, claim a body, "
+                  "loosen safety or mention private details are thrown away before you see them. Runs only "
+                  "when no call is live. Wiping an agent's memory removes its notes from that window.",
+        "tools": [], "default": False, "feed": True,
+        "settings": [],
+    },
+    {
         "id": "fact_check", "name": "Quiet fact-check", "icon": "check", "category": "Knowledge",
         "summary": "Checks public claims in the background. The agent only speaks up when asked 'was that true?'",
         "detail": "When someone states a checkable public fact (a number, a date, 'the tallest...'), it's "

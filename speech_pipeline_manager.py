@@ -1227,6 +1227,11 @@ class SpeechPipelineManager:
             prof = self.agent.profile
             note = steering_note(txt, m[1] if m else None, self.floor,
                                  prof.names, vibe=self.vibe_enabled, profile=prof)
+        except Exception as e:  # noqa: BLE001 - steering must never block a turn
+            logger.warning("room context failed: %s", e)
+            note = ""
+        # Plugin notes stand on their own: a steering failure must not silently drop them.
+        if True:
             try:
                 import plugins as _plugins
                 if _plugins.is_enabled("floor_referee") and \
@@ -1247,10 +1252,16 @@ class SpeechPipelineManager:
                         note = (note + "\n" + tn).strip() if note else tn
             except Exception as e:  # noqa: BLE001
                 logger.debug("teach note failed: %s", e)
-            return note
-        except Exception as e:  # noqa: BLE001 - steering must never block a turn
-            logger.warning("room context failed: %s", e)
-            return ""
+            try:
+                import plugins as _plugins
+                if _plugins.is_enabled("soul_reflection"):
+                    import soul_reflection as _soul
+                    sn = _soul.note(getattr(self, "current_persona", "") or "")
+                    if sn:
+                        note = (note + "\n" + sn).strip() if note else sn
+            except Exception as e:  # noqa: BLE001
+                logger.debug("soul reflection note failed: %s", e)
+        return note or ""
 
     def check_abort(self, txt: str, wait_for_finish: bool = True, abort_reason: str = "unknown") -> bool:
         """

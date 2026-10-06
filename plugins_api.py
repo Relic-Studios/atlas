@@ -63,7 +63,46 @@ async def feed(pid: str, request: Request):
     if pid == "fact_check":
         import factcheck
         return {"items": factcheck.feed()}
+    if pid == "soul_reflection":
+        import soul_reflection
+        return {"items": await asyncio.to_thread(soul_reflection.feed),
+                "run": {"label": "Reflect on the last call"}}
     return {"items": []}
+
+
+@router.post("/api/plugins/{pid}/action")
+async def feed_action(pid: str, request: Request):
+    """Approve / reject / remove an item in a plugin's feed (Soul reflection)."""
+    if not _owner(request):
+        return _deny()
+    d = await _body(request)
+    if pid != "soul_reflection":
+        return JSONResponse({"error": "this plugin has no actions"}, status_code=404)
+    import soul_reflection
+    try:
+        ok = soul_reflection.action(str(d.get("agent") or ""), str(d.get("id") or ""), str(d.get("act") or ""))
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return {"ok": ok} if ok else JSONResponse({"error": "not found"}, status_code=404)
+
+
+@router.post("/api/plugins/{pid}/run")
+async def feed_run(pid: str, request: Request):
+    """Run a plugin's off-call job (Soul reflection: reflect on the last call)."""
+    if not _owner(request):
+        return _deny()
+    if pid != "soul_reflection":
+        return JSONResponse({"error": "nothing to run"}, status_code=404)
+    import plugins as _P
+    if not _P.is_enabled("soul_reflection"):
+        return JSONResponse({"error": "Turn Soul reflection on first."}, status_code=409)
+    import soul_reflection
+    res = await asyncio.to_thread(soul_reflection.reflect)
+    if isinstance(res, dict) and res.get("error"):
+        return JSONResponse({"error": res["error"]}, status_code=409)
+    n = sum(len(v) for v in res.values() if isinstance(v, list))
+    errs = [f"{a}: {v['error']}" for a, v in res.items() if isinstance(v, dict)]
+    return {"ok": True, "added": n, "agents": sorted(res), "errors": errs}
 
 
 @router.post("/api/plugins/{pid}/enabled")

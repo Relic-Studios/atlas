@@ -200,6 +200,11 @@ def wipe(aid: str, window: str, svc=None, root=None, now: float = None) -> dict:
     except Exception as e:  # noqa: BLE001 - lessons are optional
         logger.warning("lesson wipe failed: %s", e)
         lessons = 0
+    try:
+        import soul_reflection
+        soul_reflection.forget_since(aid, cutoff, root)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("reflection wipe failed: %s", e)
     logger.info("memory wipe %s window=%s: %d items, %d learned, %d lessons", aid, window, items, learned, lessons)
     return {"ok": True, "agent": aid, "window": window, "items": items, "learned": learned,
             "lessons": lessons}
