@@ -139,7 +139,7 @@ button{font-family:var(--font)}
 <body>
 <div class="wrap">
   <div class="top">
-    <a class="back" href="/static/atlas.html" title="Back to ATLAS">
+    <a class="back" id="back" href="/static/atlas.html" title="Back to ATLAS (Esc)">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>ATLAS</a>
     <div class="title"><h1>Plugins</h1><p>Switch an ability off and every agent stops using it on the next turn.</p></div>
     <div class="tabs" role="tablist">
@@ -428,6 +428,14 @@ async function clearKey(key) {
 }
 
 /* ---------- events ---------- */
+// Back to the dashboard: navigate from script (a bare link click was seen doing
+// nothing in the desktop app), and Esc works when no settings window is open.
+function goBack() { window.location.assign(new URL('/static/atlas.html', window.location.origin).href); }
+$('back').addEventListener('click', (ev) => { ev.preventDefault(); ev.stopPropagation(); goBack(); });
+document.addEventListener('keydown', (ev) => {
+  if (ev.key === 'Escape' && !$('scrim').classList.contains('on')) { ev.preventDefault(); goBack(); }
+  else if (ev.altKey && ev.key === 'ArrowLeft') { ev.preventDefault(); goBack(); }
+});
 document.addEventListener('click', (ev) => {
   const t = ev.target.closest('button,[data-cat]'); if (!t) { if (ev.target === $('scrim')) closeWin(); return; }
   if (t.dataset.tab) {
