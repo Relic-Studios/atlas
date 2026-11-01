@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 — agents that glance
 
 **New**
 - **Agents glance at the screen on their own** (Plugins > Eyes > "Look on its own": now and then, more often, or only when asked). When someone tells the agent about something visible ("do you like my new hoodie?", "I'm on cam now") it takes a quick look as it answers. When the room reacts to something on screen ("is that a guy?"), it glances quietly and keeps one line about what's there as background, without commenting on it. Glances are rate-limited (by default at most one every 90 seconds and four per 10 minutes), play no "let me look" line, and agents don't narrate the screenshot or talk about their own looking. "Can you see me?" and "what do I look like?" count as asking it to look; "don't look" doesn't. With a self-hosted vLLM server the model decides when a glance is worth it; otherwise simple cues do.
@@ -16,6 +16,9 @@
 - Turn handling: a turn that ended while the agent was replying is no longer lost; the "let me look" line waits for the turn to end; replies after a web search start sooner; agents are nudged to rest words they keep repeating.
 - Replies and the voice stay in the main language (English by default). Another language is only used after someone asks for it ("reply in Spanish", "speak Japanese please"), and "go back to English" switches back. Fixes English replies being pronounced as Portuguese or other languages after a misdetected line.
 - Agents no longer claim abilities from plugins that are switched off (e.g. "checking Steam sales" with Game info off).
+
+**Security**
+- Desktop shell updated to Electron 45.2.1 (mitigates the compromised eMudhra intermediate certificates, GHSA-jr5w-w6x2-84p9) and undici 7.30.1; Pillow updated to 13.0.0 for its published security fixes. The installer now fetches the Electron binary itself, since Electron 45 no longer downloads it during `npm install`.
 
 ATLAS is early beta. See [SAFETY.md](SAFETY.md) for what an agent can do, what's tested and what isn't.
 

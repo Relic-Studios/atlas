@@ -119,7 +119,12 @@ Ok 'packages ready'
 # 5. Desktop shell + speech models ------------------------------------------
 Step 5 $T 'Installing the desktop app and downloading speech models'
 Push-Location (Join-Path $Root 'desktop')
-try { Run 'npm.cmd' @('install', '--no-audit', '--no-fund', '--loglevel=error') } finally { Pop-Location }
+try {
+    Run 'npm.cmd' @('install', '--no-audit', '--no-fund', '--loglevel=error')
+    # Electron 45 no longer downloads its binary during npm install; fetch it now
+    # (a no-op when it's already there) so the shortcut below has electron.exe.
+    Run 'node' @('node_modules\electron\install.js')
+} finally { Pop-Location }
 Ok 'desktop shell ready'
 if ($SkipModels) { Warn 'model download skipped (-SkipModels); ATLAS fetches them on first launch' }
 else {
