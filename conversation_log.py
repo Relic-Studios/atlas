@@ -80,6 +80,10 @@ class ConversationLog:
     reaction_window_s: float = 12.0  # "lol" this soon after the agent spoke = reaction
     ledger_cap: int = 400
     roster_cap: int = 8
+    # Calls keep changing (owner 10-31: "forget voices and move forward"): only voices heard
+    # in the last active_s are shown to the model; after forget_s a voice leaves the roster.
+    active_s: float = 600.0
+    forget_s: float = 1800.0
     min_entries: int = 2
     clock: object = time.monotonic
     ledger: deque = field(default_factory=deque)
@@ -145,7 +149,18 @@ class ConversationLog:
         self.last_reaction = ""
         self._cap()
 
+    def _expire(self, now: float) -> None:
+        for label in [l for l, r in self.roster.items() if now - r.last_seen > self.forget_s]:
+            del self.roster[label]
+
+    def active_labels(self) -> list:
+        """Voices heard within active_s, most recent first."""
+        now = self.clock()
+        return [r.label for r in sorted(self.roster.values(), key=lambda r: -r.last_seen)
+                if now - r.last_seen <= self.active_s]
+
     def _touch(self, spk: str, now: float) -> Speaker:
+        self._expire(now)
         rec = self.roster.get(spk)
         if rec is None:
             if len(self.roster) >= self.roster_cap:   # evict the longest-silent voice
@@ -200,15 +215,20 @@ class ConversationLog:
     def state_note(self, current: str | None = None, in_view: set | None = None) -> str:
         """Compact picture of the room. Bounded by roster_cap lines."""
         now = self.clock()
+        self._expire(now)
         if not self.roster and self.last_agent_at is None:
             return ""
         in_view = in_view or set()
         lines = []
-        people = sorted(self.roster.values(), key=lambda r: -r.last_seen)
+        everyone = sorted(self.roster.values(), key=lambda r: -r.last_seen)
+        # Voices quiet for active_s have likely left: don't spend the prompt on them.
+        people = [r for r in everyone if now - r.last_seen <= self.active_s or r.label == current]
         active = [r for r in people if now - r.last_seen <= 120]
         if people:
+            gone = len(everyone) - len(people)
             lines.append(f"CALL STATE (voices tracked by diarization; S-labels are distinct "
-                         f"people): {len(active)} active in the last 2 min.")
+                         f"people): {len(active)} active in the last 2 min."
+                         + (f" {gone} earlier voice(s) quiet 10+ min, left out." if gone else ""))
         for r in people:
             ago = now - r.last_seen
             when = ("speaking now" if r.label == current else

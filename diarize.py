@@ -59,6 +59,9 @@ class SpeakerProfile:
     sentence_count: int = 0
     created_at: float = field(default_factory=time.time)
     last_seen_at: float = field(default_factory=time.time)
+    # A few distinct samples of how this person sounds (calm, loud, laughing): one
+    # running average misses the same person on a line unlike their average.
+    exemplars: list = field(default_factory=list)
 
     def update(self, embedding: np.ndarray, duration: float, weight: float) -> None:
         weight = max(0.0, min(1.0, weight))
@@ -66,6 +69,22 @@ class SpeakerProfile:
         self.sentence_count += 1
         self.speech_seconds += max(0.0, duration)
         self.last_seen_at = time.time()
+
+    def remember(self, embedding: np.ndarray, duration: float, cap: int) -> None:
+        if duration < 1.0:
+            return
+        if self.exemplars and max(_cosine(embedding, e) for e in self.exemplars) > 0.85:
+            return      # nothing new about their voice
+        self.exemplars.append(embedding)
+        if len(self.exemplars) > cap:
+            self.exemplars.pop(0)
+
+    def score(self, embedding: np.ndarray, use_exemplars: bool) -> float:
+        s = _cosine(embedding, self.centroid)
+        if use_exemplars and len(self.exemplars) >= 3:
+            top = sorted((_cosine(embedding, e) for e in self.exemplars), reverse=True)[:3]
+            s = max(s, sum(top) / 3.0)
+        return s
 
 
 @dataclass
@@ -93,7 +112,10 @@ class Diarizer:
         max_idle_seconds: float = 1800.0,    # a lull must not re-label everyone
         decay_half_life_seconds: float = 60.0,  # fade speech_seconds weight
         device: str = "cuda",
+        center=None,
+        embedder: str = "ecapa",
     ):
+        self.embedder = embedder
         self.self_similarity = self_similarity
         self.same_speaker_similarity = same_speaker_similarity
         self.similarity_temperature = similarity_temperature
@@ -116,13 +138,16 @@ class Diarizer:
         self._lock = threading.Lock()
         self._embedder = None
         self._self_embedding: np.ndarray | None = None
+        # the raw cohort mean (|mean| ~0.25), NOT re-normalised: subtracting a unit vector
+        # removes far too much and collapses every voice onto one (variant eval 10-31)
+        self.center = np.asarray(center, dtype=np.float32).reshape(-1) if center is not None else None
 
         if self_reference_audio:
             import soundfile as sf
             audio, sr = sf.read(self_reference_audio, dtype="float32")
             if audio.ndim > 1:
                 audio = audio.mean(axis=1)
-            self._self_embedding = _normalize(self._embed(audio, sr))
+            self._self_embedding = self._vec(audio, sr)
 
     def set_self_reference(self, audio_path: str | None = None) -> None:
         """Re-point the self-profile at a new voice (e.g. after a voice swap)."""
@@ -135,9 +160,11 @@ class Diarizer:
         if audio.ndim > 1:
             audio = audio.mean(axis=1)
         with self._lock:
-            self._self_embedding = _normalize(self._embed(audio, sr))
+            self._self_embedding = self._vec(audio, sr)
 
     def _embed(self, audio: np.ndarray, sample_rate: int) -> np.ndarray:
+        if self.embedder.endswith(".onnx"):
+            return self._embed_onnx(audio, sample_rate)
         import torch
         from speechbrain.inference.speaker import EncoderClassifier
         if self._embedder is None:
@@ -157,6 +184,26 @@ class Diarizer:
             emb = self._embedder.encode_batch(wave, normalize=True)
         return _normalize(emb.detach().cpu().numpy())
 
+    def _embed_onnx(self, audio: np.ndarray, sample_rate: int) -> np.ndarray:
+        """sherpa-onnx speaker model (e.g. NVIDIA TitaNet-L), CPU: keeps the GPU for STT/TTS."""
+        if self._embedder is None:
+            import sherpa_onnx
+            self._embedder = sherpa_onnx.SpeakerEmbeddingExtractor(
+                sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=self.embedder, num_threads=4, provider="cpu"))
+        audio = np.asarray(audio, dtype=np.float32).reshape(-1)
+        st = self._embedder.create_stream()
+        st.accept_waveform(sample_rate, audio)
+        st.input_finished()
+        return _normalize(self._embedder.compute(st))
+
+    def _vec(self, audio: np.ndarray, sample_rate: int) -> np.ndarray:
+        """Embedding as the diarizer compares it: optionally centred on a fixed reference mean
+        (the voice of "anyone"), which spreads different people further apart."""
+        e = _normalize(self._embed(audio, sample_rate))
+        if self.center is not None:
+            e = _normalize(e - self.center)
+        return e
+
     def _decay(self, now: float) -> None:
         """Prune idle profiles and fade their accumulated speech weight."""
         keep = []
@@ -175,8 +222,12 @@ class Diarizer:
     # see tests/sim_diarize_fragment.py. Same-speaker utterance-vs-utterance
     # cosine is only ~0.3-0.5 there, utterance-vs-mature-centroid ~0.55-0.8,
     # different speakers <= ~0.3 (utt) / ~0.4 (centroid) at the 95th pct.
-    MATCH_MATURE = 0.40      # profile with >= 3 utterances
-    MATCH_YOUNG = 0.30       # profile built from 1-2 utterances
+    # Re-tuned 10-31 on REAL people (tests/sim_diarize_real.py: 39 AMI/EdAcc speakers through
+    # Opus 24k; steady/churn/overlap/busy x2 seeds) with the margin, update-gating and dormancy
+    # knobs below. Against 0.40/0.30 alone: labels per person 2.75 -> 2.12, extra live voices
+    # +6.6 -> +5.2, turns labelled 76% -> 79%, wrong labels 4.8% -> 5.9%, echo still 100%.
+    MATCH_MATURE = 0.30      # profile with >= 3 utterances
+    MATCH_YOUNG = 0.18       # profile built from 1-2 utterances
     PENDING_PAIR = 0.30      # two unmatched utterances agree -> confirm a voice
     SOLO_NEW_SECONDS = 2.5   # one long, clearly-foreign utterance may found a voice
     SOLO_NEW_MAX_SIM = 0.30
@@ -186,8 +237,23 @@ class Diarizer:
     SELF_MARGIN = float(os.environ.get("ATLAS_SELF_MARGIN", "0.05")) # closest voice by this margin
     AUDIBLE_RELAX = float(os.environ.get("ATLAS_SELF_RELAX", "0.10"))
 
-    def _match_threshold(self, p: "SpeakerProfile") -> float:
-        return self.MATCH_MATURE if p.sentence_count >= 3 else self.MATCH_YOUNG
+    # Calls keep changing (owner 10-31): a voice quiet for DORMANT_S has probably left. It drops
+    # out of the live roster and must match more clearly to be claimed again, so a newcomer
+    # isn't absorbed into someone who left, while a clear returner gets their label back.
+    DORMANT_S = 600.0
+    DORMANT_EXTRA = 0.12
+    EXEMPLARS = False        # score against a person's best few samples as well as their average
+    EXEMPLAR_CAP = 10
+    MATCH_MARGIN = 0.10      # best voice must beat the runner-up by this much ...
+    MARGIN_SURE = 0.15       # ... unless it clears its threshold by this much
+    UPDATE_ABOVE = 0.08      # only a match this far over the threshold reshapes the voiceprint
+    MERGE_MIN_TURNS = 0      # both voiceprints need this many turns before they can merge
+
+    def _match_threshold(self, p: "SpeakerProfile", now: float | None = None) -> float:
+        th = self.MATCH_MATURE if p.sentence_count >= 3 else self.MATCH_YOUNG
+        if now is not None and now - p.last_seen_at > self.DORMANT_S:
+            th += self.DORMANT_EXTRA
+        return th
 
     def drain_merges(self) -> list:
         """(old_label, surviving_label) pairs since the last call, so a name
@@ -211,6 +277,8 @@ class Diarizer:
             for i in range(len(self._profiles)):
                 for j in range(i + 1, len(self._profiles)):
                     a, b = self._profiles[i], self._profiles[j]
+                    if min(a.sentence_count, b.sentence_count) < self.MERGE_MIN_TURNS:
+                        continue        # a young voiceprint is too noisy to merge on
                     if _cosine(a.centroid, b.centroid) < self.MERGE_SIM:
                         continue
                     keep, drop = (a, b) if a.created_at <= b.created_at else (b, a)
@@ -247,7 +315,7 @@ class Diarizer:
         foreign one. Single short unmatched lines stay anonymous instead of
         each becoming S44, S45, ...
         """
-        embedding = _normalize(self._embed(audio, sample_rate))
+        embedding = self._vec(audio, sample_rate)
         self.last_embedding = embedding
         duration = float(len(audio)) / float(sample_rate)
         now = time.time()
@@ -256,11 +324,12 @@ class Diarizer:
             self._decay(now)
             self._pending = [q for q in self._pending if now - q[2] <= self.PENDING_TTL]
 
-            top_sim, top = -1.0, None
+            top_sim, top, second_sim = -1.0, None, -1.0
             if self._profiles:
-                sims = [_cosine(embedding, p.centroid) for p in self._profiles]
+                sims = [p.score(embedding, self.EXEMPLARS) for p in self._profiles]
                 i = max(range(len(sims)), key=lambda k: sims[k])
                 top, top_sim = self._profiles[i], sims[i]
+                second_sim = max((s for k, s in enumerate(sims) if k != i), default=-1.0)
 
             # Own voice (echo past AEC). Treated like a mature profile: it wins
             # when it's the closest voice by a margin, or is very close outright.
@@ -285,11 +354,25 @@ class Diarizer:
                                            confidence=1.0, unknown_probability=0.0)
 
             if top is not None:
-                if top_sim >= self._match_threshold(top):
-                    # running mean while young, slow EMA once established
-                    w = max(0.08, 1.0 / (top.sentence_count + 1)) * \
-                        max(0.25, min(1.0, duration / 2.0))
-                    top.update(embedding, duration, weight=min(0.5, w))
+                th = self._match_threshold(top, now)
+                if (top_sim >= th and top_sim - second_sim < self.MATCH_MARGIN
+                        and top_sim < th + self.MARGIN_SURE):
+                    # two known voices fit about equally: don't guess, and don't let
+                    # this line found a new voice either (it's one of them)
+                    return SpeakerDecision(speaker=None, unknown_probability=1.0)
+                if top_sim >= th:
+                    if top_sim >= th + self.UPDATE_ABOVE:
+                        # running mean while young, slow EMA once established
+                        w = max(0.08, 1.0 / (top.sentence_count + 1)) * \
+                            max(0.25, min(1.0, duration / 2.0))
+                        top.update(embedding, duration, weight=min(0.5, w))
+                        if self.EXEMPLARS:
+                            top.remember(embedding, duration, self.EXEMPLAR_CAP)
+                    else:
+                        # a weak match is labelled but doesn't reshape the voice: a newcomer
+                        # who only resembles someone must not drag their profile over
+                        top.last_seen_at = now
+                        top.sentence_count += 1
                     self._merge_close_profiles()
                     label = self._resolve(top.label)
                     conf = max(0.0, min(1.0, (top_sim - 0.2) / 0.6))
@@ -311,6 +394,9 @@ class Diarizer:
             if best_j is not None and best >= self.PENDING_PAIR:
                 e, d, _t = self._pending.pop(best_j)
                 p = self._add_profile(embedding * duration + e * d, duration + d, 2, now)
+                if self.EXEMPLARS:
+                    p.remember(e, d, self.EXEMPLAR_CAP)
+                    p.remember(embedding, duration, self.EXEMPLAR_CAP)
                 return SpeakerDecision(speaker=p.label, confidence=0.6,
                                        unknown_probability=0.4)
             if duration >= self.SOLO_NEW_SECONDS and top_sim < self.SOLO_NEW_MAX_SIM:
@@ -352,12 +438,12 @@ class Diarizer:
         duration = len(audio) / float(sample_rate)
         if duration < 0.6:
             return None
-        embedding = _normalize(self._embed(audio, sample_rate))
+        embedding = self._vec(audio, sample_rate)
         with self._lock:
             live = [p for p in self._profiles
                     if time.time() - p.last_seen_at <= self.max_idle_seconds]
-            best = max(live, key=lambda p: _cosine(embedding, p.centroid)) if live else None
-            best_sim = _cosine(embedding, best.centroid) if best is not None else -1.0
+            best = max(live, key=lambda p: p.score(embedding, self.EXEMPLARS)) if live else None
+            best_sim = best.score(embedding, self.EXEMPLARS) if best is not None else -1.0
             if self._self_embedding is not None and agent_audible is not False:
                 self_sim = _cosine(embedding, self._self_embedding)
                 if self_sim >= self.self_similarity or (
@@ -365,7 +451,7 @@ class Diarizer:
                     return "self"
             if best is None:
                 return None
-            if _cosine(embedding, best.centroid) >= self._match_threshold(best):
+            if best_sim >= self._match_threshold(best, time.time()):
                 return best.label
             return None
 
@@ -382,6 +468,7 @@ class Diarizer:
                     "turns": p.sentence_count,
                 }
                 for p in sorted(self._profiles, key=lambda p: -p.last_seen_at)
+                if now - p.last_seen_at <= self.DORMANT_S     # dormant voices have likely left
             ]
         return {"participant_count": len(participants), "participants": participants}
 

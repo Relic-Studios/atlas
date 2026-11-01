@@ -98,5 +98,25 @@ class TwoStageTests(unittest.TestCase):
         self.assertTrue(R._is_participation(_body()))
 
 
+    def _with_search_tool(self, user_line):
+        b = _body()
+        b["tools"] = [{"type": "function", "function": {"name": "web_search", "parameters": {}}}]
+        b["messages"][-1]["content"] = user_line
+        return b
+
+    def test_spoken_search_command_forces_the_tool(self):
+        http = _Http(_Resp({"choices": [{"message": {"content": "[HOLD"}}]}))
+        self.sess(http)._two_stage(self._with_search_tool("[S1] Ivy, search up the patch notes"), (4, 60))
+        self.assertEqual(http.bodies[0]["tool_choice"]["function"]["name"], "web_search")
+
+    def test_task_cue_never_forces_a_new_search(self):
+        from tasks import cue_text
+        cue = cue_text({"id": 3, "asker": "S1", "text": "patch notes"})
+        http = _Http(_Resp({"choices": [{"message": {"content": "[HOLD"}}]}))
+        self.sess(http)._two_stage(self._with_search_tool(cue), (4, 60))
+        self.assertNotIn("tool_choice", http.bodies[0])
+
+
+
 if __name__ == "__main__":
     unittest.main()

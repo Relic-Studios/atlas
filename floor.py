@@ -59,12 +59,69 @@ def strip_label(text: str) -> str:
 
 def names_agent(text: str, names: tuple[str, ...]) -> bool:
     """The agent's name (or a nickname / near-miss STT spelling, or "hey bot")
-    appears outside quotes."""
+    appears outside quotes -- as address, not only in talk ABOUT it ("like Max
+    said", "oh that's Grim, it's an AI thing"; sim 11-01: 21 side-talk lines
+    got a reply because a mention counted as being named)."""
     from conversation_dynamics import _GENERIC_ALIAS_PATTERNS, _is_agent_name
     body = re.sub(r'"[^"]*"|“[^”]*”', '', strip_label(text))
     if any(p.search(body) for p in _GENERIC_ALIAS_PATTERNS):
         return True
-    return any(_is_agent_name(t, names) for t in re.findall(r"[A-Za-z]{3,}", body))
+    hits = [m for m in re.finditer(r"[A-Za-z]{3,}", body) if _is_agent_name(m.group(0), names)]
+    if not hits:
+        return _role_addressed(body, names)
+    if not all(_mentioned_not_addressed(body, m) for m in hits):
+        return True
+    # only mentions -- unless it also asks "you" something: "Ivy's been into stuff lately? like
+    # what, dude, what do you even do" is still for her
+    F = ConversationFloor
+    return bool((F._ASK.search(body) or F._ASK_MID.search(body)) and F._TO_YOU.search(body))
+
+
+_ROLE_LEAD = re.compile(r"(?:^|[,.!?;:]\s*|\b(?:hey|hi|hello|yo|oi|ok|okay|alright|aight|yeah|yo|listen|thanks|"
+                        r"thank\s+you|come\s+on|ey|ay|ayo|so|but|now|well)\s+)(?:(?:little|lil|creepy|old|my|mr\.?|"
+                        r"miss|dear|mister)\s+)*$", re.I)
+
+
+def _role_addressed(body: str, names: tuple[str, ...]) -> bool:
+    """The agent called by what it is ("hey ninja", "Yeah, dino, you ...", ", jester?"), from its
+    pack 'what' (conversation_dynamics.role_words). Only in address position, never as a noun."""
+    from conversation_dynamics import role_words
+    roles = role_words(tuple(n.lower() for n in names))
+    for m in re.finditer(r"[A-Za-z]{4,}", body):
+        if m.group(0).lower() not in roles:
+            continue
+        before, after = body[:m.start()], body[m.end():]
+        if _ROLE_LEAD.search(before) and re.match(r"\s*(?:[,?!.]|$)", after):
+            return True
+        if re.search(r"\b(?:hey|hi|yo|oi|ey|ay|ayo)\s+$", before, re.I):
+            return True
+    return False
+
+
+_ADDRESS_BEFORE = re.compile(r"(?:^|[,.!?;:]\s*|\b(?:hey|hi|hello|yo|oi|ok|okay|ay|ayo|sup|thanks|thank\s+you|"
+                             r"bye|later|night|come\s+on|listen|dear)\s+)$", re.I)
+_REF_BEFORE = re.compile(r"\b(?:like|as|cuz|because)\s+$|\b(?:that's|that\s+is|this\s+is|meet|the|ask|asked|"
+                         r"tell|told|why's|what's|how's|where's|is|was|does|did|has)\s+$", re.I)
+_REF_SAID_AFTER = re.compile(r"^(?:['’]s\b|\s+(?:just\s+|already\s+)?(?:said|says|told|was\s+saying|mentioned)\b)",
+                             re.I)
+_REF_VERB_AFTER = re.compile(r"^\s+(?:(?:just|already|literally|always|never|really|keeps|kept)\s+\w+|"
+                             r"(?:said|says|told|went|knows|thinks|is|was|ain't|isn't|wasn't|has|had|got|did|does|"
+                             r"didn't|doesn't|can't|won't))\b", re.I)
+
+
+def _mentioned_not_addressed(body: str, m: re.Match) -> bool:
+    """One occurrence of the agent's name used in the third person. High precision only:
+    an address form anywhere ("Max,", "hey Max", ", Max?") wins, and a
+    sentence-initial "Ivy is that true" (comma lost in STT) stays address."""
+    before, after = body[:m.start()], body[m.end():]
+    if _REF_BEFORE.search(before):       # "oh that's Grim, it's like an AI thing" / "ask Max, he knows"
+        return True
+    if re.match(r"\s*[,?!]", after) or re.search(r"\b(?:hey|hi|hello|yo|oi|ay|ayo|sup)\s+$", before, re.I):
+        return False
+    if _REF_SAID_AFTER.match(after):
+        return True
+    sentence_start = _ADDRESS_BEFORE.search(before) is not None
+    return not sentence_start and _REF_VERB_AFTER.match(after) is not None
 
 
 # Whole-utterance Whisper hallucinations (noise/silence/laughs), live 09-29 17:54:
@@ -172,6 +229,8 @@ class ConversationFloor:
         self.turn_log: list[tuple[str, float]] = []   # ('u'|'a', t), bounded
         self.profile = None              # AgentProfile (interests), set by runtime
         self.last_agent_at = 0.0         # agent's last spoken reply
+        self.last_agent_text = ""        # ... and what it said (echo check for "addressed to")
+        self.last_agent_end = 0.0         # ... and about when its voice finished
         self.side = None                 # (asker, addressee_label|None, t): human->human question
         self.asked = None                # (target, t): the agent's last reply ended in a question
         self.direct = None               # background mode: [speaker, follow-ups left, last t]
@@ -191,6 +250,8 @@ class ConversationFloor:
         self.last_user_at = 0.0
         self.turn_log = []
         self.last_agent_at = 0.0
+        self.last_agent_text = ""
+        self.last_agent_end = 0.0
         self.side = None
         self.asked = None
         self.direct = None
@@ -267,6 +328,8 @@ class ConversationFloor:
         if ack_only(text) and not names_agent(text, names) and not self._answers_agent(speaker):
             return "acknowledgement"
         veto = pre_llm_veto(text, names)
+        if veto and veto.startswith("addressed to ") and self._echoes_agent(veto[len("addressed to "):]):
+            veto = None
         if veto == "explicit silence request":
             # Only a silence request aimed at the agent starts quiet mode: its
             # name is in the line, or its current partner said it. "bro shut up"
@@ -413,7 +476,15 @@ class ConversationFloor:
         passive/pacing holds). A string = a HOLD reason (they closed it or are
         talking to someone else). False = no opinion (normal gating)."""
         now = self.clock()
-        if not speaker or speaker == "self":
+        if speaker == "self":
+            return False
+        if not speaker:
+            # The diarizer labels a new voice only from its second utterance, so the
+            # naming line ("Hey Fae, can you hear me?") often has no speaker. Engage
+            # "user"; the first labelled voice that follows inherits it (live 10-31).
+            if names_agent(text, names):
+                self.engaged = {"who": "user", "since": now, "last": now, "agent_at": 0.0}
+                return True
             return False
         if names_agent(text, names):
             e = self.engaged
@@ -431,6 +502,8 @@ class ConversationFloor:
         if not who:
             return False
         e = self.engaged
+        if who == "user" and speaker != "user":
+            e["who"] = who = speaker      # the unlabelled engager now has a voice label
         body = strip_label(text)
         if speaker != who:
             drift = (e["agent_at"] > e["last"]                       # it answered; they haven't spoken since
@@ -448,6 +521,12 @@ class ConversationFloor:
             return False
         # it IS the engaged person
         if veto and veto.startswith("addressed to"):
+            from conversation_dynamics import FAREWELL_START
+            if FAREWELL_START.match(body):
+                # "later Peach, take it easy" to someone leaving: that line is theirs (the veto
+                # holds it), but it doesn't end this conversation (fix1 replay: the next two
+                # questions to the agent were held as "talking to someone else")
+                return False
             self.engaged = None                 # turned to someone else
             self.turned_away = (speaker, now)
             if self.partner == speaker:
@@ -480,11 +559,25 @@ class ConversationFloor:
     # an answer to its own question, always gets through.
     _ASK = re.compile(r"\?|^\s*(?:what|who|whom|whose|why|how|when|where|which|can|could|"
                       r"would|will|do|does|did|is|are|was|were|should|have|has|any)\b", re.I)
-    _TO_YOU = re.compile(r"\b(?:you|your|you're|ya|u)\b", re.I)
+    # A question mid-line, as speech comes out of the recognizer with no '?': "but
+    # like, real talk, do you actually remember my name" (sim 11-01: 21 direct
+    # questions held by pacing, most of them like this).
+    _ASK_MID = re.compile(r"(?:^|[,;:.!]\s*|\b(?:like|so|but|and|then|okay|ok|now|or|anyway|dude|bro|man)\s+)"
+                          r"(?:(?:what|what's|whats|who|why|how|when|where|which)\s+\w+"
+                          r"|(?:do|does|did|are|is|can|could|would|will|should|have|has)\s+"
+                          r"(?:you|u|ya|i|we|it|they|that|this|the|a|your|my)\b)",
+                          re.I)
+    _TO_YOU = re.compile(r"\b(?:you|your|you're|ya|u|yourself|urself)\b", re.I)
     _REQUEST = re.compile(r"\b(?:give\s+(?:us|me)|tell\s+(?:us|me)|talk\s+about|explain|"
                           r"go\s+on|keep\s+going|more\s+about|what\s+about|"
-                          r"(?:from|take\s+it\s+from)\s+.{0,30}point\s+of\s+view)\b", re.I)
-    THREAD_WINDOW_S = 25.0
+                          r"(?:from|take\s+it\s+from)\s+.{0,30}point\s+of\s+view|"
+                          r"decide|pick\s+(?:one|a\s+side)|choose|settle\s+(?:it|this)|prove|"
+                          r"(?:just\s+)?answer\s+(?:the|my|me)|say\s+(?:it|something|that|again)|"
+                          r"be\s+honest|what'?s\s+your\s+(?:take|read|pick|call)|tell\s+\w+\s+(?:something|about))\b",
+                          re.I)
+    THREAD_WINDOW_S = 25.0               # from the end of the agent's reply
+    INTRO_WINDOW_S = 120.0
+    _INTRO = re.compile(r"\b(?i:my\s+name(?:'s|\s+is)|name's|call\s+me|i'?m|i\s+am)\s+[A-Z][\w'-]+")
 
     def talkativeness(self) -> float:
         try:
@@ -503,16 +596,22 @@ class ConversationFloor:
         if tier == "ok":
             return None
         body = strip_label(text)
-        asks = bool(self._ASK.search(body))
+        asks = bool(self._ASK.search(body) or self._ASK_MID.search(body))
         # Live 10-06 (pyramids): pacing must cut volunteering, never a live thread.
         # A question/request right after the agent spoke (from anyone) continues
         # the conversation; the person it's engaged with never reaches this gate
         # (engagement_gate lets their lines through first).
         req = asks or bool(self._REQUEST.search(body))
-        if req and (now - self.last_agent_at) <= self.THREAD_WINDOW_S:
+        since = now - max(self.last_agent_at, getattr(self, "last_agent_end", 0.0))
+        if req and since <= self.THREAD_WINDOW_S:
+            return None
+        # Someone telling the agent their name gets a greeting, whatever the talk
+        # budget (live 10-31: "Oh, my name's <name>." was held; sim 11-01: "I'm Taco
+        # by the way" 36 s after it last spoke).
+        if self._INTRO.search(body) and since <= self.INTRO_WINDOW_S:
             return None
         partner = bool(speaker) and speaker == self.active_partner()
-        to_you = asks and bool(self._TO_YOU.search(body))
+        to_you = req and bool(self._TO_YOU.search(body))
         if tier == "soft":
             # over budget: stop volunteering on statements, but anything that
             # could be a request (its partner, a 'you' question, a question to
@@ -664,6 +763,9 @@ class ConversationFloor:
         except Exception:  # noqa: BLE001
             pass
         self.last_agent_at = self.clock()
+        self.last_agent_text = text or ""
+        # live calls this when the text is final, about when the voice starts
+        self.last_agent_end = self.last_agent_at + 0.4 + len(words(text or "")) / 2.6
         self.asked = (target, self.last_agent_at) if (text or "").rstrip().endswith("?") else None
         if self.direct and target == self.direct[0]:
             self.direct[2] = self.last_agent_at   # the window runs from her last reply
@@ -671,6 +773,40 @@ class ConversationFloor:
             self.engaged["agent_at"] = self.last_agent_at
         if target and target not in ("user", "self"):
             self.partner, self.partner_at = target, self.clock()
+
+    UNDIRECTED_HOLD_P = 0.03
+
+    def undirected_hold_thresh(self, text: str, names: tuple[str, ...]) -> float | None:
+        """Per-turn calibrated-HOLD threshold (remote_llm next_hold_thresh) for a line that asks the
+        agent nothing: no name, no question or request, no 'you', not the answer to its own question.
+        Model answers ~95% of the lines the gate passes, side talk included; its own P(HOLD) is the
+        only signal left there. Sim 11-01 (fix1 replay, 56 calls): side-talk replies 210 -> ~131 with 1
+        of 506 lines meant for the agent held; directed lines get no threshold (None) because any cut
+        there cost real questions."""
+        if names_agent(text, names):
+            return None
+        body = strip_label(text)
+        if (self._ASK.search(body) or self._ASK_MID.search(body) or self._REQUEST.search(body)
+                or self._TO_YOU.search(body) or self._INDIRECT_Q.search(body)):
+            return None    # "you said earlier...", "you're just dodging": pushback is for whoever 'you' is
+        m = re.match(r"^\s*\[(S\d+|user)\]", text or "")
+        if self._answers_agent(m.group(1) if m else None):
+            return None    # the answer to a question it just asked
+        return self.UNDIRECTED_HOLD_P
+
+    _INDIRECT_Q = re.compile(r"\b(?:need|want|wanna|gotta)\s+(?:to\s+)?know\b|\bwondering\s+(?:if|whether|what)\b"
+                             r"|\bcurious\s+(?:if|whether|what)\b", re.I)
+
+    def _echoes_agent(self, word: str, window_s: float = 60.0) -> bool:
+        """"Model, huh, sounds like a writer" right after the agent said
+        "Model" repeats its own word back: a reaction to it, not a line for
+        someone called Model (sim 11-01). Names the room uses stay names."""
+        from conversation_dynamics import _is_room_name
+        if not word or not self.last_agent_text or self.clock() - self.last_agent_at > window_s:
+            return False
+        if _is_room_name(word):
+            return False
+        return re.search(r"\b" + re.escape(word) + r"\b", self.last_agent_text, re.I) is not None
 
     def _answers_agent(self, speaker: str | None, window_s: float = 20.0) -> bool:
         """The agent just asked a question and this line could be the answer ('yeah')."""
@@ -969,6 +1105,44 @@ def content_key(sentence: str) -> str:
     re-voiced under a different opener. Only real sentences (>=5 words) count."""
     k = _OPENER.sub('', filler_key(sentence)).strip()
     return ('D:' + k) if len(k.split()) >= 5 else ''
+
+
+# Persona sweep 10-31: Kai brought up ramen in 3 of his first 4 replies, Pup "snacks"
+# twice, 21% of Pup's live replies opened with "Rokay". The line guards above drop a
+# repeated SENTENCE (often silencing the reply); a motif keeps coming back in new sentences.
+# Ask the model to rest it instead, before it speaks. Distinctive words only: common words
+# ("really", "think") repeat in anyone's speech.
+_MOTIF_WORD = re.compile(r"[a-z][a-z'\-]{2,}")
+
+
+def recent_motifs(history: list, last_n: int = 6, min_replies: int = 3, exclude=()) -> list:
+    """Distinctive words the agent used in at least min_replies of its last last_n replies."""
+    said = [_spoken(m) for m in history if m.get('role') == 'assistant'][-last_n:]
+    if len(said) < min_replies:
+        return []
+    try:
+        from wordfreq import zipf_frequency as _z
+    except Exception:  # noqa: BLE001
+        return []
+    skip = {w.lower() for w in exclude}
+    counts = {}
+    for s in said:
+        for w in set(_MOTIF_WORD.findall((s or '').lower())):
+            w = w.strip("'-")
+            if len(w) < 3 or w in skip or w in FILLER or w in BACKCHANNEL:
+                continue
+            counts[w] = counts.get(w, 0) + 1
+    motifs = [(n, w) for w, n in counts.items() if n >= min_replies and _z(w, 'en') < 4.6]
+    return [w for n, w in sorted(motifs, reverse=True)[:3]]
+
+
+def motif_note(history: list, exclude=()) -> str:
+    words = recent_motifs(history, exclude=exclude)
+    if not words:
+        return ""
+    quoted = ", ".join(f'"{w}"' for w in words)
+    return (f"YOU KEEP COMING BACK TO {quoted} (in most of your last replies). Leave "
+            f"{'it' if len(words) == 1 else 'them'} alone unless someone brings it up; say something new.")
 
 
 def recent_content(history: list, last_n: int = 6) -> set:

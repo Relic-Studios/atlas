@@ -85,13 +85,17 @@ _SEARCH_INTENT_RE = re.compile(
 # only TALK ABOUT searching (third person / ability statements) aren't requests.
 _SEARCH_MENTION_RE = re.compile(
     r"\b(?:(?:i|we|you|u|they|people|anyone|someone)\s+(?:can|could|should|might)\s+(?:just\s+)?ask\s+\w+\s+to"
-    r"|(?:she|he|it|they|fae|\w+)\s+(?:can|could|is\s+able\s+to|knows\s+how\s+to)\s+(?:also\s+)?(?:search|google|look)"
+    r"|(?:she|he|it|they|fae|(?!you\b|u\b)\w+)\s+(?:can|could|is\s+able\s+to|knows\s+how\s+to)\s+(?:also\s+)?(?:search|google|look)"
     r"|(?:able|ability)\s+to\s+(?:search|google|look)"
     r"|(?:she|he|it|they)\s+(?:searches|googles|looks\s+(?:stuff|things)\s+up)"
     r"|searching\s+(?:is|was)\b)",
     re.IGNORECASE,
 )
-_DIRECT_ASK_RE = re.compile(r"\b(?:can|could|would|will)\s+you\b|^\W*(?:\[\w+\]\s*)?(?:\w+,\s*)?(?:please\s+)?(?:search|google|look)", re.I)
+# Live 11-01: "Do you think you could search up some bodies for yourself?" read as a mention
+# ("you could search" = "Fae can search"), so nothing searched and Fae said "I'll look into it".
+_DIRECT_ASK_RE = re.compile(r"\b(?:can|could|would|will)\s+you\b|^\W*(?:\[\w+\]\s*)?(?:\w+,\s*)?(?:please\s+)?(?:search|google|look)"
+                            r"|\b(?:you|u)\s+(?:can|could|should|might|gotta|need\s+to|have\s+to)\s+(?:just\s+|maybe\s+|go\s+)?"
+                            r"(?:search|google|look\s+(?:it\s+|that\s+|this\s+|them\s+)?up|look\s+into|research)", re.I)
 
 
 def mention_only(text: str) -> bool:
@@ -102,6 +106,9 @@ def mention_only(text: str) -> bool:
 
 def wants_search(text: str) -> bool:
     return bool(text and _SEARCH_INTENT_RE.search(text) and not mention_only(text))
+
+
+MAX_CLIP_S = 6.0   # a spoken "hold on, let me look" never needs longer
 
 
 class Backchannels:
@@ -125,6 +132,13 @@ class Backchannels:
             try:
                 with wave.open(str(f), "rb") as w:
                     if w.getframerate() != 24000 or w.getsampwidth() != 2 or w.getnchannels() != 1:
+                        continue
+                    secs = w.getnframes() / 24000.0
+                    if secs > MAX_CLIP_S:
+                        # live: voice/00 and pip/09 were ~160 s renders; the playout buffer
+                        # dropped them, so those turns got silence instead of "hold on"
+                        logger.warning("backchannel %s is %.0fs long (max %.0fs): skipped, re-render it",
+                                       f, secs, MAX_CLIP_S)
                         continue
                     out.append((text, w.readframes(w.getnframes())))
             except Exception as e:  # noqa: BLE001

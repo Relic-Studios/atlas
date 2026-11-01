@@ -90,7 +90,13 @@ import self_tools as _self_tools
 import room_tools as _room
 AGENT_TOOLS = (list(WEB_SEARCH_TOOLS) + READ_PAGE_TOOLS + list(SCREEN_TOOLS) + BOARD_TOOLS
                + [_clock.TOOL] + list(_self_tools.TOOLS) + list(_room.TOOLS))
-SEARCH_WAIT_S = 9.0   # how long a reply waits for its search before handing it to the board
+# how long a reply waits for its search before handing it to the board ("still digging",
+# delivered later). Logs 10-31: searches take a median 1.5 s, p90 3.1 s, so 9 s mostly
+# bought silence on the rare slow one.
+SEARCH_WAIT_S = 5.0
+# After the agent says "show me": the person's answer within this window gets a glance
+# (server.start_glance looks on its own if nobody answers).
+GLANCE_ANSWER_S = 15.0
 
 
 def _board_search(query: str) -> str:
@@ -396,13 +402,19 @@ class SpeechPipelineManager:
         # user picked a cloud provider): boot anyway, never crash on prewarm.
         samples = []
         try:
+            try:
+                import remote_llm
+            except ImportError:
+                pass  # Public bundles may omit the optional remote adapter.
+            else:
+                remote_llm.restore_at_startup(self.llm)
             self.llm.prewarm()
             # Best-of-3 WARM measurement. A single sample right after load can read
             # 4-5s (cold KV/graph setup) and that number becomes the turn-end
             # silence floor -> every turn waited ~5s. Take the fastest warm run.
             samples = [t for t in (self.llm.measure_inference_time() for _ in range(3)) if t]
         except Exception as e:  # noqa: BLE001
-            logger.warning("🗣️⚠️ local LLM not ready at boot (%s): continuing; setup/cloud can supply one", e)
+            logger.warning("LLM not ready at boot (%s): selected inference mode is retained", e)
         self.llm_inference_time = min(samples) if samples else 500.0
         logger.info(f"🗣️⏱️ LLM warm inference samples (ms): {[round(t) for t in samples]} -> using {self.llm_inference_time:.0f}")
         logger.debug(f"🗣️🧠🕒 LLM inference time: {self.llm_inference_time:.2f}ms")
@@ -813,8 +825,9 @@ class SpeechPipelineManager:
         """
         try:
             from tasks import CUE_RE
+            from capability import GLANCE_CUE_RE
             b = self.board()
-            if _room.ROOM_CUE_RE.search(txt or ""):
+            if _room.ROOM_CUE_RE.search(txt or "") or GLANCE_CUE_RE.search(txt or ""):
                 return True
             mc = CUE_RE.search(txt or "")
             if mc:
@@ -834,6 +847,103 @@ class SpeechPipelineManager:
         self.llm.tools = _plugins.filter_tools(AGENT_TOOLS)
         logger.info("🧩 agent tools: %s", ", ".join(t['function']['name'] for t in self.llm.tools) or "none")
 
+    def _unseen_note(self, txt: str) -> str:
+        """A line about something visible with no look this turn (glances off, rate-limited,
+        Eyes off): it can't see them, so it mustn't say it can (glance sim 11-01: "Oh nice,
+        I can see you now" with nothing on screen)."""
+        try:
+            import capability as _cap
+            body = re.sub(r'^\s*\[S\d+\]\s*', '', txt or '')
+            if _cap.wants_look(body):
+                return ""                 # look_note covers asked looks (eyes off)
+            if not (_cap.wants_glance(body) or _cap._GLANCE_CAM.search(body) or _cap.screen_talk(body)):
+                return ""
+            import screen_context as _sc
+            if _sc.note(getattr(self, "screen_context", None)):
+                return ""                 # it has a fresh look at the screen in its context
+            return ("You haven't looked at the screen this turn, so you can't see them or what they mean "
+                    "right now: don't say you can or that you're looking, and don't describe it. Answer "
+                    "what they said.")
+        except Exception:  # noqa: BLE001
+            return ""
+
+    def note_screen_talk(self, speaker, text) -> None:
+        """The room is reacting to something on screen ("is that a guy?"), to anyone: glance
+        quietly in the background and keep one line of what's there as context
+        (screen_context.py). Never a reply by itself; same rate limit as its other glances."""
+        try:
+            import capability as _cap
+            import screen_context as _sc
+            if _screen is None or not _screen.status().get('enabled'):
+                return
+            mode = _cap.glance_mode()
+            ctx = getattr(self, 'screen_context', None)
+            if (mode == "off" or not _cap.screen_talk(text) or not _screen.can_glance(mode)
+                    or (ctx and time.time() - ctx["at"] < 30.0)):
+                return
+
+            def run():
+                res = _screen.capture(f"context: {speaker or 'someone'} reacting to the screen", asked=False,
+                                      glance=mode)
+                if isinstance(res, dict) and res.get("images"):
+                    cap = _sc.caption(res["images"][0])
+                    if cap:
+                        self.screen_context = {"at": time.time(), "text": cap}
+            threading.Thread(target=run, name="screen-context", daemon=True).start()
+        except Exception as e:  # noqa: BLE001
+            logger.debug("screen context failed: %s", e)
+
+    def note_reply_for_promise(self, target, text, gen=None) -> None:
+        """Its reply promised a lookup ("Okay, I'll look into it.") but nothing searched this
+        turn: start that search on the task board, in the background (promise_keeper.py)."""
+        try:
+            import promise_keeper as _pk
+            import plugins as _plugins
+            asked = getattr(gen, "text", "") or ""
+            if (gen is None or getattr(self, "_searched_gen", None) == getattr(gen, "id", None)
+                    or _websearch is None or "web_search" in _plugins.tool_names_disabled()
+                    or not _pk.should_keep(asked, text)):
+                return
+            m = re.match(r'^\s*\[(S\d+)\]', asked)
+            asker = m[1] if m else (target or "")
+            board = self.board()
+
+            def run():
+                q = _pk.search_query(asked)
+                t = board.start_search(q, asker, None)
+                logger.info("📋 it promised a lookup (%r) without searching: task #%s started for %s: %s",
+                            (text or "")[:50], t.get("id"), asker or "?", q)
+            threading.Thread(target=run, name="promise-search", daemon=True).start()
+        except Exception as e:  # noqa: BLE001
+            logger.debug("promise keeper failed: %s", e)
+
+    def note_reply_for_glance(self, target, text, gen=None) -> None:
+        """Its spoken reply said "show me" / "I'd need to see it" without looking:
+        remember to glance (the person's answer, or server.start_glance at a gap)."""
+        try:
+            import capability as _cap
+            if gen is not None and _cap.GLANCE_CUE_RE.search(getattr(gen, "text", "") or ""):
+                return                      # the glance reply itself never asks for another
+            if (_screen is None or not _screen.status().get('enabled') or _cap.glance_mode() == "off"
+                    or not _cap.wants_to_see(text)
+                    or (gen is not None and getattr(self, "_looked_gen", None) == getattr(gen, "id", None))):
+                return
+            now = time.time()
+            self.glance_pending = {"who": target or "", "at": now,
+                                   "end": now + 0.4 + len((text or "").split()) / 2.6}
+            logger.info("👁️ it wants to see (%r): glance pending for %s", (text or "")[:60], target or "the room")
+        except Exception as e:  # noqa: BLE001
+            logger.debug("glance note failed: %s", e)
+
+    @staticmethod
+    def _look_was_asked(gen) -> bool:
+        """Did the turn this generation answers ask the agent to look?"""
+        try:
+            import capability as _cap
+            return _cap.wants_look(getattr(gen, "text", "") or "")
+        except Exception:  # noqa: BLE001
+            return True
+
     def _run_tool(self, name, args):
         """Instance tool executor: board-backed tools, then the module ones."""
         args = args if isinstance(args, dict) else {}
@@ -844,6 +954,17 @@ class SpeechPipelineManager:
         m = re.match(r'^\s*\[(S\d+)\]', getattr(gen, "text", "") or "")
         asker = m[1] if m else ""
         try:
+            if name == "look_at_screen" and _screen is not None:
+                # Nobody asked = the agent's own glance (owner 11-01): rate-limited and
+                # answered as a glance, not a request to describe the screen.
+                import capability as _cap
+                who = ""
+                try:
+                    who = self.people.name_of(asker) or ""
+                except Exception:  # noqa: BLE001
+                    pass
+                return _screen.capture(str(args.get("reason", "") or ""),
+                                       asked=self._look_was_asked(gen), glance=_cap.glance_mode(), speaker=who)
             if name == "web_search" and _websearch is not None:
                 b = self.board()
                 q = str(args.get("query", "") or "").strip()
@@ -914,13 +1035,28 @@ class SpeechPipelineManager:
         ('what do you see in her') never triggers a capture."""
         try:
             import capability as _cap
-            if is_cue or _screen is None or not _screen.status().get('enabled'):
+            if _screen is None or not _screen.status().get('enabled'):
                 return None
-            if not _cap.wants_look(txt):
+            mode = _cap.glance_mode()
+            # Its own "show me" with nobody answering (server.start_glance): look now.
+            if _cap.GLANCE_CUE_RE.search(txt or ''):
+                return (('look_at_screen', {'reason': "glance: it said it wanted to see"})
+                        if _screen.can_glance(mode) else None)
+            if is_cue:
                 return None
-            from floor import names_agent
             m = re.match(r'^\s*\[(S\d+)\]', txt or '')
             speaker = m[1] if m else None
+            asked = _cap.wants_look(txt)
+            # It just said "show me" and they answered: glance as it replies.
+            pend = getattr(self, 'glance_pending', None)
+            if (not asked and pend and time.time() - pend['at'] <= GLANCE_ANSWER_S
+                    and (speaker == pend['who'] or pend['who'] in ('', 'user'))):
+                self.glance_pending = None
+                if _screen.can_glance(mode):
+                    return ('look_at_screen', {'reason': f"glance: {speaker or 'they'} answered its 'show me'"})
+            if not asked and not _screen.can_glance(mode):
+                return None
+            from floor import names_agent
             agent = getattr(self, 'agent', None)
             names = tuple(getattr(getattr(agent, 'profile', None), 'names', ()) or ()) \
                 or (getattr(self, 'current_persona', '') or '',)
@@ -928,7 +1064,18 @@ class SpeechPipelineManager:
             partner = floor.active_partner() if floor is not None else None
             if not (names_agent(txt, names) or speaker is None or (partner and speaker == partner)):
                 return None
-            return ('look_at_screen', {'reason': f"{speaker or 'someone'} asked me to look at the screen"})
+            if asked:
+                return ('look_at_screen', {'reason': f"{speaker or 'someone'} asked me to look at the screen"})
+            # "my kitten is asleep on my keyboard" aimed at it: glance on its own as it
+            # answers (owner 11-01) when the model says a friend would (glance_judge).
+            import glance_judge as _gj
+            body = re.sub(r'^\s*\[S\d+\]\s*', '', txt or '')
+            prev = next((re.sub(r'^\s*\[S\d+\]\s*', '', mm.get("content", "")) for mm in
+                         reversed(getattr(self, 'history', None) or [])
+                         if mm.get("role") == "user" and mm.get("content") != txt), "")
+            if not _gj.should_glance(body, prev):
+                return None
+            return ('look_at_screen', {'reason': f"glance: wanted to see what {speaker or 'someone'} mentioned"})
         except Exception as e:  # noqa: BLE001 - never block a turn
             logger.warning('look prefetch check failed: %s', e)
             return None
@@ -986,46 +1133,74 @@ class SpeechPipelineManager:
             logger.warning('room prefetch check failed: %s', e)
             return None
 
+    # "did you end up looking it up?" / "any luck?" / "what did you find?"
+    _ASKS_LOOKUP = re.compile(
+        r"\b(?:did|have|has)\s+(?:you|u)\s+(?:end\s+up\s+|ever\s+|actually\s+|already\s+)?(?:look(?:ing|ed)?\s+"
+        r"(?:(?:it|that|this|them)\s+)?up|search(?:ed|ing)?|googl(?:e|ed|ing)|find|found|research(?:ed)?)"
+        r"|\bany\s+luck\b|\bwhat\s+did\s+(?:you|u)\s+find\b", re.I)
+
     def _lookup_note(self) -> str:
-        """Recent web lookups for follow-ups (never raises)."""
+        """Recent web lookups for follow-ups (never raises).
+
+        Live 11-01: with task boards, searches live on the TASK BOARD and this list only held
+        screenshots, under a "did you find it?" header; asked "Did you end up looking it up?"
+        after an unrelated glance, Fae said "I did ... the screen's moved on since then". So
+        screen looks are labelled as screen looks, glances it took on its own are left out,
+        and a lookup question with no search behind it gets told so."""
         try:
             import time as _t
             now = _t.time()
             recent = [lk for lk in self.lookups if now - lk["ts"] < LOOKUP_TTL_S][-2:]
-            if not recent:
-                return ""
-            lines = ["Lookups you did recently (use them for follow-ups like 'did you find it?'; don't pretend you didn't look):"]
-            for lk in recent:
+            searches = [lk for lk in recent if lk.get("kind") != "screen"]
+            screens = [lk for lk in recent if lk.get("kind") == "screen" and not lk.get("glance")]
+            lines = []
+            if searches:
+                lines.append("Web searches you did recently (use them for follow-ups like 'did you find it?'; "
+                             "don't pretend you didn't look):")
+            for lk in searches:
                 mins = max(1, int((now - lk["ts"]) // 60))
-                if lk.get("kind") == "screen":
-                    why = f' (looking for: {lk["query"]})' if lk.get("query") else ""
-                    lines.append(f"- ~{mins} min ago you took a screenshot of the owner's screen{why}. "
-                                 "That image is gone and the screen has probably changed. Never describe "
-                                 "the screen now from memory; if asked about it, look again.")
-                    continue
                 who = f" for {lk['asker']}" if lk.get("asker") else ""
                 said = f' You said "{lk["said"]}" while searching.' if lk.get("said") else ""
                 unanswered = (" You never actually told them the answer - if they follow up, "
                               "give it now.") if lk.get("answered") is False else ""
                 lines.append(f'- ~{mins} min ago{who}: searched "{lk["query"]}".{said}{unanswered} '
                              f'Results: {lk["result"]}')
+            # Screen looks aren't listed at all: "you took a screenshot ~2 min ago, the screen has
+            # changed, look again" turned into "I looked at the screen a while back, but it's
+            # changed since then" on unrelated lines (live 11-01). Fresh screen context comes
+            # from screen_context.py instead; an old image is simply gone.
+            del screens
+            asked = re.sub(r'^\s*\[S\d+\]\s*', '', getattr(self, "_ctx_text", "") or "")
+            if self._ASKS_LOOKUP.search(asked) and not searches and not self._board_searched(now):
+                lines.append("They're asking about a lookup, but you haven't run a web search in this call "
+                             "(looking at the screen isn't one). Say so plainly; if they still want it, search now.")
             return chr(10).join(lines)
         except Exception as e:  # noqa: BLE001
             logger.warning("lookup note failed: %s", e)
             return ""
 
+    def _board_searched(self, now: float, within_s: float = 1800.0) -> bool:
+        try:
+            return any(t.get("kind") == "search" and now - float(t.get("updated") or 0) < within_s
+                       for t in self.board().snapshot())
+        except Exception:  # noqa: BLE001
+            return False
+
     def _on_tool_result(self, name, args, result) -> None:
         """Remember what a search returned (called from the LLM tool loop)."""
         try:
             import time as _t
+            if name == "web_search":   # this generation searched: its "let me look" is kept already
+                self._searched_gen = getattr(self.running_generation, "id", None)
             if name == "look_at_screen":
                 if isinstance(result, dict) and result.get("images"):
                     reason = args.get("reason", "") if isinstance(args, dict) else ""
                     gen = self.running_generation
+                    self._looked_gen = getattr(gen, "id", None)
                     self.lookups.append({"ts": _t.time(), "gen": getattr(gen, "id", None), "kind": "screen",
                                          "asker": "", "query": reason[:120], "result": "",
                                          "said": getattr(self, "_last_backchannel_text", ""),
-                                         "answered": True})
+                                         "answered": True, "glance": bool(result.get("glance"))})
                     self.lookups = self.lookups[-6:]
                 return
             if name != "web_search" or getattr(self, "boards", None) is not None:
@@ -1055,7 +1230,10 @@ class SpeechPipelineManager:
             book = getattr(self, "people", None)
             if book is None:
                 return room
-            labels = list(in_view or ()) + list(getattr(self.convo, "roster", {}) or {})
+            convo = self.convo
+            recent = (convo.active_labels() if hasattr(convo, "active_labels")
+                      else list(getattr(convo, "roster", {}) or {}))
+            labels = list(in_view or ()) + recent   # voices quiet 10+ min are not listed
             note = book.who_note(current, labels, roster=getattr(self.convo, "roster", None))
             return (room + "\n" + note).strip() if note else room
         except Exception as e:  # noqa: BLE001
@@ -1100,6 +1278,23 @@ class SpeechPipelineManager:
         look = self._lookup_note()
         if look:
             room = (room + chr(10) + look).strip()
+        try:
+            import screen_context as _sc
+            seen = _sc.note(getattr(self, "screen_context", None))
+            if seen:
+                room = (room + chr(10) + seen).strip()
+        except Exception as e:  # noqa: BLE001
+            logger.debug("screen context note failed: %s", e)
+        try:
+            from floor import motif_note
+            names = list(getattr(getattr(self, "dynamics", None), "agent_names", ()) or ())
+            book = getattr(self, "people", None)
+            people = [p.name for p in (getattr(book, "people", {}) or {}).values() if getattr(p, "name", None)]
+            mnote = motif_note(history, exclude=names + people)
+            if mnote:
+                room = (room + chr(10) + mnote).strip()
+        except Exception as e:  # noqa: BLE001 - never block a turn
+            logger.warning("motif note failed: %s", e)
         try:
             cut = self.cutoff
             if cut is not None:
@@ -1739,6 +1934,9 @@ class SpeechPipelineManager:
                     look = None
             except Exception:  # noqa: BLE001
                 pass
+            # On the turn itself, not the room note: in the glance sim a room note left
+            # "I'm on cam now" -> "Oh nice, I can see you now" at 3/8, on the turn 0/8.
+            unseen = "" if is_cue or (look and look[0] == 'look_at_screen') else self._unseen_note(txt)
 
             def _gen(text_in, _h=history, _r=room, _m=mem_ctx, _l=look):
                 return self.llm.generate(
@@ -1751,6 +1949,8 @@ class SpeechPipelineManager:
                     prefetch_tool=_l,
                 )
             trimmed = self._trim_transcript(txt)
+            if unseen:
+                trimmed = f"{trimmed}\n({unseen})"
             try:
                 from response_decision import directly_named, retry_named_hold, NAMED_NUDGE
                 names = tuple(getattr(getattr(self.agent, "profile", None), "names", ()) or ())
@@ -1767,6 +1967,13 @@ class SpeechPipelineManager:
                 logger.warning("named-hold setup failed: %s", e)
                 named, who = False, "them"
                 retry_named_hold = None
+            try:   # a line that asks it nothing: the model's own doubt is enough to hold (floor.py)
+                _rs = getattr(self.llm, "remote", None)
+                if _rs is not None and not is_cue:
+                    _rs.next_hold_thresh = self.floor.undirected_hold_thresh(
+                        txt, tuple(getattr(getattr(self.agent, "profile", None), "names", ()) or ()))
+            except Exception as e:  # noqa: BLE001
+                logger.warning("undirected hold threshold failed: %s", e)
             raw_stream = _gen(trimmed)
             if retry_named_hold is not None:
                 raw_stream = retry_named_hold(
@@ -2209,6 +2416,8 @@ class SpeechPipelineManager:
             looking = "look_at_screen" in names and "web_search" not in names
             if not names & {"web_search", "look_at_screen"}:
                 return
+            if looking and not self._look_was_asked(self.running_generation):
+                return    # its own glance: no "hold on, let me look" (owner 11-01)
             gen = self.running_generation
             gid = getattr(gen, "id", None)
             if gid is not None and gid == self._backchannel_gen:
@@ -2219,10 +2428,31 @@ class SpeechPipelineManager:
             clip = (self.backchannels.pick(self.audio.current_voice, kind="look" if looking else "search")
                     if cb else None)
             if clip:
-                text, pcm = clip
-                logger.info(f"🗣️⏳ {'look' if looking else 'search'} backchannel ({self.audio.current_voice}): {text}")
-                self._last_backchannel_text = text
-                cb(pcm)
+                kind = "look" if looking else "search"
+                threading.Thread(target=self._play_backchannel_when_released, name="backchannel", daemon=True,
+                                 args=(gen, clip, cb, f"{kind} backchannel ({self.audio.current_voice})")).start()
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"🗣️⏳ backchannel failed: {e}")
+
+    BACKCHANNEL_WAIT_S = 12.0
+
+    def _play_backchannel_when_released(self, gen, clip, cb, label: str) -> None:
+        """Live: half the "let me look" clips played before the person finished (drafts
+        start on a guessed sentence end), and 44 aborted turns still played theirs, so two
+        clips ran back to back. Wait for the same end-of-turn release as speech, and drop
+        the clip if its turn was aborted or replaced meanwhile."""
+        text, pcm = clip
+        try:
+            ev = getattr(gen, "tts_quick_allowed_event", None)
+            if ev is not None and not ev.wait(self.BACKCHANNEL_WAIT_S):
+                logger.info(f"🗣️⏳ {label} dropped: the turn never ended")
+                return
+            if gen is not None and (getattr(gen, "abortion_started", False) or self.running_generation is not gen):
+                logger.info(f"🗣️⏳ {label} dropped: its turn was aborted")
+                return
+            logger.info(f"🗣️⏳ {label}: {text}")
+            self._last_backchannel_text = text
+            cb(pcm)
         except Exception as e:  # noqa: BLE001
             logger.warning(f"🗣️⏳ backchannel failed: {e}")
 

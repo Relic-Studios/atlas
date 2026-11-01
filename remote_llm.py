@@ -57,7 +57,28 @@ def load_config():
     if not cfg.get("url") or not cfg.get("model"):
         return None
     return {"url": cfg["url"].rstrip("/"), "model": cfg["model"], "key": key,
-            "label": cfg.get("label") or cfg["url"], "vllm": bool(cfg.get("vllm", True))}
+            "label": cfg.get("label") or cfg["url"], "vllm": bool(cfg.get("vllm", True)),
+            "allow_local_fallback": bool(cfg.get("allow_local_fallback", True))}
+
+
+def restore_at_startup(llm):
+    """Restore the selected remote transport before prewarm or latency probes."""
+    import user_settings
+    mode_path = ROOT / "private" / "llm_mode.txt"
+    try:
+        saved_remote = mode_path.read_text(encoding="utf-8").strip() == "remote"
+    except OSError:
+        saved_remote = False
+    requested = (os.environ.get("ATLAS_LLM") == "remote" or saved_remote or
+                 (user_settings.is_public() and user_settings.llm_mode() == "cloud"))
+    if not requested:
+        return
+    cfg = load_config()
+    if cfg is None:
+        llm._remote_startup_error = "Remote mode selected but no remote configuration is available"
+        raise requests.ConnectionError(llm._remote_startup_error)
+    activate(llm, cfg)
+    logger.info("Remote startup transport selected: %s (%s)", cfg["label"], cfg["model"])
 
 
 # ---------------------------------------------------------------------------
@@ -233,6 +254,10 @@ class _SyntheticNdjson:
 class _PrefixedNdjson(NdjsonResponse):
     """Stage-2 stream: emit the greedy header first, then the sampled body."""
 
+    # Stage 1 already chose SPEAK over any tool call, so this round is speech: the
+    # caller may voice it as it streams instead of buffering it whole.
+    speak_body = True
+
     def __init__(self, resp, model, prefix):
         super().__init__(resp, model)
         self._prefix = prefix
@@ -328,6 +353,9 @@ class RemoteSession:
             self._http.headers["X-Title"] = "ATLAS"
         self._lock = threading.Lock()
         self.down_until = 0.0
+        # Per-turn calibrated-HOLD threshold for the next two-stage call only (floor.undirected_hold_thresh:
+        # lines that ask the agent nothing); None = the global ATLAS_HOLD_THRESH.
+        self.next_hold_thresh = None
         self.last_error = ""
         self.fallbacks = 0
         self.requests = 0
@@ -354,6 +382,8 @@ class RemoteSession:
             r = requests.Response()
             r.status_code = 200
             return r
+        if not self.cfg.get("allow_local_fallback", True):
+            raise requests.ConnectionError("Remote LLM unavailable: " + self.last_error)
         return self.local.get(url, **kw)
 
     def _remote_ok(self) -> bool:
@@ -381,9 +411,18 @@ class RemoteSession:
             except (requests.ConnectionError, requests.Timeout) as e:
                 self.down_until = time.time() + FAIL_COOLDOWN_S
                 self.last_error = str(e)[:200]
+                if not self.cfg.get("allow_local_fallback", True):
+                    logger.warning("Remote LLM unavailable; local fallback is disabled: %s", self.last_error)
+                    raise
                 self.fallbacks += 1
                 logger.warning("🌐🤖 Remote LLM unreachable (%s) — falling back to local for %.0fs",
                                self.last_error, FAIL_COOLDOWN_S)
+        if url.endswith("/api/chat") and not self.cfg.get("allow_local_fallback", True):
+            raise requests.ConnectionError("Remote LLM unavailable; local fallback is disabled")
+        if not self.cfg.get("allow_local_fallback", True) and not (
+                url.endswith("/api/generate") and payload.get("keep_alive") == 0
+                and not any(payload.get(key) for key in ("prompt", "messages", "images"))):
+            raise requests.ConnectionError("Remote-only transport prohibits local model generation")
         # Non-chat endpoints (e.g. /api/generate unload) and fallback -> local Ollama.
         return self.local.post(url, json=payload, stream=stream, timeout=timeout, **kw)
 
@@ -398,10 +437,21 @@ class RemoteSession:
         except Exception:  # noqa: BLE001
             def _mention_only(_t):
                 return False
-        if _offers_tool(body, "web_search") and _EXPLICIT_SEARCH.search(_lu) and not _mention_only(_lu):
+        try:
+            from tasks import CUE_RE as _CUE_RE
+        except Exception:  # noqa: BLE001
+            _CUE_RE = None
+        # The agent's own TASK CUE says "your background search ... finished": not a
+        # spoken command (live: all 34 cue turns re-searched and said "looking it up"
+        # right before delivering the result they already had).
+        _cue = bool(_CUE_RE is not None and _CUE_RE.search(_lu))
+        if (_offers_tool(body, "web_search") and _EXPLICIT_SEARCH.search(_lu) and not _mention_only(_lu)
+                and not _cue):
             s1 = dict(body, stream=False, temperature=0.0, max_tokens=256,
                       tool_choice={"type": "function", "function": {"name": "web_search"}})
-        if HOLD_THRESH > 0:
+        thresh = self.next_hold_thresh if self.next_hold_thresh is not None else HOLD_THRESH
+        self.next_hold_thresh = None
+        if thresh > 0:
             s1["logprobs"], s1["top_logprobs"] = True, 10
         s1.pop("stream_options", None)
         s1.pop("top_p", None)
@@ -450,8 +500,8 @@ class RemoteSession:
         ph = hold_share(s1r)
         global LAST_HOLD_SHARE
         LAST_HOLD_SHARE = ph
-        if HOLD_THRESH > 0 and ph is not None and ph >= HOLD_THRESH:
-            logger.info("🌐🤖 Calibrated HOLD (p_hold share %.3f >= %.3f)", ph, HOLD_THRESH)
+        if thresh > 0 and ph is not None and ph >= thresh:
+            logger.info("🌐🤖 Calibrated HOLD (p_hold share %.3f >= %.3f)", ph, thresh)
             return _SyntheticNdjson(self.cfg["model"], content="[HOLD]")
         if head.startswith("[SPEAK to=") and "]" in head:
             head = head[:head.index("]")]
@@ -477,6 +527,9 @@ class RemoteSession:
         if not ok:
             self.fails += 1
             self.up_since = 0.0
+            if not self.cfg.get("allow_local_fallback", True):
+                self.down_until = max(self.down_until, now + WATCH_INTERVAL_S * 2)
+                return None
             if self.fails >= DOWN_AFTER_FAILS or not self._remote_ok():
                 self.down_until = max(self.down_until, now + WATCH_INTERVAL_S * 2)
                 if not self.local_warm:
@@ -545,6 +598,8 @@ def activate(llm, cfg: dict) -> "RemoteSession":
     rs = RemoteSession(cfg, llm._local_session)
     llm.ollama_session = rs
     llm.remote = rs
+    llm._remote_startup_error = None
+    llm._client_initialized = False
 
     def _warm():
         # prewarm() goes through llm.ollama_session, which is the RemoteSession;
@@ -559,6 +614,8 @@ def activate(llm, cfg: dict) -> "RemoteSession":
 
 
 def deactivate(llm):
+    llm._remote_startup_error = None
+    llm._client_initialized = False
     rs = getattr(llm, "remote", None)
     if rs is not None:
         llm.ollama_session = llm._local_session

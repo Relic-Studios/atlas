@@ -64,8 +64,15 @@ class SearchIntent(unittest.TestCase):
     def test_requests_still_search(self):
         for t in ("Can you search fusion research?", "[S1] Fae, search the latest fusion news",
                   "Fae, could you look up the weather in Tokyo", "look it up",
-                  "Can you research Chinese fusion?", "Fae, research voice models"):
+                  "Can you research Chinese fusion?", "Fae, research voice models",
+                  # live 11-01: read as a mention, nothing searched, "I'll look into it"
+                  "What kind of wings do you want? Do you think you could search up some bodies for yourself?",
+                  "you should look that up", "maybe you could google it", "you can just search it"):
             self.assertTrue(B.wants_search(t), t)
+
+    def test_other_people_searching_is_still_a_mention(self):
+        for t in ("Fae can look things up for us", "my brother could search it later", "he can google it"):
+            self.assertFalse(B.wants_search(t), t)
 
 
 if __name__ == "__main__":

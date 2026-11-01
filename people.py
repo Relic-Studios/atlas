@@ -54,7 +54,50 @@ indian african european australian brazilian polish dutch swedish norwegian dani
 turkish arab arabic jewish muslim christian catholic filipino vietnamese thai persian
 latino latina hispanic puerto rican cuban colombian nigerian kenyan egyptian israeli
 ukrainian portuguese swiss belgian austrian hungarian czech finnish texan southern
+hindu sikh buddhist atheist agnostic mormon christianity islam judaism moroccan algerian tunisian
+pakistani bangladeshi nepali iranian iraqi syrian lebanese afghan ethiopian somali ghanaian jamaican
+haitian peruvian chilean argentinian argentine venezuelan ecuadorian dominican romanian bulgarian
+serbian croatian bosnian albanian lithuanian latvian estonian slovak icelandic scandinavian
+muted unmuted afk brb back here ya buh huh larping
 """.split())
+# Slurs a recognizer can hand back as a "name" (stems, as in loopbait._CRUDE).
+_SLUR_NAME = re.compile(r"(?:nigg|fag)\w*|tranny", re.I)
+
+# One-word answers to "who's this?" were learned as names ("Close.", "All.", "Muted.",
+# "Tell.", voiceprints 10-07). People on Discord go by handles, so rare words are always
+# welcome ("Tangy", "Itsblazemf"); a word that is common in English only counts from a
+# one-word answer when it is also a given name. Strong frames ("call me Batman",
+# "my name's Queen") still take any handle.
+_COMMON_GIVEN = frozenset("""
+aaron adam alan albert alex alexander alice amanda amber amy andrew andy angel angela anna anne cameron earl
+anthony april ashley austin barbara ben benjamin beth bill billy bob bobby brad brandon brian
+bruce carl carlos carol caroline carter charles charlie chase chris christian christina christopher
+claire cole connor craig dan daniel danny dave david dean dennis diana dominic don donald drew
+dylan ed eddie edward eli elizabeth ella ellen emily emma eric eva evan eve frank fred gabriel
+gary george grace grant greg hannah harry hayden heather helen henry holly hope hunter ian isaac
+jack jackson jacob jake james jamie jane jason jay jeff jenny jeremy jerry jesse jessica jim
+jimmy joe joel john johnny jon jordan jose joseph josh joshua joy juan julia julian justin karen
+kate katie keith kelly ken kevin kim kyle larry laura lee leo lewis liam lily linda lisa logan
+louis lucas lucy luke marcus maria mark martin mary mason matt matthew max may megan michael mike miles
+miller mitchell molly morgan nancy nate nathan neil nick nicole noah oliver olivia owen parker
+patrick paul peter phil rachel ray rebecca richard rick riley rob robert robin roger ron rose
+ross ruby russell ryan sam samuel sara sarah scott sean seth shane simon sophia stephen steve
+steven susan taylor ted terry max tim timothy todd tom tommy tony travis troy tyler victor
+vincent walter wayne will william zach
+""".split())
+
+
+def _plausible_answer_name(tok: str) -> bool:
+    w = (tok or "").lower()
+    if w in _COMMON_GIVEN:
+        return True
+    if "'" in w or w.endswith("ly"):      # I'll, they're, let's, unironically
+        return False
+    try:
+        from wordfreq import zipf_frequency
+    except Exception:  # noqa: BLE001
+        return True
+    return zipf_frequency(w, "en") < 4.0
 
 def _agent_words() -> set:
     """Names/nicknames of every installed agent: never learned as a human's name."""
@@ -73,9 +116,11 @@ _STRONG = [
 # "I'm Jake" only when it is clearly an introduction.
 _IM_GREETED = re.compile(r"^\W*(?:hey|hi|hello|yo|sup)\W+(?:(?:guys|everyone|y'all|bro)\W+)?i'?m\s+" + _NAME_TOKEN, re.I)
 _IM_BARE = re.compile(r"^\W*(?:(?:no|nah|yeah|yo|actually|oh|and|also|so|me)\W+){0,2}i'?m\s+" + _NAME_TOKEN + r"(?:\W+(?:by\s+the\s+way|btw|here|nice\s+to\s+meet\s+(?:you|y\'all|everyone)|pleasure|what\'s\s+up))*\W*$", re.I)
-_ANSWER_LEAD = re.compile(r"^\W*(?:(?:uh|um|oh|yeah|yo|bro|well|so|ok|okay)\W+)*(?:it's|its|it\s+is|i'?m|i\s+am|my\s+name(?:'s|\s+is)|name's|call\s+me|this\s+is)?\s*", re.I)
+_ANSWER_LEAD = re.compile(r"^\W*(?:(?:uh|um|oh|yeah|yo|bro|well|so|ok|okay)\W+)*(?:(?:it's|its|it\s+is|i'?m|i\s+am|my\s+name(?:'s|\s+is)|name's|call\s+me|this\s+is)\s+)?", re.I)
 # Closing-clause intro: 'Hey Wren, you there? It's Sam.' (demo 10-04). Capitalized name only.
 _CLAUSE_INTRO = re.compile(r"(?:^|[.,!?;]\s*)(?:this\s+is|it's|it\s+is)\s+" + _NAME_TOKEN + r"(?:\s+here)?\W*$", re.I)
+_NAME_LEAD = re.compile(r"^\W*(?:(?:uh|um|oh|yeah|yo|bro|well|so|ok|okay)\W+)*(?:it's|its|it\s+is|i'?m|i\s+am|"
+                        r"my\s+name(?:'s|\s+is)|name's|call\s+me|this\s+is)\s", re.I)
 _INTRO_TAIL = re.compile(r"(?:\W+(?:by\s+the\s+way|btw|here|nice\s+to\s+meet\s+(?:you|y'all|everyone)|pleasure|what's\s+up))+\W*$", re.I)
 _REFUSE = re.compile(r"\b(?:not\s+(?:telling|gonna\s+tell|saying)|none\s+of\s+your|why\s+do\s+you\s+(?:wanna|want\s+to)\s+know|guess|no\s+one|nobody|doesn'?t\s+matter)\b", re.I)
 _FORGET = re.compile(r"\b(?:don'?t|do\s+not|stop)\s+call(?:ing)?\s+me\s+([A-Za-z'\-]+)", re.I)
@@ -96,7 +141,7 @@ def _clean_name(tok: str | None, need_cap: bool = False) -> str | None:
     if not (2 <= len(tok) <= 15) or not re.fullmatch(r"[A-Za-z][A-Za-z'\-]*", tok):
         return None
     if (tok.lower() in _NOT_NAMES or tok.lower().rstrip("'s") in _NOT_NAMES
-            or tok.lower() in _agent_words()):
+            or _SLUR_NAME.fullmatch(tok) or tok.lower() in _agent_words()):
         return None
     return tok[0].upper() + tok[1:]
 
@@ -302,6 +347,11 @@ class NameBook:
                     rest = _ANSWER_LEAD.sub("", body, count=1).strip()
                     tok = re.match(r"[A-Za-z][A-Za-z'\-]*", rest)
                     name = _clean_name(tok[0], need_cap=len(words) > 1) if tok else None
+                    # "it's Marcus" / "I'm Tangy" fill the name slot: any handle. A bare word
+                    # ("Close.", "Better.") has to look like a name or a handle.
+                    if name and ("'" in name.rstrip("'s") or name.lower().endswith("ly")
+                                 or (not _NAME_LEAD.match(body) and not _plausible_answer_name(name))):
+                        name = None
                     if name and name.lower() not in self.agent_names:
                         p.asked_at = None
                         return self._assign(p, name, "answer")
@@ -329,6 +379,17 @@ class NameBook:
                 _cd.note_room_name(name)
             except Exception:  # noqa: BLE001
                 pass
+        # People call each other by name mid-line too ("You see, Jefe, even...", "See,
+        # Prof?", "bye peach,"); sim 11-01: those names were never learned, so every
+        # later line to Jefe/Prof/Peach reached the agent. Room names only (the gate's
+        # address check), never a voice's name.
+        try:
+            import conversation_dynamics as _cd
+            w = _cd._room_vocative(body, tuple(self.agent_names))
+            if w and not _cd._is_room_name(w) and _clean_name(w):
+                _cd.note_room_name(w)
+        except Exception:  # noqa: BLE001
+            pass
 
     def note_agent_reply(self, target: str | None, text: str) -> None:
         """Record that the agent asked this voice who they are."""

@@ -235,8 +235,8 @@ async def lifespan(app: FastAPI):
             logger.error("🖥️💥 CallBridge failed to start: %s", e)
             app.state.CallBridge = None
 
-    # Restore the last chosen LLM backend (remote only if configured + reachable;
-    # otherwise stay local). Background so a slow remote never delays boot.
+    # Refresh the selected remote transport and release any old local standby.
+    # Startup already selects remote before prewarm; a failure retains that mode.
     try:
         import user_settings as _us2
         if os.environ.get("ATLAS_LLM") == "remote" or (_us2.is_public() and _us2.llm_mode() == "cloud") or (
@@ -244,7 +244,7 @@ async def lifespan(app: FastAPI):
             async def _restore_remote():
                 res = await asyncio.to_thread(_switch_llm_backend, "remote")
                 if res.get("error"):
-                    logger.warning("🌐🤖 Remote LLM not restored: %s (staying local)", res["error"])
+                    logger.warning("Remote startup unavailable: %s; selected mode retained", res["error"])
             asyncio.create_task(_restore_remote())
     except Exception as e:  # noqa: BLE001
         logger.warning("LLM backend restore skipped: %s", e)
@@ -1282,7 +1282,25 @@ class TranscriptionCallbacks:
                             pass
                     if self._backchannel_over_reply(mgr, self.abort_text):
                         continue
+                    if self._reaction_over_named_draft(mgr, self.abort_text):
+                        continue
                     mgr.check_abort(self.abort_text, False, "on_partial")
+
+    @staticmethod
+    def _more_audio_coming(mgr) -> bool:
+        """Is more of the current reply still being generated or synthesized? With streaming
+        TTS the playout buffer often holds under 2s mid-reply, so "about to finish" read from
+        it alone let the agent talk over real takeovers."""
+        gen = getattr(mgr, "running_generation", None)
+        if gen is None or getattr(gen, "abortion_started", False):
+            return False
+        if not getattr(gen, "llm_finished", True):
+            return True
+        if getattr(gen, "tts_quick_started", False) and not getattr(gen, "audio_quick_finished", True):
+            return True
+        if getattr(gen, "tts_final_started", False) and not getattr(gen, "audio_final_finished", True):
+            return True
+        return bool(getattr(gen, "quick_answer_overhang", "")) and not getattr(gen, "audio_final_finished", True)
 
     def _yield_decision(self, txt: str) -> tuple[bool, str]:
         """Does speech heard while the agent talks take the floor? (interrupts.py)"""
@@ -1301,6 +1319,8 @@ class TranscriptionCallbacks:
                 pass
             bridge = getattr(self.app.state, "CallBridge", None)
             left = bridge.pending_seconds() if bridge is not None and hasattr(bridge, "pending_seconds") else None
+            if left is not None and TranscriptionCallbacks._more_audio_coming(mgr):
+                left = None   # the playout buffer is not the end of her line: more is still being made
             talk = 0.35
             try:
                 talk = float(mgr._runtime().profile.talkativeness)
@@ -1333,6 +1353,27 @@ class TranscriptionCallbacks:
                 logger.info(f"🖥️✂️ cut off after {played:.1f}s; unsaid: '{cut.unsaid[:60]}'")
         except Exception as e:  # noqa: BLE001
             logger.warning(f"cutoff record failed: {e}")
+
+    _REACTION_WORDS = frozenset({"yes", "yeah", "yea", "yep", "yup", "no", "nah", "nope", "oh", "ok", "okay",
+                                 "mm", "mhm", "hm", "hmm", "ah", "uh", "um", "lol", "haha", "right", "sure", "true"})
+
+    def _reaction_over_named_draft(self, mgr, txt: str) -> bool:
+        """Live: "Hey Max, can you hear me?" was aborted by another voice's "Yes." before
+        its reply started, and the "Yes." was then held, so nobody was answered (119 named
+        turns). A short reaction never aborts a draft answering someone who named the agent;
+        a partial that grows into real words re-checks on the next change."""
+        gen = getattr(mgr, "running_generation", None)
+        if gen is None or getattr(gen, "abortion_started", False) or not txt or "?" in txt:
+            return False
+        from floor import names_agent, strip_label
+        words = re.findall(r"[a-z']+", strip_label(txt).lower())
+        if not words or len(words) > 3 or not all(w in self._REACTION_WORDS for w in words):
+            return False
+        names = tuple(getattr(getattr(mgr, "dynamics", None), "agent_names", ()) or ())
+        if not names or not names_agent(getattr(gen, "text", "") or "", names):
+            return False
+        logger.info(f"🖥️👂 keeping the reply to a named turn over a reaction: '{txt[:40]}'")
+        return True
 
     def _backchannel_over_reply(self, mgr, txt: str) -> bool:
         """Live 09-29 17:47: a listener's "Yeah." / "Oh." aborted Max mid-reply
@@ -1691,6 +1732,18 @@ class TranscriptionCallbacks:
             logger.info(f"🖥️🗣️ Speaker for turn: {speaker}")
             self._adopt_final_speaker(speaker)
 
+        if not (user_request_content or "").strip():
+            # Live: the turn often ends before its final transcript exists (no realtime
+            # text yet), and committing '' lost 1,917 turns, 901 never answered ("Hey
+            # Pup, can you hear me alright?" 10-31). Commit the final text when it
+            # lands (on_final) and answer it from there.
+            self._deferred_turn = (audio, speaker, time.time())
+            logger.info("🖥️⏳ turn ended before its text; committing it when the final transcript lands")
+            return
+        self._commit_turn(audio, speaker, user_request_content)
+
+    def _commit_turn(self, audio, speaker, user_request_content: str) -> None:
+        """Send the finished user turn to the UI and commit it to history and the room state."""
         self.message_queue.put_nowait({
             "type": "final_user_request",
             "content": user_request_content,
@@ -1783,6 +1836,7 @@ class TranscriptionCallbacks:
         return reply_in_flight(gen, getattr(getattr(getattr(self, "app", None), "state", None), "CallBridge", None))
 
     MONOLOGUE_S = float(os.environ.get("ATLAS_MONOLOGUE_S", "6.0"))
+    DEFERRED_TURN_S = 15.0   # a final transcript later than this belongs to no turn
 
     def _monologue_hold(self, txt: str, speaker) -> bool:
         """Same speaker still going and didn't name us: don't re-draft every sentence
@@ -1839,6 +1893,21 @@ class TranscriptionCallbacks:
         logger.info(f"\n{Colors.apply('🖥️✅ FINAL USER REQUEST (STT Callback): ').green}{txt}")
         if not self.final_transcription: # Store it if not already set by on_before_final logic
              self.final_transcription = txt
+        deferred, self._deferred_turn = getattr(self, "_deferred_turn", None), None
+        if deferred is None:
+            return
+        audio, speaker, ended_at = deferred
+        text = (txt or "").strip()
+        if not text or time.time() - ended_at > self.DEFERRED_TURN_S:
+            self.user_history_committed = True
+            return
+        if speaker != "self" and self._text_echo(text):
+            logger.info(f"🖥️🙉 own words echoed back (voiceprint said {speaker}) -> self")
+            speaker = "self"
+        logger.info(f"🖥️⏳ committing the final transcript of a turn that ended early: '{text[-60:]}'")
+        if speaker != "self":
+            self.held_fragment = text   # no draft exists for it: answer from the final (gated)
+        self._commit_turn(audio, speaker, text)
 
     def abort_generations(self, reason: str):
         """
@@ -1914,6 +1983,11 @@ class TranscriptionCallbacks:
         bridge = getattr(self.app.state, "CallBridge", None)
         if bridge is None or not bridge.is_speaking():
             self.barge_pending = False
+            return
+        if self._text_echo(txt):
+            # Live: a takeover fired on the agent's own line ("Start with the data you
+            # already have") and cut 2.8s of its audio; the echo check never ran here.
+            logger.info(f"🖥️🙉 not a barge-in, own words echoed: '{txt[:40]}'")
             return
         yes, why = self._yield_decision(txt)
         if yes:
@@ -2012,6 +2086,14 @@ class TranscriptionCallbacks:
                 # was copied by the model as its own header -> INVALID -> silent turns,
                 # increasingly often as the call grew (tests/sim_history_format.py).
                 app.state.SpeechPipelineManager.floor.on_agent_spoke(target, cleaned_answer)
+                try:   # "show me" / "I'd need to see it" -> it glances (owner 11-01)
+                    app.state.SpeechPipelineManager.note_reply_for_glance(target, cleaned_answer, generation)
+                except Exception as e:  # noqa: BLE001
+                    logger.debug(f"glance note failed: {e}")
+                try:   # "I'll look into it" with no search -> search for real (live 11-01)
+                    app.state.SpeechPipelineManager.note_reply_for_promise(target, cleaned_answer, generation)
+                except Exception as e:  # noqa: BLE001
+                    logger.debug(f"promise keeper failed: {e}")
                 try:
                     from floor import promises_quiet
                     if promises_quiet(cleaned_answer):
@@ -2173,6 +2255,35 @@ def start_resume(mgr, callbacks) -> bool:
     callbacks.user_history_committed = True
     logger.info(f"🖥️↩️ resuming cut-off thought at a gap: '{cut.unsaid[:50]}'")
     mgr.prepare_generation(cut.cue())
+    return True
+
+
+GLANCE_GAP_S = float(os.environ.get("ATLAS_GLANCE_GAP_S", "2.0"))
+
+
+def start_glance(mgr, callbacks, bridge, now: float):
+    """It said "show me" and nobody answered: glance at the screen and react (owner
+    11-01: agents look when they want to see). None = nothing pending."""
+    p = getattr(mgr, "glance_pending", None)
+    if not p:
+        return None
+    import speech_pipeline_manager as _spm
+    if now - p["at"] > _spm.GLANCE_ANSWER_S or getattr(callbacks, "last_voice_at", 0.0) > p["end"]:
+        mgr.glance_pending = None      # too late, or someone spoke: their line had its chance
+        return None
+    if now < p["end"] + GLANCE_GAP_S or not delivery_ready(mgr, callbacks, bridge, now, GLANCE_GAP_S):
+        return False
+    mgr.glance_pending = None
+    import capability as _cap
+    import screen as _screen
+    if not _screen.status().get("enabled") or not _screen.can_glance(_cap.glance_mode()):
+        return False
+    callbacks.reset_state()
+    callbacks.tts_to_client = True
+    callbacks.user_finished_turn = True
+    callbacks.user_history_committed = True   # no user line: a HOLD retires cleanly
+    logger.info(f"🖥️👁️ it wanted to see and nobody answered: glancing ({p['who'] or 'room'})")
+    mgr.prepare_generation(_cap.glance_cue(p["who"]))
     return True
 
 
@@ -2351,6 +2462,8 @@ async def _task_delivery(app: FastAPI, callbacks) -> None:
             if start_monologue_tail(mgr, callbacks, bridge, now) is not None:
                 continue
             if delivery_ready(mgr, callbacks, bridge, now, RESUME_GAP_S) and start_resume(mgr, callbacks):
+                continue
+            if start_glance(mgr, callbacks, bridge, now):
                 continue
             if delivery_ready(mgr, callbacks, bridge, now):
                 start_delivery(mgr, callbacks)

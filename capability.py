@@ -22,6 +22,12 @@ _LOOK_RE = re.compile(
     r"what(?:'?s|\s+is)\s+on\s+(?:my|the)\s+(?:screen|monitor)|"
     r"what\s+do\s+you\s+see|"
     r"can\s+you\s+see\s+(?:this|that|it|my\s+screen|the\s+screen|what)|"
+    # "can you see me?" / "is my cam on?" (sim 11-01: 3 of 4 agents said "yeah, I can see you,
+    # you look good" while the screen showed a code editor)
+    r"can\s+(?:you|u)\s+see\s+(?:me|us|my\s+(?:face|cam|camera|video))\b|"
+    r"(?:is|was)\s+my\s+(?:cam|camera|webcam|video)\s+(?:on|working|showing)|am\s+i\s+on\s+(?:cam|camera|video)|"
+    # live 11-01 "Well, what do I look like?" (it glanced; it should count as being asked)
+    r"what\s+do\s+i\s+look\s+like|how\s+do\s+i\s+look|do\s+i\s+look\s+(?:ok|okay|good|fine|alright|weird|tired|bad)|"
     r"(?:look|peep|check)\s+(?:at\s+)?this(?:\s+(?:photo|pic|picture|image|video|clip|meme|screen))?\s*[.!?]*$|"
     r"see\s+my\s+screen|"
     r"(?:new|another|fresh)\s+(?:screen\s*shot|screenshot|screen|look|pic)|"
@@ -84,9 +90,15 @@ _VOICE_PERSON_RE = re.compile(
 )
 
 
+# "I asked you to look something up, not look at the camera" (live 11-01: took a screenshot).
+_NOT_LOOK_RE = re.compile(r"\b(?:not|don'?t|didn'?t|never|no\s+need\s+to)\s+(?:to\s+)?(?:look|glance|check|see)\b"
+                          r"[^.?!,;]*", re.I)
+
+
 def wants_look(text: str) -> bool:
     if not text:
         return False
+    text = _NOT_LOOK_RE.sub(" ", text)
     if _LOOK_RE.search(text):
         return True
     body = re.sub(r"^\s*\[S\d+\]\s*", "", text)
@@ -100,6 +112,113 @@ def wants_look(text: str) -> bool:
         if _SHOW_RE.search(sent) and not _VOICE_PERSON_RE.search(sent):
             return True
     return False
+
+
+# Things worth a glance when someone tells the agent about them (owner 11-01: agents
+# look on their own when they want to see the people they're talking with). Only
+# used for lines aimed at the agent, and only while glances are on. A visible thing,
+# framed as theirs and here now, and not a plan, a need or a story about the past.
+_VISIBLE = (r"(?:hair|haircut|beard|mustache|moustache|tattoo|piercing|face|eyebrows|makeup|nails|"
+            r"hoodie|sweater|shirt|t-shirt|jersey|dress|suit|costume|outfit|fit|hat|cap|beanie|shoes|sneakers|"
+            r"boots|jacket|glasses|sunglasses|necklace|chain|ring|earrings|pajamas|onesie|braces|teeth|smile|"
+            r"dog|cat|puppy|kitten|parrot|bird|hamster|rabbit|bunny|lizard|snake|pet|"
+            r"trophy|medal|figure|figurine|plushie|lego|build|keyboard|setup|desk|room|view|window|"
+            r"plate|food|cake|pizza|drawing|painting|art|sketch|guitar|controller)s?")
+_GLANCE_CAM = re.compile(
+    r"\b(?:(?<!not )on\s+(?:cam|camera|video|webcam)|(?:turn(?:ed|ing)?|put|got|switch(?:ed)?)\s+(?:my\s+|the\s+)?"
+    r"(?:cam|camera|video|webcam)\s+on|can\s+(?:you|u)\s+see\s+(?:me|my|us|this|it)\b|how\s+do\s+i\s+look|"
+    r"(?:pulling|making)\s+(?:a\s+)?(?:funny\s+|weird\s+|stupid\s+)?faces?\s+(?:at|behind|right|on|now))", re.I)
+_GLANCE_OWN = re.compile(
+    r"\b(?:my|this|these|our)\s+(?:\w+\s+){0,2}?" + _VISIBLE + r"\b"
+    r"|\b(?:i'?m|i\s+am)\s+(?:wearing|rocking|holding|in)\s+(?:\w+\s+){0,3}?" + _VISIBLE + r"\b"
+    r"|\bi\s+(?:just\s+|finally\s+)?(?:put\s+on|got|bought|made|drew|painted|built|finished|dyed|cut|shaved|"
+    r"bleached|baked|cooked)\s+(?:\w+\s+){0,3}?(?:" + _VISIBLE + r"|this|it)\b", re.I)
+_GLANCE_NOW = re.compile(
+    r"\b(?:right\s+now|now|just|new|finally|today|here|look|looks|looking|check|see|watch|rate|judge|"
+    r"what\s+do\s+(?:you|u)\s+think|do\s+(?:you|u)\s+like|how\s+does|so\s+(?:cute|bad|good|ugly)|"
+    r"is\s+(?:on|in|sitting|sleeping|doing|lying|laying|being)|(?:is|are)\s+\w+ing|as\s+we\s+speak|"
+    r"don'?t\s+laugh)\b", re.I)
+_GLANCE_NOT = re.compile(
+    r"\b(?:need|needs|want\s+to\s+get|should\s+get|someday|sometime|tomorrow|next\s+week|appointment|died|"
+    r"passed\s+away|used\s+to|last\s+(?:year|month|week)|at\s+work|keeps|wearing\s+out|broke|broken|"
+    r"looking\s+for|miss)\b", re.I)
+_GLANCE_SEE = re.compile(r"\b(?:you|u)\s+(?:should|gotta|got\s+to|have\s+to|need\s+to)\s+see\s+(?:this|that|what|how|my|it)\b",
+                         re.I)
+
+
+# Already "here and now" by themselves: "I'm wearing my lucky jersey", "my kid drew this for me".
+_GLANCE_PRESENT = re.compile(
+    r"\b(?:i'?m|i\s+am)\s+(?:wearing|rocking|holding)\s+(?:\w+\s+){0,3}?" + _VISIBLE + r"\b"
+    r"|\b(?:drew|made|painted|built|knitted|sewed|baked)\s+(?:this|these)\b"
+    r"|\b(?:i|we)\s+(?:just\s+)?dressed\s+up\b"
+    r"|\bi\s+(?:just\s+|finally\s+)?(?:dyed|bleached|shaved|cut|pierced|got)\s+my\s+(?:\w+\s+){0,2}?"
+    r"(?:hair|beard|ears?|nose|lip|eyebrows?|nails)\b"
+    r"|\b(?:i'?m|i\s+am)\s+holding\s+(?!off\b|on\b|out\b|back\b)(?:my|a|the|this|his|her|our)\s+\w+"
+    r"|\bsay\s+hi\s+to\s+(?:my|the|our|this)\s+\w+", re.I)
+
+
+def _glance_cue(text: str) -> bool:
+    # an explicit "you've got to see this" / being on cam wins over the plan/past filter
+    if _GLANCE_CAM.search(text) or _GLANCE_SEE.search(text):
+        return True
+    if _GLANCE_NOT.search(text):
+        return False
+    if _GLANCE_PRESENT.search(text):
+        return True
+    return bool(_GLANCE_OWN.search(text)) and bool(_GLANCE_NOW.search(text))
+
+# The agent saying it wants to see ("okay, show me", "I'd need to see it"): every agent
+# said this in the glance sim and none of them looked (sim 11-01).
+_SEE_INTENT_RE = re.compile(
+    r"\b(?:show\s+(?:me|us)|let\s+me\s+see|lemme\s+see|"
+    r"i\s+(?:wanna|want\s+to|need\s+to|gotta|have\s+to|got\s+to)\s+see|"
+    r"i'?d\s+(?:need|have|want|love)\s+to\s+see|let\s+me\s+(?:take\s+a\s+)?look)\b", re.I)
+GLANCE_CUE_RE = re.compile(r"\(GLANCE CUE\)")
+
+
+def wants_glance(text: str) -> bool:
+    """A line about something visible the agent would want to see (not a request to look)."""
+    return bool(text) and not wants_look(text) and _glance_cue(re.sub(r"^\s*\[S\d+\]\s*", "", text))
+
+
+# The room reacting to something on screen, whoever it's said to (live 11-01: "Oh my gosh, is
+# that a guy?" while a game was shared -> "Yeah, it's a guy..." with nothing seen). Triggers a
+# quiet context glance (SpeechPipelineManager.note_screen_talk), never a reply by itself.
+_SCREEN_TALK_RE = re.compile(
+    r"\b(?:is\s+(?:that|this)\s+(?:a|an|the|my|your|his|her)\s+\w+|what\s+(?:is|'s)\s+(?:that|this)\b|"
+    r"who\s+(?:is|'s)\s+(?:that|this)\b|look\s+at\s+(?:him|her|them|that|this|it|the)\b|"
+    r"check\s+(?:this|that|it)\s+out|did\s+(?:you|y'?all|anyone)\s+see\s+that|on\s+(?:the\s+)?(?:screen|stream)\b|"
+    r"(?:this|that)\s+(?:guy|dude|girl|thing|boss|dragon|skin|map|clip|video)\b|"
+    r"(?:watch|look)\s+(?:this|that|what)\b)", re.I)
+
+
+def screen_talk(text: str) -> bool:
+    body = _NOT_LOOK_RE.sub(" ", re.sub(r"^\s*\[S\d+\]\s*", "", text or ""))
+    return bool(_SCREEN_TALK_RE.search(body)) or wants_look(body)
+
+
+def wants_to_see(reply: str) -> bool:
+    """The agent's own reply says it wants to see something."""
+    return bool(reply) and bool(_SEE_INTENT_RE.search(reply))
+
+
+def glance_cue(who: str = "") -> str:
+    """Synthetic turn (never a real line): it said it wanted to see, so it glanced."""
+    lead = f"[{who}] " if re.fullmatch(r"S\d+", who or "") else ""
+    return (f"{lead}(GLANCE CUE) Nobody is talking right now. This is NOT a new line from anyone: it's "
+            "your own cue. You just said you wanted to see, so you glanced at the screen; the screenshot "
+            "is attached. React to what you actually see in a line or two, naturally, the way someone "
+            "who looked over would. If what you wanted to see isn't on screen, say so briefly; if "
+            "there's nothing worth saying, output [HOLD].")
+
+
+def glance_mode() -> str:
+    """Eyes plugin "glance" setting: sometimes | often | off."""
+    try:
+        import plugins as _plugins
+        return str(_plugins.settings_of("eyes").get("glance") or "sometimes")
+    except Exception:  # noqa: BLE001
+        return "sometimes"
 
 
 def look_note(text: str, eyes_on: bool) -> str:
@@ -122,6 +241,13 @@ def abilities_note(eyes_on: bool, search_on: bool = True, persona: str = "", off
         can.append("look at the owner's screen whenever someone shows you something or the room "
                    "is reacting to something on screen you can't see yet (a game, a clip, a picture) "
                    "- just look, like glancing over")
+        if glance_mode() != "off":
+            can.append("glance at the screen on your own, now and then, when you'd like to see the "
+                       "person you're talking with (their face or reaction on camera) or something they "
+                       "tell you about (an outfit, a pet, their setup), the way a friend looks over; "
+                       "not every turn, and you don't announce it. Never talk about your own looking (when "
+                       "you looked, that the screen changed, that you'd need to look again) unless someone "
+                       "asks whether you can see")
     if "clock" not in off:
         can.append("check the real date and time")
     if "notes" not in off:
@@ -185,7 +311,11 @@ IDENTITY_TRUTH = ("Facts about you (never recite them as a set line): you're a r
                   "things said in past calls come back to you on their own as THINGS YOU REMEMBER "
                   "when they fit the moment. It isn't a tool you call; you can't search it or list "
                   "it on demand, so if nothing surfaced, say you don't recall and ask them to fill "
-                  "you in. Never make up a past conversation.")
+                  "you in. Never make up a past conversation. You only hear this call: you didn't "
+                  "watch, play, read or see the games, shows, matches or places they're describing "
+                  "(unless you just looked at the screen), so never say you did ('I saw it', 'I'm "
+                  "watching too', 'I'm stuck on that level too'); react to what they told you, ask, or "
+                  "give your own take.")
 
 # Owner decision 10-05 (option b): agents built on a fictional character (pack
 # traits.character_agents: Pup, Grim, ...) may play along inside their own

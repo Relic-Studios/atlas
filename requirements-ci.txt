@@ -8,3 +8,4 @@ httpx
 requests
 tzdata
 pydantic
+wordfreq          # name / common-word checks (the app installs it too)

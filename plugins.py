@@ -177,13 +177,20 @@ BUILTIN: List[dict] = [
     },
     {
         "id": "eyes", "name": "Eyes (screen)", "icon": "eye", "category": "Senses",
-        "summary": "Glance at your screen when someone says \"look!\" or shows something.",
+        "summary": "Glance at your screen when someone says \"look!\" or shows something, and on its "
+                   "own when it wants to see who it's talking with.",
         "detail": "Captures one screenshot per look, only while this is on. The latest capture "
-                  "is kept at private/last_screen.jpg so you can see what it saw.",
+                  "is kept at private/last_screen.jpg so you can see what it saw. Looks it takes on "
+                  "its own are rate-limited (now and then: at most one every 90 s and 4 per 10 min; "
+                  "more often: one every 30 s, 10 per 10 min).",
         "tools": ["look_at_screen"], "default": True,
         "settings": [
             {"key": "monitor", "label": "Which screen", "type": "select", "default": "1",
              "options": _monitor_options},
+            {"key": "glance", "label": "Look on its own", "type": "select", "default": "sometimes",
+             "options": [{"value": "sometimes", "label": "Now and then, when it wants to see (recommended)"},
+                         {"value": "often", "label": "More often"},
+                         {"value": "off", "label": "Only when someone asks"}]},
         ],
         "apply": _apply_eyes, "test": _test_eyes,
     },
@@ -374,6 +381,17 @@ BUILTIN: List[dict] = [
                   "Heavy: gentle and slow. Lively: quick and playful. It only changes tone, never whether "
                   "the agent speaks. Text and timing only for now (no audio analysis); nothing is saved.",
         "tools": [], "default": True, "feed": True,
+        "settings": [],
+    },
+    {
+        "id": "nemotron_diarization", "name": "Nemotron diarization", "icon": "pulse", "category": "Senses",
+        "summary": "Tells voices apart better: NVIDIA Nemotron-3 follows who is talking, voiceprints keep who is who.",
+        "detail": "Runs NVIDIA's Nemotron-3-Diarization in a side process on the GPU (about 3%) and fills in "
+                  "the turns the voiceprints alone can't place. Held-out test with real voices: 88.7% of "
+                  "turns labelled right and 2.0% wrong, against 83.5% and 1.4% for voiceprints alone. Needs "
+                  "a one-time setup of its own Python (docs/NEMOTRON_DIARIZATION.md). Off, missing or "
+                  "crashed, Atlas uses the voiceprints alone; nothing else changes.",
+        "tools": [], "default": False,
         "settings": [],
     },
     {

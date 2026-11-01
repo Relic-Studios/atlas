@@ -3,6 +3,7 @@ import json, sys, unittest
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import requests
+from unittest.mock import patch, Mock
 import remote_llm as R
 
 
@@ -68,6 +69,38 @@ class StreamTests(unittest.TestCase):
 
 
 class FallbackTests(unittest.TestCase):
+    def test_remote_only_blocks_generate_except_explicit_unload(self):
+        local = Mock()
+        rs = R.RemoteSession({"url": "http://x", "model": "m", "label": "L",
+                              "allow_local_fallback": False}, local)
+        for body in ({"model": "local"}, {"model": "local", "keep_alive": -1},
+                     {"model": "local", "keep_alive": 0, "prompt": "warm"}):
+            with self.assertRaises(requests.ConnectionError):
+                rs.post("http://localhost/api/generate", json=body)
+        local.post.assert_not_called()
+        rs.post("http://localhost/api/generate", json={"model": "local", "keep_alive": 0})
+        local.post.assert_called_once()
+
+    def test_remote_only_never_calls_local_on_request_failure_or_cooldown(self):
+        local = Mock()
+        rs = R.RemoteSession({"url": "http://x", "model": "m", "label": "L",
+                              "allow_local_fallback": False}, local)
+        rs._http.post = Mock(side_effect=requests.ConnectionError("down"))
+        for _ in range(2):
+            with self.assertRaises(requests.ConnectionError):
+                rs.post("http://localhost/api/chat", json={"messages": []})
+        local.post.assert_not_called()
+        self.assertEqual(rs.fallbacks, 0)
+
+    def test_remote_only_connection_check_never_calls_local(self):
+        local = Mock()
+        rs = R.RemoteSession({"url": "http://x", "model": "m", "label": "L",
+                              "allow_local_fallback": False}, local)
+        rs.ping = Mock(return_value=False)
+        with self.assertRaises(requests.ConnectionError):
+            rs.get("http://localhost/")
+        local.get.assert_not_called()
+
     def test_unreachable_remote_falls_back_to_local_and_cools_down(self):
         class Local:
             calls = 0
@@ -96,6 +129,15 @@ if __name__ == "__main__":
 
 
 class WatchdogTests(unittest.TestCase):
+    def test_remote_only_outage_never_warms_local(self):
+        rs = self.rs()
+        rs.cfg["allow_local_fallback"] = False
+        for now in (100, 110, 120):
+            self.assertIsNone(rs.tick(False, now=now))
+        self.assertFalse(rs.local_warm)
+        self.assertIsNone(rs.tick(True, now=130))
+        self.assertTrue(rs._remote_ok())
+
     def rs(self):
         return R.RemoteSession({"url": "http://x", "model": "m", "key": "", "label": "L"}, None)
 
@@ -133,3 +175,21 @@ class WatchdogTests(unittest.TestCase):
         rs.tick(True, now=120); rs.tick(False, now=150)
         self.assertIsNone(rs.tick(True, now=181))     # up_since restarted at 181
         self.assertTrue(rs.local_warm)
+
+
+class StartupTests(unittest.TestCase):
+    def test_selected_remote_is_activated_before_caller_prewarms(self):
+        llm = Mock()
+        cfg = {"url": "http://x", "model": "m", "label": "Remote"}
+        with patch.object(R.Path, "read_text", return_value="remote"), \
+                patch.object(R, "load_config", return_value=cfg), \
+                patch.object(R, "activate") as activate:
+            R.restore_at_startup(llm)
+        activate.assert_called_once_with(llm, cfg)
+        llm.prewarm.assert_not_called()
+
+    def test_missing_remote_config_does_not_silently_use_local(self):
+        with patch.object(R.Path, "read_text", return_value="remote"), \
+                patch.object(R, "load_config", return_value=None):
+            with self.assertRaises(requests.ConnectionError):
+                R.restore_at_startup(Mock())

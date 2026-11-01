@@ -367,6 +367,11 @@ class TaskBoard:
                 elif t["status"] == "done" and now - t["updated"] < DELIVER_TTL_S:
                     lines.append(f"- #{t['id']} search{who} DONE {ago}, NOT told yet: \"{t['text']}\" "
                                  f"-> {t['result'][:RESULT_CHARS]}")
+                elif t["status"] == "done":
+                    # Never voiced, just old: calling it "already told" let the agent claim it
+                    # had said things it never said.
+                    lines.append(f"- #{t['id']} search{who} done {ago}, never told them (old now: only if "
+                                 f"they bring it up): \"{t['text']}\" -> {t['result'][:RESULT_CHARS // 2]}")
                 else:
                     lines.append(f"- #{t['id']} search{who}, already told them ({ago}): \"{t['text']}\" "
                                  f"-> {t['result'][:RESULT_CHARS // 2]}")

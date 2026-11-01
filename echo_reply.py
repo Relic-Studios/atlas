@@ -51,12 +51,20 @@ def _norm(w: str) -> str:
 _RESTATE_FRAME = re.compile(r"^\W*(?:\w+,\s*)?(?:so\s+)?(?:you(?:'re| are)\s+(?:saying|telling me)|so\s+you\s+mean|so\s+what\s+you(?:'re| are)\s+saying)\b", re.I)
 
 
+_GREETING = re.compile(r"(?:^|[.!?,]\s*)\W*(?:hi|hey|hello|hiya|howdy|yo|sup|heya)\b", re.I)
+_PRESENCE = re.compile(r"\b(?:i'?m|i am|still)\s+here\b", re.I)
+
+
 def is_parrot(sentence: str, heard: str) -> bool:
     """True if `sentence` only repeats content words from `heard`."""
     s = (sentence or "").strip()
     if not s:
         return False
     words = _WORD.findall(s.lower())
+    if _GREETING.match(s) and _GREETING.search(heard or "") and len(words) <= 4:
+        # live: "Hey." to "Hey Max." and "Hi Mike." to "Hi, it's Mike" were dropped,
+        # so a greeting got silence back. Returning a greeting isn't an echo.
+        return False
     if _RESTATE_FRAME.match(s):
         # "So you're saying X?" / "You're telling me X?" restates by construction
         # (owner 10-02). The rest of the reply, if any, is still spoken.
@@ -83,7 +91,13 @@ def is_parrot(sentence: str, heard: str) -> bool:
         # 3+ words of pure glue ("Rokay, he's got that.") is an empty acknowledgement;
         # a bare "Yeah." is left to the loop-filler screen; answers to questions stay.
         # A bare summons ("Pup.") still gets its "I'm here".
-        return len(words) >= 3 and not asked and len(_WORD.findall((heard or "").lower())) > 2
+        heard_words = _WORD.findall((heard or "").lower())
+        if _PRESENCE.search(s) and "here" not in heard_words:
+            # live 10-31: "Oh, I'm here!" to "I'm not getting any responses from you Pup."
+            # and "Hey, I'm here." to "... Hello." were dropped: answering a summons or a
+            # "you there?" complaint isn't an echo unless they said "here" themselves.
+            return False
+        return len(words) >= 3 and not asked and len(heard_words) > 2
     if asked:
         return False  # answering a question / choice prompt with its own words is an answer
     pool = {_norm(w) for w in _WORD.findall((heard or "").lower())}

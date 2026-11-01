@@ -2,7 +2,18 @@
 
 ## Unreleased
 
+**New**
+- **Agents glance at the screen on their own** (Plugins > Eyes > "Look on its own": now and then, more often, or only when asked). When someone tells the agent about something visible ("do you like my new hoodie?", "I'm on cam now") it takes a quick look as it answers. When the room reacts to something on screen ("is that a guy?"), it glances quietly and keeps one line about what's there as background, without commenting on it. Glances are rate-limited (by default at most one every 90 seconds and four per 10 minutes), play no "let me look" line, and agents don't narrate the screenshot or talk about their own looking. "Can you see me?" and "what do I look like?" count as asking it to look; "don't look" doesn't. With a self-hosted vLLM server the model decides when a glance is worth it; otherwise simple cues do.
+- **Hybrid speaker diarization** (Plugins > Senses > Nemotron diarization, off by default): NVIDIA's streaming diarizer in a side process, combined with the voiceprints, for busy calls. Needs a one-time setup; see [docs/NEMOTRON_DIARIZATION.md](docs/NEMOTRON_DIARIZATION.md).
+
 **Fixes**
+- When an agent says it'll look something up, it actually searches and brings the answer back at the next pause. "Do you think you could search up…" counts as a request.
+- Asked "did you look it up?" when it hasn't, an agent says so instead of claiming it did.
+- Fewer ignored questions in busy calls: "hold up, are you a bot?" is no longer taken as "be quiet"; reactions ("Ha,", "Rad,"), slang and words from other languages aren't mistaken for someone's name; repeating the agent's own word back isn't read as talking to someone else; questions without a question mark and late self-introductions aren't dropped when the agent has talked a lot.
+- Agents cut into other people's conversations less, e.g. a name said mid-sentence ("listen, Sam, …") counts as talking to that person.
+- Agents no longer claim to have watched, played or seen what people describe, or to see someone on camera without looking.
+- Voices: people quiet for 10+ minutes leave the conversation the agent is given (and its roster after 30), matching between similar voices is stricter, and ordinary words ("Close.", "Muted.") aren't saved as names.
+- Turn handling: a turn that ended while the agent was replying is no longer lost; the "let me look" line waits for the turn to end; replies after a web search start sooner; agents are nudged to rest words they keep repeating.
 - Replies and the voice stay in the main language (English by default). Another language is only used after someone asks for it ("reply in Spanish", "speak Japanese please"), and "go back to English" switches back. Fixes English replies being pronounced as Portuguese or other languages after a misdetected line.
 - Agents no longer claim abilities from plugins that are switched off (e.g. "checking Steam sales" with Game info off).
 

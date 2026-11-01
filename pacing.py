@@ -133,7 +133,11 @@ class Pacing:
                 human_turn_words.append(w)
         total = sum(words.values())
         human_total = sum(v for k, v in words.items() if k != "agent")
-        humans = [k for k in words if k != "agent"
+        # A turn heard before the diarizer had a label lands as "user"; it is one of the
+        # labelled people, not another one (live 10-31: one person's unlabelled "Hey Fae" plus
+        # their S1 turns read as two humans, so a 1-on-1 got paced and their intro was held).
+        labelled = any(k not in ("agent", "user") for k in words)
+        humans = [k for k in words if k != "agent" and not (k == "user" and labelled)
                   and words[k] >= max(1.0, FRAGMENT_SHARE * human_total)]
         agent = words.get("agent", 0)
         fair = 1.0 / (len(humans) + 1) if humans else 1.0

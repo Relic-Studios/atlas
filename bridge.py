@@ -40,6 +40,12 @@ class CallBridge:
         from diarize import Diarizer
         self.diarizer = Diarizer(self_reference_audio=self_reference_audio or None, device="cuda")
 
+        # Hybrid diarization (plugin "nemotron_diarization"): Nemotron-3 slots in a side
+        # process + these voiceprints. Off, missing or crashed -> voiceprints alone.
+        self.slots = None
+        self._hybrid = None
+        self._slots_checked = 0.0
+
         self._transcriber = None
         self._stop = threading.Event()
 
@@ -92,6 +98,9 @@ class CallBridge:
             REC.audio(audio16.astype(np.float32))
         except Exception:  # noqa: BLE001
             pass
+        self._sync_slots()
+        if self.slots is not None:
+            self.slots.feed(audio16)
         if self._transcriber is not None:
             try:
                 self._transcriber.feed_audio(pcm)
@@ -151,11 +160,58 @@ class CallBridge:
             return None
 
     # ---- diarization ----------------------------------------------------
+    # Held-out eval 10-31 (tests/sim_diarize_hybrid.py, live slot reading): with these the
+    # hybrid labels 88.7% of turns right / 2.0% wrong vs 83.5% / 1.4% for voiceprints alone.
+    HYBRID_PARAMS = {"slot_on": 0.5, "keep_floor": 0.18, "rebind_margin": 0.15, "found_new": False}
+
+    @staticmethod
+    def _hybrid_wanted() -> bool:
+        try:
+            import plugins
+            return plugins.is_enabled("nemotron_diarization")
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _sync_slots(self, now: float | None = None) -> None:
+        """Start / stop the Nemotron side process to match the plugin switch (every 2 s)."""
+        import time as _t
+        now = _t.time() if now is None else now
+        if now - self._slots_checked < 2.0:
+            return
+        self._slots_checked = now
+        want = self._hybrid_wanted()
+        if want and self.slots is None:
+            from nemotron_client import SlotClient
+            self.slots = SlotClient()
+            log.info("[bridge] hybrid diarization on: starting the Nemotron side process")
+        if want:
+            self.slots.start()             # no-op while running, starting or backing off
+        elif self.slots is not None:
+            log.info("[bridge] hybrid diarization off: stopping the Nemotron side process")
+            self.slots.stop()
+            self.slots, self._hybrid = None, None
+
+    def _hybrid_for(self):
+        if self._hybrid is None or self._hybrid.d is not self.diarizer:
+            from diarize_hybrid import HybridDiarizer
+            self._hybrid = HybridDiarizer(self.diarizer, **self.HYBRID_PARAMS)
+        return self._hybrid
+
     def tag_speaker(self, audio_float: np.ndarray, sample_rate: int = 16000):
         if self.diarizer is None:
             return None
         try:
-            aud = self.agent_audible_during(len(audio_float) / float(sample_rate))
+            dur = len(audio_float) / float(sample_rate)
+            aud = self.agent_audible_during(dur)
+            slots = self.slots
+            if slots is not None and slots.ready:
+                from diarize_hybrid import slot_from_window
+                frames = slots.window(dur + 0.3)
+                slot, prob, _frac = slot_from_window(frames) if frames is not None else (None, 0.0, 0.0)
+                h = self._hybrid_for()
+                dec = h.process(audio_float, sample_rate, slot, prob, agent_audible=aud)
+                log.debug("[bridge] hybrid: slot %s (%.2f) -> %s", slot, prob, dec.speaker)
+                return dec.speaker
             return self.diarizer.process(audio_float, sample_rate, agent_audible=aud).speaker
         except Exception as e:  # noqa: BLE001
             log.warning("[bridge] diarize error: %s", e)
@@ -192,5 +248,8 @@ class CallBridge:
     # ---- teardown -------------------------------------------------------
     def stop(self):
         self._stop.set()
+        if self.slots is not None:
+            self.slots.stop()
+            self.slots = None
         self.call_audio.close()
         log.info("[bridge] stopped")

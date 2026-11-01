@@ -127,6 +127,24 @@ class ConversationLogTests(unittest.TestCase):
         self.assertLessEqual(len(self.log.roster), self.log.roster_cap)
         self.assertIn("S19", self.log.roster)
 
+    def test_quiet_voices_leave_the_prompt_then_the_roster(self):
+        # owner 10-31: calls keep changing; old voices must not clog the model's context
+        self.log.add_user("S1", "I'm heading out soon, gotta sleep")
+        self.c.tick(5)
+        self.log.add_user("S2", "same, one more match")
+        self.c.tick(self.log.active_s + 1)
+        self.log.add_user("S3", "yo who's still here")
+        note = self.log.state_note("S3")
+        self.assertIn("S3", note)
+        self.assertNotIn("S1:", note)
+        self.assertNotIn("heading out", note)
+        self.assertIn("2 earlier voice(s) quiet 10+ min, left out", note)
+        self.assertEqual(self.log.active_labels(), ["S3"])
+        self.c.tick(self.log.forget_s)
+        self.log.add_user("S4", "hey")
+        self.assertNotIn("S1", self.log.roster)
+        self.assertNotIn("S2", self.log.roster)
+
     def test_est_tokens_monotone(self):
         self.assertLess(est_tokens("a b"), est_tokens("a b c d e f"))
 

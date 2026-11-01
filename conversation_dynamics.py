@@ -86,6 +86,11 @@ def _is_command(text: str, m: re.Match) -> bool:
     before = re.split(r"[.!?;:]", text[max(0, m.start() - 80):m.start()])[-1]
     before = re.split(r",|\band\b", before)[-1]
     toks = re.findall(r"[A-Za-z']+", before)
+    low = {t.lower() for t in toks}
+    # "or I just keep quiet and wait" is about themselves, not an order (sim 11-01);
+    # "I said shut up" / "I need you to be quiet" still are.
+    if low & {"i", "we"} and not low & {"you", "u", "ya", "said", "told", "say"}:
+        return False
     for k, tok in enumerate(toks):
         low = tok.lower()
         if low in _COMMAND_LEAD:
@@ -125,6 +130,39 @@ def strong_silence_request(text: str) -> bool:
     """A real 'go quiet' command (arms quiet mode). "hold up", "let me think" and
     "give me a sec" pause one turn but never mute the agent for minutes."""
     return bool(text) and any(_is_command(text, m) for m in _STRONG_SILENCE.finditer(text))
+
+
+_QUESTION_LEAD = re.compile(
+    r"^\W*(?:(?:so|like|um|uh|wait|okay|ok|and|but|bro|dude|man)\W+)*"
+    r"(?:what|who|why|how|when|where|which|are|is|was|were|do|does|did|can|could|would|will|should|have|has)\b"
+    r"\W+\w+", re.I)
+
+
+_QUESTION_MID = re.compile(
+    r"(?:[,;:]\s*|\b(?:like|so|but|and|then|okay|ok|now|or)\s+)"
+    r"(?:(?:what|who|why|how|when|where|which)(?:'s|'d|'re|'ll)?\s+\w+|(?:do|does|did|are|is|can|could|would|will|"
+    r"should)\s+(?:you|u|ya|i|we|it|they|that|this)\b)"
+    # ...or a request or a callback to what the agent said: "hold on, go ahead, roast the Prof" /
+    # "hold up, you said earlier Orion..." / "hold up, say that trash line again"
+    r"|\b(?:you\s+(?:just\s+)?(?:said|told)|say\s+(?:it|that|something)|tell\s+\w+|give\s+(?:us|me)|go\s+ahead|"
+    r"go\s+on|roast|pick\s+(?:one|a\s+side)|choose|explain|guess|settle|decide|answer)\b", re.I)
+
+
+def _pause_before_question(sentence: str, rest: str) -> bool:
+    """'Wait, hold up, so are you like... a real bot?' leads into a question: a
+    discourse marker, not 'be quiet' (sim 11-01: held as a silence request). Only
+    the soft pauses (hold on/up, give me a sec, let me think); a real 'shut up' or
+    'stay quiet' is a command whatever follows it."""
+    if strong_silence_request(sentence):
+        return False
+    first = None
+    for pat, _ in _SILENCE_PATTERNS:
+        m = pat.search(rest)
+        if m and (first is None or m.end() < first):
+            first = m.end()
+    after = rest[first:] if first is not None else ""
+    # fix1 sim: "hold up dude, go back to the start, ... like what even is that" (no '?')
+    return "?" in after or bool(_QUESTION_LEAD.match(after) or _QUESTION_MID.search(after))
 
 
 _TALK_LESS_PATTERNS: list[tuple[re.Pattern, float]] = [
@@ -521,6 +559,14 @@ meanwhile otherwise sometimes today tomorrow yesterday tonight here there
 what why how when where who which whatever everyone everybody someone somebody
 anyone anybody nobody sir maam mom mum dad chat boys girls folks people team
 lol lmao lmfao rofl haha hahaha ngl fr tbh imo idk bet yall bruv mate fam
+aw aww awww mm mmh mhm mmm hm ugh oof welp yikes whoa woah dang ooh ohh ahh eh huh yay
+ja nein jo nee si oui non da nyet tak nie evet hayir digga alter bruder bra wallah yalla
+ha hah heh hehe rad sick dope lit sheesh wild crazy aight ight facts true word sweet awesome
+legit deadass gg ez jeez geez gosh boom bingo touche sus cap
+ey oye pues parce vale wey orale cara mano habibi habibti inshallah mashallah bhai yaar arre lah
+cuz cuh dawg homie ay ayy ayo aye all
+mira pero jaja jajaja jeje jejeje kkk kkkk rsrs bueno claro dale vamos chevere cabron chingon guey hermano
+amigo compa tio tia pana mijo mija weon
 """.split())
 class _Nicknames:
     """Live view over agent_registry: agent id or display name -> nicknames."""
@@ -546,6 +592,31 @@ _LEAD_BARE_VOCATIVE_RE = re.compile(
 
 def _is_agent_name(word: str, names: tuple[str, ...]) -> bool:
     return _is_agent_name_cached(word.lower(), tuple(names))
+
+
+@functools.lru_cache(maxsize=64)
+def role_words(names: tuple) -> frozenset:
+    """How people address the agent when they don't use its name, from its pack 'what'
+    ("a ninja from the Hidden Leaf" -> ninja; "a green dinosaur" -> dinosaur, dino): the head
+    noun of each phrase. fix2 sim: "Yeah, ninja, you're the local" was held as "addressed to
+    ninja". Address positions only (floor.names_agent): as a plain noun it isn't its name."""
+    out = set()
+    try:
+        import agent_registry as _r
+        for aid in _r.agent_ids():
+            if aid.lower() not in names and _r.display_name(aid).lower() not in names:
+                continue
+            what = re.split(r"\bfrom\b|\(", _r.identity(aid).get("what") or "")[0]   # not "...from the Hidden Leaf"
+            for seg in what.split(","):
+                ws = re.findall(r"[A-Za-z]+", seg)
+                w = ws[-1].lower() if ws else ""
+                if len(w) >= 4 and w not in names and w not in _NOT_NAMES and not _is_common_word(w):
+                    out.add(w)
+                    if len(w) >= 7:
+                        out.add(w[:4])          # dinosaur -> dino
+    except Exception:  # noqa: BLE001
+        pass
+    return frozenset(out)
 
 
 @functools.lru_cache(maxsize=4096)
@@ -593,17 +664,59 @@ def _is_common_word(w: str) -> bool:
     return w in _COMMON_FALLBACK
 
 
+def _adverb(w: str) -> bool:
+    """'honestly', 'basically' -- not 'Wally', 'Kelly', 'Emily' (fix1 sim: "what do you think,
+    Wally" never counted as address because every -ly word was ruled out)."""
+    if not w.endswith("ly"):
+        return False
+    if not _zipf:
+        return True
+    if _is_common_word(w):
+        return True
+    stems = [w[:-2], w[:-4] if w.endswith("ally") else "", w[:-3] + "e" if w.endswith("bly") else "",
+             w[:-3] + "y" if w.endswith("ily") else ""]
+    return any(s and len(s) >= 4 and _zipf(s, "en") >= 3.5 for s in stems)
+
+
 def _looks_like_other_name(word: str, names: tuple[str, ...]) -> bool:
     if re.fullmatch(r"S\d+", word):
         return True
     w = word.lower()
-    return (w not in _NOT_NAMES and not w.endswith("ly")
+    # "Flipped, my ass, man, you said..." (sim 11-01): a past tense or -ing word
+    # leading a line is a reaction, not a name; real names the room uses are
+    # trusted before this check (_alias_ok).
+    return (w not in _NOT_NAMES and not _adverb(w)
+            and not (len(w) > 4 and w.endswith(("ed", "ing")))
             and not _is_common_word(w)
             and not _is_agent_name(word, names))
 
 
-if _zipf:  # load the frequency table at import, not on the first live turn
+# Rooms switch language (live 10-31: a German side chat held as "addressed to Ja" x7).
+# A vocative candidate is judged in the language the rest of the turn is in, so
+# "Ja, das ist sehr." isn't a name while "Kim, kannst du helfen?" still is.
+_TURN_LANGS = ("en", "de", "es", "fr", "pt", "it", "nl", "tr", "pl")
+
+
+def _turn_language(body: str) -> Optional[str]:
+    """The turn's language when it clearly isn't English, else None."""
+    if not _zipf:
+        return None
+    words = re.findall(r"[^\W\d_]+", body.lower())[1:]   # skip the vocative slot
+    if len(words) < 3:
+        return None
+    mean = {lang: sum(_zipf(w, lang) for w in words) / len(words) for lang in _TURN_LANGS}
+    best = max(mean, key=lambda k: mean[k])
+    return best if best != "en" and mean[best] - mean["en"] >= 0.75 else None
+
+
+def _common_in(word: str, lang: Optional[str]) -> bool:
+    return bool(lang) and _zipf is not None and _zipf(word.lower(), lang) >= _COMMON_WORD_ZIPF
+
+
+if _zipf:  # load the frequency tables at import, not on the first live turn
     _is_common_word("the")
+    for _lang in _TURN_LANGS:
+        _zipf("the", _lang)
 
 _SECOND_PERSON_CUE = re.compile(r"\b(?:you|your|you're|u|ya|yours)\b|\?", re.I)
 
@@ -643,7 +756,7 @@ _GREETED_NAME_RE = re.compile(
 # "...and now I've heard, Perma, you were talking about your brain."
 _MID_VOCATIVE_RE = re.compile(
     r",\s*([A-Z][A-Za-z0-9]{1,15})\s*,\s*(?:you|your|you're|did|do|are|were|can|"
-    r"could|would|will|have)\b")
+    r"could|would|will|have|what|what's|who|why|how|when|where|which|is|was|should|tell)\b")
 
 
 # Words people use for the agent itself ("Yo, AI!", "hey Atlas, ...").
@@ -658,13 +771,92 @@ def _alias_ok(word: str, names: tuple[str, ...]) -> bool:
     return _looks_like_other_name(word, names)
 
 
+_ROOM_VOC_LEAD = re.compile(
+    r"\b(?:listen|see|look|yo|hey|hi|bye|later|night|goodnight|cya|thanks|thank\s+you|but|nah|man|bro|dude|"
+    r"right|okay|ok|so|like|you|now|come\s+on|real|honestly|anyway|anyways|well|alright|aight|oh)\s*$", re.I)
+_ROOM_VOC_AFTER = re.compile(r"\s*(?:[,?!]|\.(?:\s|$)|$)")
+_GREET_JUST_BEFORE = re.compile(r"(?:^|[,.!?;]\s*|\s)(?:yo|hey|hi|hello|oi|ayo)\s+$", re.I)
+_FAREWELL_NAME_RE = re.compile(r"^\W*(?:bye|later|night|goodnight|cya)\s+([a-z][a-z0-9_]{2,15})\b")
+_FAREWELL_LEAD = re.compile(r"\b(?:bye|later|night|goodnight|cya)\s*$", re.I)
+FAREWELL_START = re.compile(r"^\W*(?:bye|later|night|goodnight|cya|see\s+ya|see\s+you)\b", re.I)
+_LOWER_MID_VOC_RE = re.compile(r",\s*([a-z][a-z0-9_]{2,15})\s*,\s*(?:you(?!\s+(?:know|see|feel|get|mean)\b)|your|you're|u)\b")
+LOWER_NAME_ZIPF = 4.6       # a lower-case word this rare in a vocative slot is a handle, not a noun
+
+
+def _room_vocative(body: str, names: tuple[str, ...]) -> Optional[str]:
+    """A name set off as address anywhere in the line (sim 11-01: 40 of 98 replies
+    cut into side talk that named the other person like this):
+      * a name this room already uses: "Pues listen, Flash, dogs are loyal" /
+        "You hear that, Flash?" / "Bye Peach,"
+      * an unknown word capitalised mid-sentence between commas (speech recognition
+        capitalises names, not nouns): "You see, Jefe, even the ninja grasps it"
+        -- not apposition like "Lisbon, Porto, and Faro"
+      * a rare lower-case word in a farewell or before 'you': "bye peach, ..." /
+        "but tell me, beast, you scream too"."""
+    for m in re.finditer(r"[A-Za-z][A-Za-z0-9_]{1,23}(?!['’])", body):
+        w = m.group(0)
+        if w.lower() in _NOT_NAMES or w.lower() in _AGENT_GENERIC or _is_agent_name(w, names):
+            continue
+        before = body[:m.start()]
+        if _is_room_name(w):
+            lead = (not before.strip() or re.search(r"[,.!?;]\s*$", before) is not None
+                    or _ROOM_VOC_LEAD.search(before) is not None)
+            # "yo Maria wine at midnight, that's a vibe" (no comma came through): a greeting
+            # right before a name the room uses is address on its own
+            if _GREET_JUST_BEFORE.search(before):
+                return w
+            if lead and _ROOM_VOC_AFTER.match(body[m.end():]):
+                if _FAREWELL_LEAD.search(before) and _SECOND_PERSON_CUE.search(_after_sentence(body, m.end())):
+                    continue          # "later Peach. so like, ... what's the first track": the rest isn't Peach's
+                return w
+            continue
+        mid = re.search(r"\w[^\w.!?]*,\s*$", before) is not None     # after a comma, not a sentence start
+        if (mid and w[0].isupper() and w[1:].islower() and _ROOM_VOC_AFTER.match(body[m.end():])
+                and _looks_like_other_name(w, names) and (not _zipf or _zipf(w.lower(), "en") < LOWER_NAME_ZIPF)):
+            prev = re.findall(r"([A-Za-z']+)\s*,\s*$", before)
+            if not (prev and prev[0][:1].isupper() and prev[0].lower() not in _NOT_NAMES):
+                return w
+    for rx in (_FAREWELL_NAME_RE, _LOWER_MID_VOC_RE):
+        m = rx.search(body)
+        if m and m.group(1) not in _NOT_NAMES and m.group(1) not in _AGENT_GENERIC \
+                and _looks_like_other_name(m.group(1), names) \
+                and (not _zipf or _zipf(m.group(1), "en") < LOWER_NAME_ZIPF):
+            # "later Peach. so like, ... what's the first track": the goodbye closes Peach's
+            # exchange and the rest is for whoever is left (fix1 replay)
+            if rx is _FAREWELL_NAME_RE and _SECOND_PERSON_CUE.search(_after_sentence(body, m.end())):
+                continue
+            return m.group(1)
+    return None
+
+
+def _after_sentence(body: str, pos: int) -> str:
+    """Text after the sentence that contains `pos`."""
+    m = re.search(r"[.!?]\s", body[pos:])
+    return body[pos + m.end():] if m else ""
+
+
+_OWN_NAME_RE = re.compile(r"\b(?:my\s+name(?:'s|\s+is)|name's|call\s+me|i'?m|i\s+am)\s+([A-Za-z][\w'-]{1,23})",
+                          re.I)
+
+
 def detect_other_addressee(text: str, names: tuple[str, ...]) -> Optional[str]:
     """Return the other person's name if the turn is vocatively addressed to
     someone who is not the agent, else None. Never fires if the agent is also
-    named anywhere in the turn ("Alex, be quiet. Max, keep explaining.")."""
+    named anywhere in the turn ("Alex, be quiet. Max, keep explaining."), or
+    for the speaker's own name ("Bob, parce, my name is Bob, I told you", sim 11-01)."""
+    who = _detect_other_addressee(text, names)
+    if who and who.lower() in {m.group(1).lower() for m in _OWN_NAME_RE.finditer(text or "")}:
+        return None
+    if who and who.lower() in role_words(tuple(n.lower() for n in names)):
+        return None               # "hey ninja, ..." to Kai is the agent itself
+    return who
+
+
+def _detect_other_addressee(text: str, names: tuple[str, ...]) -> Optional[str]:
     if not text:
         return None
     body = _SPEAKER_LABEL_RE.sub("", text)
+    lang = _turn_language(body)
     for token in re.findall(r"[A-Za-z]+", body):
         if _is_agent_name(token, names) and (token[0].isupper()
                                              or token.lower() in tuple(n.lower() for n in names)):
@@ -677,7 +869,7 @@ def detect_other_addressee(text: str, names: tuple[str, ...]) -> Optional[str]:
         if not g:
             continue
         m = _GREETED_NAME_RE.match(sent[g.end():])
-        if not m or not _alias_ok(m.group(1), names):
+        if not m or not (_alias_ok(m.group(1), names) and (_is_room_name(m.group(1)) or not _common_in(m.group(1), lang))):
             continue
         w = m.group(1)
         # A bare exclamation ("Well, voila!", "Yo, weee!") only counts as a
@@ -692,8 +884,11 @@ def detect_other_addressee(text: str, names: tuple[str, ...]) -> Optional[str]:
         if w.islower() and not _is_room_name(w) and (not _zipf or _zipf(w.lower(), "en") >= 3.2):
             continue
         return w
+    rv = _room_vocative(body, names)
+    if rv:
+        return rv
     m = _MID_VOCATIVE_RE.search(body)
-    if m and _alias_ok(m.group(1), names):
+    if m and (_alias_ok(m.group(1), names) and (_is_room_name(m.group(1)) or not _common_in(m.group(1), lang))):
         # "Paris, France, you should go" is apposition, not address: skip when
         # the word before the first comma is itself capitalised mid-sentence.
         prev = re.findall(r"([A-Za-z']+)\s*$", body[:m.start()])
@@ -703,7 +898,7 @@ def detect_other_addressee(text: str, names: tuple[str, ...]) -> Optional[str]:
             return m.group(1)
     for rx in (_LEAD_VOCATIVE_RE, _TAIL_VOCATIVE_RE, _LEAD_BARE_VOCATIVE_RE):
         m = rx.search(body)
-        if not m or not _alias_ok(m.group(1), names):
+        if not m or not (_alias_ok(m.group(1), names) and (_is_room_name(m.group(1)) or not _common_in(m.group(1), lang))):
             continue
         # A comma-less "Will you ..." stays a question to the room even when a
         # friend is called Will: room-name trust only applies to rare words here.
@@ -760,9 +955,11 @@ def pre_llm_veto(text: str, names: tuple[str, ...]) -> Optional[str]:
     # someone else: "Alex, be quiet. Max, keep explaining." must reach the LLM.
     if reported_invocation(text, names):
         return "reported speech"
-    for sentence in re.split(r"(?<=[.!?])\s+", body):
+    sentences = re.split(r"(?<=[.!?])\s+", body)
+    for k, sentence in enumerate(sentences):
         if (detect_silence_request(sentence) is not None
-                and not detect_other_addressee(sentence, names)):
+                and not detect_other_addressee(sentence, names)
+                and not _pause_before_question(sentence, " ".join(sentences[k:]))):
             return "explicit silence request"
     other = detect_other_addressee(text, names)
     if other:

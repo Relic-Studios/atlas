@@ -2,7 +2,7 @@
 import copy
 import json
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 
 from llm_module import LLM
 
@@ -52,6 +52,49 @@ class Transport:
 
 
 class LifecycleTests(unittest.TestCase):
+    def test_remote_prewarm_reports_actual_model_and_never_checks_local(self):
+        llm = LLM("ollama", "local-model")
+        llm.remote = Mock(cfg={"url": "http://remote:30000", "model": "model", "allow_local_fallback": False})
+        llm.remote.ping.return_value = True
+        with patch("llm_module._check_ollama_connection") as local_check, \
+                patch("llm_module._run_ollama_ps") as local_ps, \
+                patch.object(llm, "generate", return_value=iter(["OK"])), \
+                self.assertLogs("llm_module", level="INFO") as logs:
+            self.assertTrue(llm.prewarm(max_retries=0))
+        local_check.assert_not_called()
+        local_ps.assert_not_called()
+        self.assertTrue(any("remote model at http://remote:30000" in line for line in logs.output))
+        self.assertFalse(any("prewarm for 'local-model'" in line for line in logs.output))
+
+    def test_remote_outage_does_not_start_or_probe_ollama(self):
+        llm = LLM("ollama", "local-model")
+        llm.remote = Mock(cfg={"url": "http://remote:30000", "model": "model", "allow_local_fallback": False})
+        llm.remote.ping.return_value = False
+        with patch("llm_module._check_ollama_connection") as local_check, \
+                patch("llm_module._run_ollama_ps") as local_ps:
+            self.assertFalse(llm._lazy_initialize_clients())
+        local_check.assert_not_called()
+        local_ps.assert_not_called()
+
+    def test_remote_recovers_after_transient_startup_outage(self):
+        llm = LLM("ollama", "local-model")
+        llm.remote = Mock(cfg={"url": "http://remote:30000", "model": "model", "allow_local_fallback": False})
+        llm.remote.ping.side_effect = [False, True]
+        with patch("llm_module._run_ollama_ps") as local_ps:
+            self.assertFalse(llm._lazy_initialize_clients())
+            self.assertTrue(llm._lazy_initialize_clients())
+        local_ps.assert_not_called()
+        self.assertEqual(llm.remote.ping.call_count, 2)
+
+    def test_missing_selected_remote_config_blocks_later_generation(self):
+        llm = LLM("ollama", "local-model")
+        llm._remote_startup_error = "Missing remote configuration"
+        llm.ollama_session = Mock()
+        with self.assertRaisesRegex(ConnectionError, "local inference remains disabled"):
+            list(llm.generate("hello"))
+        llm.ollama_session.get.assert_not_called()
+        llm.ollama_session.post.assert_not_called()
+
     def make_llm(self, responses=(), agentic=False, on_post=None):
         llm = LLM("ollama", "unit-test-model", no_think=True,
                   tools=[{"type": "function", "function": {"name": "web_search"}}]

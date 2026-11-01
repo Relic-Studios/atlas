@@ -830,6 +830,11 @@ class TranscriptionProcessor:
                 finally:
                     done.set()
                 _wrap_language_retry(self.recorder)
+                try:   # optional Parakeet final pass; Whisper (language-guarded) is its fallback
+                    import parakeet_final
+                    parakeet_final.wrap(self.recorder)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(f"👂🦜 Parakeet final pass not enabled: {e}")
                 # Ensure wake words are disabled if needed (double check via param setting)
                 self._set_recorder_param("use_wake_words", False) # Uses the helper method
 

@@ -37,6 +37,34 @@ class Learn(unittest.TestCase):
         self.assertEqual(b.learn("S4", "Uh it's Marcus."), "Marcus")
         self.assertEqual(b.display("S4"), "Marcus")
 
+    def _answer(self, word):
+        b, c = book()
+        b.note_agent_reply("S4", "Wait, who's this?")
+        c.t += 3
+        return b.learn("S4", word)
+
+    def test_one_word_answers_that_are_ordinary_words(self):
+        # voiceprints 10-07: "Close", "All", "Muted", "Tell", "One", "Better" were saved as names
+        for word in ["Close.", "All.", "Muted.", "Tell.", "One.", "Better.", "Using.", "Bigger.",
+                     "Ugly.", "I'll.", "Unironically."]:
+            self.assertIsNone(self._answer(word), word)
+
+    def test_one_word_answers_that_are_names_or_handles(self):
+        for word, want in [("Jake.", "Jake"), ("John.", "John"), ("Will.", "Will"), ("Kayla.", "Kayla"),
+                           ("Tangy.", "Tangy"), ("Itsblazemf.", "Itsblazemf"), ("Dingleberry.", "Dingleberry")]:
+            self.assertEqual(self._answer(word), want, word)
+
+    def test_handles_in_strong_frames_take_any_word(self):
+        for line, want in [("call me Batman", "Batman"), ("my name's Queen", "Queen"),
+                           ("you can call me Toast", "Toast")]:
+            b, _ = book()
+            self.assertEqual(b.learn("S3", line), want, line)
+
+    def test_demonyms_and_religions_are_not_names(self):
+        b, _ = book()
+        for line in ["I'm Moroccan.", "I'm Hindu.", "I'm Pakistani."]:
+            self.assertIsNone(b.learn("S3", line), line)
+
     def test_answer_window_expires(self):
         b, c = book()
         b.note_agent_reply("S4", "What's your name?")

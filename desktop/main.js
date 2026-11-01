@@ -22,8 +22,19 @@ const PYTHON = process.env.ATLAS_PYTHON || (fs.existsSync(VENV_PY) ? VENV_PY
 let backend = null;
 let mainWindow = null;
 let quitting = false;
+let restartPromise = null;
+const ownsInstance = app.requestSingleInstanceLock();
+if (!ownsInstance) app.quit();
+app.on('second-instance', () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+});
 
 function startBackend() {
+  // A starting backend is already owned even before its HTTP port is ready.
+  if (backend) return;
   // Archive the previous log, then tee backend output to server.log so crashes
   // are diagnosable even when ATLAS was launched from the desktop shortcut.
   const fs = require('fs'), logPath = path.join(SERVER_DIR, 'server.log');
@@ -84,12 +95,16 @@ async function showBackendDown(msg) {
   mainWindow.webContents.executeJavaScript(js).catch(() => {});
 }
 
-async function restartBackend() {
-  if (!mainWindow) return;
-  await mainWindow.loadFile(path.join(__dirname, 'splash.html'));
-  if (!(await healthCheck())) startBackend();
-  if (await waitForBackend()) await mainWindow.loadURL(APP_URL);
-  else showBackendDown('Backend failed to start');
+function restartBackend() {
+  if (restartPromise) return restartPromise;
+  restartPromise = (async () => {
+    if (!mainWindow || quitting) return;
+    await mainWindow.loadFile(path.join(__dirname, 'splash.html'));
+    if (!(await healthCheck())) startBackend();
+    if (await waitForBackend()) await mainWindow.loadURL(APP_URL);
+    else showBackendDown('Backend failed to start');
+  })().finally(() => { restartPromise = null; });
+  return restartPromise;
 }
 
 function healthCheck() {
@@ -143,6 +158,7 @@ async function createWindow() {
 }
 
 app.whenReady().then(async () => {
+  if (!ownsInstance) return;
   // Grant microphone/media permission (getUserMedia in the renderer).
   // Microphone only, and only for ATLAS's own pages.
   const appOrigin = new URL(APP_URL).origin;

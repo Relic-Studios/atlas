@@ -253,7 +253,7 @@ class LLM:
             ValueError: If an unsupported backend is specified.
             ImportError: If required libraries for the selected backend are not installed.
         """
-        logger.info(f"🤖⚙️ Initializing LLM with backend: {backend}, model: {model}, system_prompt: {system_prompt}")
+        logger.debug("Initializing LLM protocol adapter: %s, configured local model: %s", backend, model)
         self.backend = backend.lower()
         if self.backend not in self.SUPPORTED_BACKENDS:
             raise ValueError(f"Unsupported backend '{backend}'. Supported: {self.SUPPORTED_BACKENDS}")
@@ -281,7 +281,7 @@ class LLM:
         self._requests_lock = Lock()
         self._ollama_connection_ok: bool = False # Added explicit init
 
-        logger.info(f"🤖⚙️ Configuring LLM instance: backend='{self.backend}', model='{self.model}'")
+        logger.debug("Configured LLM protocol adapter: %s, local model: %s", self.backend, self.model)
 
         self.effective_openai_key = self._api_key or OPENAI_API_KEY
         self.effective_ollama_url = self._base_url or OLLAMA_BASE_URL if self.backend == "ollama" else None
@@ -298,7 +298,7 @@ class LLM:
 
         if self.backend == "ollama" and REQUESTS_AVAILABLE:
             self.ollama_session = requests.Session()
-            logger.info("🤖🔌 Initialized requests.Session for Ollama backend.")
+            logger.debug("Initialized local Ollama transport for optional local mode.")
         # Optional remote_llm.py swaps ollama_session for a RemoteSession; the
         # original local session is kept here for switching back / fallback.
         self._local_session = getattr(self, "ollama_session", None)
@@ -313,6 +313,12 @@ class LLM:
         if getattr(self, "_local_session", None) is None:
             self._local_session = self.ollama_session
 
+    def inference_target(self) -> str:
+        remote = getattr(self, "remote", None)
+        if remote is not None:
+            return f"remote {remote.cfg['model']} at {remote.cfg['url']}"
+        return f"{self.backend} {self.model}"
+
     def _lazy_initialize_clients(self) -> bool:
         """
         Initializes backend clients or checks connections on first use (thread-safe).
@@ -325,6 +331,10 @@ class LLM:
             True if the client is initialized and ready (or connection check passed for Ollama),
             False otherwise.
         """
+        if getattr(self, "_remote_startup_error", None):
+            logger.error("Remote startup configuration unavailable: %s; local inference disabled",
+                         self._remote_startup_error)
+            return False
         if self._client_initialized:
             if self.backend in ["openai", "lmstudio"]: return self.client is not None
             if self.backend == "ollama": return self.ollama_session is not None and self._ollama_connection_ok # Check flag
@@ -348,7 +358,13 @@ class LLM:
                     self.client = _create_openai_client(api_key="lmstudio-key", base_url=self.effective_lmstudio_url)
                     init_ok = self.client is not None
                 elif self.backend == "ollama":
-                    if self.ollama_session and self.effective_ollama_url:
+                    if (getattr(self, "remote", None) is not None
+                            and not self.remote.cfg.get("allow_local_fallback", True)):
+                        init_ok = self.remote.ping(timeout=5.0)
+                        self._ollama_connection_ok = init_ok
+                        if not init_ok:
+                            logger.error("Remote connection failed: %s", self.remote.last_error)
+                    elif self.ollama_session and self.effective_ollama_url:
                         # Initial direct check
                         initial_check_ok = _check_ollama_connection(self.effective_ollama_url, self.ollama_session)
                         if initial_check_ok:
@@ -379,15 +395,15 @@ class LLM:
                         init_ok = False
 
                 if init_ok:
-                    logger.info(f"🤖✅ Client/Connection initialized successfully for backend: {self.backend}.")
+                    logger.info("LLM connection initialized: %s", self.inference_target())
                 else:
                     logger.error(f"🤖💥 Initialization failed for backend: {self.backend}.")
             except Exception as e:
                 logger.exception(f"🤖💥 Critical failure during lazy initialization for {self.backend}: {e}")
                 init_ok = False
             finally:
-                # Mark as initialized regardless of success/failure
-                self._client_initialized = True
+                # A transient startup outage must be retryable on the next turn.
+                self._client_initialized = init_ok
                 # Ensure connection flag reflects reality if init failed
                 if self.backend == "ollama" and not init_ok:
                     self._ollama_connection_ok = False
@@ -512,7 +528,7 @@ class LLM:
             False if initialization or generation failed after retries.
         """
         prompt = "Respond with only the word 'OK'."
-        logger.info(f"🤖🔥 Attempting prewarm for '{self.model}' on backend '{self.backend}'...")
+        logger.info("LLM prewarm target: %s", self.inference_target())
 
         # Lazy initialization now includes the 'ollama ps' logic if needed
         if not self._lazy_initialize_clients():
@@ -703,6 +719,8 @@ class LLM:
             # Lazy initialization now includes the 'ollama ps' logic if needed
             if not self._lazy_initialize_clients():
                 # Provide a clearer error if initialization failed
+                if getattr(self, "remote", None) is not None or getattr(self, "_remote_startup_error", None):
+                    raise ConnectionError("Remote LLM unavailable; local inference remains disabled")
                 if self.backend == "ollama" and not self._ollama_connection_ok:
                      raise ConnectionError(f"LLM backend '{self.backend}' connection failed. Could not connect to {self.effective_ollama_url} even after attempting 'ollama ps'. Check server status and configuration.")
                 raise RuntimeError(f"LLM backend '{self.backend}' client failed to initialize.")
@@ -939,6 +957,11 @@ class LLM:
             content_parts: List[str] = []
             buffer = ""
             processed_done = False
+            # Speak as it streams when no tool call can follow the text: the forced final
+            # round offers no tools, and a remote two-stage SPEAK body was decided before
+            # its first word. Every other round is buffered (a tool call may come after text).
+            stream_now = final_round or bool(getattr(response, "speak_body", False))
+            streamed = False
 
             try:
                 for chunk_bytes in response.iter_content(chunk_size=None):
@@ -960,9 +983,16 @@ class LLM:
                             raise RuntimeError(f"Ollama stream error: {d['error']}")
                         m = d.get("message", {})
                         if m.get("tool_calls"):
-                            tool_calls.extend(m["tool_calls"])
+                            if streamed:
+                                logger.warning(f"🤖⚠️ [{request_id}] tool call after spoken text ignored")
+                            else:
+                                tool_calls.extend(m["tool_calls"])
                         if m.get("content"):
-                            content_parts.append(m["content"])
+                            if stream_now and not tool_calls:
+                                streamed = True
+                                yield m["content"]
+                            else:
+                                content_parts.append(m["content"])
                             # Tool calls can arrive after text; never expose a
                             # speculative header/body from an intermediate round.
                         if d.get("done"):
@@ -990,6 +1020,8 @@ class LLM:
 
             if self._is_cancelled(request_id):
                 return
+            if streamed:
+                return       # already voiced as it streamed
 
             # If the model produced content, we're done.
             if content_parts and not tool_calls:
@@ -1099,12 +1131,16 @@ class LLM:
                     cb(name, dict(args or {}), result)
                 except Exception as e:  # noqa: BLE001
                     logger.warning(f"🤖⚠️ [{request_id}] on_tool_result error: {e}")
-            images = None
+            images, glance = None, False
             if isinstance(result, dict):
                 images = result.get("images") or None
+                glance = bool(result.get("glance"))
                 result = str(result.get("text") or "")
             result = str(result)
-            if images:
+            if images and glance:
+                result += ("\n[You glanced at the screen just now, on your own. Let it show only if it "
+                           "fits what they said; don't describe the screenshot.]")
+            elif images:
                 result += ("\n[This screenshot was taken just now, for this turn. Describe only "
                            "what is in THIS image; anything you said about the screen before is out of date.]")
             # Live sim 10-05: after a prefetched tool the model skipped the routing header

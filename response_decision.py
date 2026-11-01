@@ -200,7 +200,7 @@ def filter_response(source, decision):
     carry = ''
     book = getattr(decision, 'namebook', None)
     from speech_safety import screen as _slur_screen
-    for chunk in _life_screen(_ai_denial_screen(_reask_screen(_forbid_screen(_slur_screen(_identity_screen(_announce_screen(_parrot_screen(_filter_response(source, decision), decision), decision), decision)), decision)), decision), decision):
+    for chunk in _ack_screen(_shared_screen(_life_screen(_ai_denial_screen(_reask_screen(_forbid_screen(_slur_screen(_identity_screen(_announce_screen(_parrot_screen(_filter_response(source, decision), decision), decision), decision)), decision)), decision), decision), decision), decision):
         if book is None:
             yield chunk
             continue
@@ -684,3 +684,95 @@ def _life_screen(source, decision):
         _rec('drop', why='invented_life', text=str(dropped)[:200])
         if not said:
             yield _LIFE_FALLBACK
+
+
+# --------------------------------------------------------------------------
+# Shared-experience backstop (sim 11-01: every agent, character agents too, said
+# "Yeah, I saw it" / "I'm stuck on wave 40 too" about what the callers were
+# describing). It only hears the call, so claiming it watched, played or saw
+# their thing is invented; in-character play about its own world stays allowed.
+_SHARED_CLAIM = re.compile(
+    r"\b(?:i|we)(?:'ve|\s+have)?\s+(?:also\s+|totally\s+|just\s+|already\s+)?(?:saw|seen|watched|caught|played)\s+"
+    r"(?:it|that(?!\s+(?:you|coming))|this|them|the\s+(?:game|match|fight|finale|episode|movie|film|show|stream|"
+    r"clip|highlights?|ending|trailer))\b"
+    r"|^\W*(?:(?:yeah|yep|oh|man|dude|bro)\W+)?(?:saw|watched|caught)\s+(?:it|that|the\s+(?:game|match|fight|finale|"
+    r"episode|movie|film|show))\b"
+    r"|\bi'?m\s+(?:watching|playing)\s+(?:it\s+|that\s+|along\s+)?too\b"
+    r"|\b(?:i'?m|i\s+was|i\s+got)\s+stuck\s+on\s+(?:[\w'-]+\s+){0,4}too\b",
+    re.I)
+_SCREEN_WORD = re.compile(r"\bscreen\b", re.I)
+
+
+def claims_shared(sentence: str, inq: bool = False) -> bool:
+    s = _outside_quotes(sentence, inq)[0]
+    return bool(s and _SHARED_CLAIM.search(s) and not _SCREEN_WORD.search(s))
+
+
+def _shared_screen(source, decision):
+    buf, dropped, said, inq = '', [], False, False
+    for chunk in source:
+        buf += chunk
+        parts = _SENTENCE.findall(buf)
+        if not parts:
+            continue
+        done, tail = (parts, '') if re.search(r"[.!?]\s*$", buf) else (parts[:-1], parts[-1])
+        for s in done:
+            hit = claims_shared(s, inq)
+            inq = _outside_quotes(s, inq)[1]
+            if hit:
+                dropped.append(s.strip())
+            else:
+                yield _rejoin(s, dropped, said)
+                said = said or bool(s.strip())
+        buf = tail
+    if buf:
+        if claims_shared(buf, inq):
+            dropped.append(buf.strip())
+        else:
+            yield _rejoin(buf, dropped, said)
+    if dropped:
+        logger.info('shared-experience claim dropped: %r', dropped)
+        _rec('drop', why='shared_claim', text=str(dropped)[:200])
+
+
+# --------------------------------------------------------------------------
+# Bare-acknowledgment backstop (sim 11-01: most "generic" replies, e.g. Max
+# "Yeah, that tracks." / "Fair enough." to lines that asked it nothing). Ivy's
+# sheet already says it: an acknowledgment alone is dead air with words in it,
+# so the agent says nothing. A question can still be answered "Yeah."
+_BARE_ACK = re.compile(
+    r"^\W*(?:(?:yeah|yep|yup|yes|true|fair|fair\s+enough|right|exactly|totally|for\s+sure|makes\s+sense|"
+    r"that\s+tracks|tracks|same|nice|cool|okay|ok|alright|aight|got\s+it|gotcha|word|facts|bet|mhm|hmm|"
+    r"that'?s\s+(?:fair|true|right|real|valid)|good\s+(?:point|call)|i\s+hear\s+you|i\s+feel\s+you|no\s+doubt|"
+    r"definitely|absolutely|indeed|precisely|man|dude|bro|mate)\W*)+$", re.I)
+_ASKED_IT = re.compile(r"\?|(?:^|[,;:.!]\s*|\b(?:like|so|but|and|then|okay|ok|now|or)\s+)(?:what|who|why|how|when|"
+                       r"where|which|do|does|did|are|is|can|could|would|will|should)\b", re.I)
+ACK_HOLD_CHARS = 60
+
+
+def is_bare_ack(reply: str) -> bool:
+    return bool(reply and reply.strip() and _BARE_ACK.match(reply.strip()))
+
+
+def _ack_screen(source, decision):
+    heard = getattr(decision, 'heard', '') or ''
+    if not heard or _ASKED_IT.search(heard):
+        yield from source
+        return
+    buf = ''
+    for chunk in source:
+        if buf is None:
+            yield chunk
+            continue
+        buf += chunk
+        if len(buf) > ACK_HOLD_CHARS:
+            yield buf
+            buf = None
+    if buf is None:
+        return
+    if is_bare_ack(buf):
+        logger.info('bare acknowledgment dropped: %r', buf.strip())
+        _rec('drop', why='bare_ack', text=buf.strip()[:120])
+        return
+    if buf:
+        yield buf
