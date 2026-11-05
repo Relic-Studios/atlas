@@ -101,15 +101,20 @@ if (-not $Smi) { foreach ($c in @("$env:WINDIR\Sysnative\nvidia-smi.exe", "$env:
 if (-not $Cpu -and $Smi) {
     try { $gpu = (& $Smi --query-gpu=name,memory.total --format=csv,noheader 2>$null | Select-Object -First 1) } catch {}
 }
-$hasTorch = $false
-try { & $VPy -c "import torch" 2>$null; $hasTorch = ($LASTEXITCODE -eq 0) } catch {}
-if ($hasTorch) { Ok 'already installed' }
-elseif ($gpu) {
-    Ok "NVIDIA GPU found: $gpu -> CUDA build"
-    Run $VPy @('-m', 'pip', 'install', 'torch==2.8.0', 'torchaudio==2.8.0', '--index-url', 'https://download.pytorch.org/whl/cu128')
-} elseif ($Cpu) {
-    Warn '-Cpu: test install only. The voice engine needs an NVIDIA GPU, so ATLAS will not be able to speak.'
-    Run $VPy @('-m', 'pip', 'install', 'torch==2.8.0', 'torchaudio==2.8.0', '--index-url', 'https://download.pytorch.org/whl/cpu')
+# Pinned PyTorch (known advisories: SECURITY.md). Upgrades keep .venv, so an older torch there is
+# replaced, not skipped; a CUDA build stays CUDA and a CPU test build stays CPU.
+$TorchPin = '2.10.0'
+$torchVer = ''
+try { $torchVer = "$(& $VPy -W ignore -c 'import torch; print(torch.__version__)' 2>$null)".Trim() } catch {}
+$cudaTorch = ($torchVer -like '*+cu*') -and -not $Cpu
+if ($torchVer -eq $TorchPin -or $torchVer -like "$TorchPin+*") { Ok "already installed ($torchVer)" }
+elseif ($gpu -or $cudaTorch) {
+    if ($torchVer) { Ok "updating PyTorch $torchVer -> $TorchPin" }
+    if ($gpu) { Ok "NVIDIA GPU found: $gpu -> CUDA build" }
+    Run $VPy @('-m', 'pip', 'install', "torch==$TorchPin", "torchaudio==$TorchPin", '--index-url', 'https://download.pytorch.org/whl/cu128')
+} elseif ($Cpu -or $torchVer) {
+    Warn 'CPU build: test install only. The voice engine needs an NVIDIA GPU, so ATLAS will not be able to speak.'
+    Run $VPy @('-m', 'pip', 'install', "torch==$TorchPin", "torchaudio==$TorchPin", '--index-url', 'https://download.pytorch.org/whl/cpu')
 } else {
     Fail ("No NVIDIA GPU found. ATLAS's voice engine needs an NVIDIA GPU (8 GB+ VRAM).`n" +
           "If you have one, update the driver from https://www.nvidia.com/drivers and run the installer again.")

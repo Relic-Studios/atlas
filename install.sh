@@ -48,13 +48,20 @@ run "$VPY" -m pip install --upgrade pip wheel "setuptools>=83" --quiet
 ok ".venv ready"
 
 step 3 "PyTorch"
-if "$VPY" -c "import torch" 2>/dev/null; then ok "already installed ($("$VPY" -c 'import torch;print(torch.__version__)'))"
-elif [ "$FORCE_CPU" = 0 ] && command -v nvidia-smi >/dev/null && nvidia-smi -L >/dev/null 2>&1; then
-  ok "NVIDIA GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)"
-  run "$VPY" -m pip install torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128
-elif [ "$FORCE_CPU" = 1 ]; then
-  warn "--cpu: test install only. The voice engine needs an NVIDIA GPU, so ATLAS will not be able to speak."
-  run "$VPY" -m pip install torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cpu
+# Pinned PyTorch (known advisories: SECURITY.md). An older torch in a kept .venv is replaced, not
+# skipped; a CUDA build stays CUDA and a CPU test build stays CPU.
+TORCH_PIN=2.10.0
+TV="$("$VPY" -W ignore -c 'import torch;print(torch.__version__)' 2>/dev/null || true)"
+HAS_GPU=0
+if [ "$FORCE_CPU" = 0 ] && command -v nvidia-smi >/dev/null && nvidia-smi -L >/dev/null 2>&1; then HAS_GPU=1; fi
+if [ "$TV" = "$TORCH_PIN" ] || [[ "$TV" == "$TORCH_PIN+"* ]]; then ok "already installed ($TV)"
+elif [ "$HAS_GPU" = 1 ] || { [ "$FORCE_CPU" = 0 ] && [[ "$TV" == *+cu* ]]; }; then
+  [ -n "$TV" ] && ok "updating PyTorch $TV -> $TORCH_PIN"
+  [ "$HAS_GPU" = 1 ] && ok "NVIDIA GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)"
+  run "$VPY" -m pip install "torch==$TORCH_PIN" "torchaudio==$TORCH_PIN" --index-url https://download.pytorch.org/whl/cu128
+elif [ "$FORCE_CPU" = 1 ] || [ -n "$TV" ]; then
+  warn "CPU build: test install only. The voice engine needs an NVIDIA GPU, so ATLAS will not be able to speak."
+  run "$VPY" -m pip install "torch==$TORCH_PIN" "torchaudio==$TORCH_PIN" --index-url https://download.pytorch.org/whl/cpu
 else
   fail "No NVIDIA GPU found. ATLAS's voice engine needs an NVIDIA GPU (8 GB+ VRAM) with a CUDA 12 driver.
 If you have one, install the NVIDIA driver (sudo ubuntu-drivers install), reboot, and run this again."

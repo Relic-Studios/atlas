@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.1 — PyTorch 2.10
+
+**Breaking: GeForce GTX 10-series (Pascal) GPUs are no longer supported.** PyTorch 2.10's CUDA build dropped them, so ATLAS now needs a GeForce RTX 20-series or newer NVIDIA GPU. On a GTX 10-series card, don't install this update.
+
+**Dependencies**
+- **PyTorch 2.10.0** (was 2.8.0), still the CUDA 12.8 build. It fixes the high-severity `torch.load` advisory (GHSA-63cw-57p8-fm3p) and five others; the two low-severity, local-only advisories that remain are explained in SECURITY.md.
+- Upgrading replaces the old PyTorch in place (about 2.9 GB to download). The installer used to skip PyTorch whenever any version was already installed.
+- Tested on 2.10.0: speech recognition, turn detection, voice activity detection, voiceprints and the name tagger give the same results as on 2.8.0, the voice is just as fast, and all 1,575 unit tests pass.
+
 ## 0.6.0 — agents that remember
 
 **New**

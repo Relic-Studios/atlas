@@ -94,7 +94,7 @@ You can change all of this later from the dashboard.
 ## Requirements
 
 - Windows 10/11 or Ubuntu 22.04+, 16 GB RAM, ~15 GB disk (plus the local model, if you use one).
-- **An NVIDIA GPU is required.** Listening and the voice use about 6 GB of VRAM.
+- **An NVIDIA GPU is required:** GeForce RTX 20-series or newer. GTX 10-series (Pascal) and older cards aren't supported. Listening and the voice use about 6 GB of VRAM.
 
 | Your GPU | What works |
 |---|---|

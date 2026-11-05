@@ -24,13 +24,14 @@ Windows SmartScreen may show "unrecognized app".
 
 ## Accepted findings
 
-- **PyTorch 2.8.0** (installed by `install.ps1` from PyTorch's CUDA index, so outside the `pip-audit` gate):
-  GHSA-63cw-57p8-fm3p (code execution when `torch.load` opens an untrusted checkpoint) and memory-safety
-  or denial-of-service bugs in specific functions given crafted input (GHSA-qfhq-4f3w-5fph, GHSA-rrmf-rvhw-rf47,
-  GHSA-vgrw-7cvw-pwgx, PYSEC-2025-203/204/206, PYSEC-2026-139, PYSEC-2026-2286). ATLAS loads only the models
-  on its fixed download list, never a checkpoint someone hands it (imported voices are audio clips), and doesn't
-  pass outside input to those functions. An update to a fixed PyTorch is planned once it passes the speech and
-  voice tests.
+- **PyTorch 2.10.0** (installed by `install.ps1` / `install.sh` from PyTorch's CUDA 12.8 index, so outside the
+  `pip-audit` gate): two low-severity, local-only advisories remain. GHSA-rrmf-rvhw-rf47 is memory corruption
+  when `torch.jit.script` compiles crafted code; it is fixed in PyTorch 2.13, which has no CUDA 12.8 build.
+  PYSEC-2026-139 is unsafe deserialization when loading a crafted `.pt2` archive; no fix has been released.
+  ATLAS never passes outside code to `torch.jit.script` (libraries script only their own built-in functions),
+  never loads `.pt2` archives, and loads only the models on its fixed download list (imported voices are audio
+  clips). The other advisories against the earlier 2.8.0, including GHSA-63cw-57p8-fm3p (`torch.load` of an
+  untrusted checkpoint), are fixed in 2.10.0.
 
 ## Reporting a vulnerability
 
