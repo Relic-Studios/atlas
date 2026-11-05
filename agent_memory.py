@@ -1,9 +1,10 @@
 """One memory folder per agent: agent_state/memory/<agent>/
 
-    items.json   owner-approved / candidate memories (call_memory.py)
-    graph.json   learned hypergraph memory (hypergraph_memory.py)
-    emb.npy      its embeddings
-    review.html  off-call review page (tools/memory_review.py, dev only)
+    episodes.json  what the agent remembers of the calls it was in (experience_memory.py)
+    lore.json, lessons.json, predictions.json  the plugins' own stores
+
+Files from the retired memories (items.json, graph.json, emb.npy, review.html) may still be on disk until the
+owner deletes them from the memory viewer (docs/designs/experience_memory.md).
 
 A folder is created the moment an agent exists (startup for every registered
 agent, and when the + creator saves a new one). Deleting an agent ARCHIVES its
@@ -105,14 +106,11 @@ def ident(agent: str, root: Path = None, create: bool = True) -> str:
 
 
 def ensure(agent: str, root: Path = None) -> Path:
-    """Create the agent's folder (and an empty items.json) if missing."""
+    """Create the agent's folder (with its identity file) if missing."""
     migrate(root)
     d = folder(agent, root)
     d.mkdir(parents=True, exist_ok=True)
     ident(agent, root)
-    f = d / ITEMS
-    if not f.exists():
-        f.write_text(json.dumps({"items": []}), encoding="utf-8")
     return d
 
 
@@ -134,7 +132,8 @@ def archive(agent: str, root: Path = None) -> Path | None:
         return None
     dst = Path(root or ROOT) / "_deleted" / f"{d.name}_{time.strftime('%Y%m%d_%H%M%S')}"
     dst.parent.mkdir(parents=True, exist_ok=True)
-    with _lock:
+    import experience_memory
+    with experience_memory.store_lock(), _lock:      # never while a memory pass writes into this folder (design D1)
         shutil.move(str(d), str(dst))
     return dst
 

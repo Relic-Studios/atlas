@@ -1,0 +1,11 @@
+{
+ "name": "Fortnite",
+ "processes": [
+  "fortniteclient-win64-shipping.exe"
+ ],
+ "titles": [
+  "^Fortnite"
+ ],
+ "competitive": true,
+ "spoilers": "full"
+}

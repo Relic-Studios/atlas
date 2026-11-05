@@ -82,6 +82,21 @@ def reset() -> None:
         _last_cap[0] = 0.0
 
 
+def end_call() -> None:
+    """Call end: forget this call's lines and captions; the daily caption cap is kept."""
+    with _lock:
+        _lines.clear()
+        _captions.clear()
+        _q.clear()
+
+
+try:   # call-end reset (docs/designs/experience_memory.md, S4)
+    import call_boundary as _cb
+    _cb.register("translate.end_call", end_call, order=8)
+except Exception:  # noqa: BLE001
+    pass
+
+
 def intent(text: str):
     t = re.sub(r"^\s*\[S\d+\]\s*", "", text or "")
     if not _ASK_RE.search(t) or _NOT_RE.search(t):

@@ -87,8 +87,7 @@ def reload() -> dict:
             agents[a["id"]] = rec
     if default not in agents:
         default = next(iter(agents), None)
-    with _lock:
-        _state.clear()
+    with _lock:   # same four keys every time: update in place, so a reader without the lock never sees it empty
         _state.update(agents=agents, voices=voices, default=default, traits=traits)
     return _state
 

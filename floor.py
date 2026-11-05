@@ -82,12 +82,34 @@ _ROLE_LEAD = re.compile(r"(?:^|[,.!?;:]\s*|\b(?:hey|hi|hello|yo|oi|ok|okay|alrig
                         r"miss|dear|mister)\s+)*$", re.I)
 
 
+def negated_address(text: str, names: tuple[str, ...]) -> bool:
+    """The agent is named only to say the line isn't for it: "nah nah not you Max, Shadow
+    push" / "Ivy not you, I meant Kayy" (gaming sim 11-02: Max answered "Got it, Max")."""
+    from conversation_dynamics import _is_agent_name
+    body = strip_label(text or "")
+    hits = [m for m in re.finditer(r"[A-Za-z]{3,}", body) if _is_agent_name(m.group(0), names)]
+    return bool(hits) and all(_NEGATED_BEFORE.search(body[:m.start()])
+                              or re.match(r"\s*,?\s*not\s+(?:you|u)\b(?!\s+(?:too|either|again|know|guys)\b)",
+                                          body[m.end():], re.I) for m in hits)
+
+
+# What anyone can call any agent, in address position only: "what do you think, AI, is it love?"
+# (offcall sim 11-02: held as not addressed). "the AI" / "the robot" stay third person.
+_GENERIC_ROLES = frozenset({"ai", "bot", "robot"})
+# "oye, you the AI, right, so tell me ..." / "serious question for the AI now ... what do you ..."
+# (gaming sim 11-02: both held as side exchange).
+_AI_ADDRESSED = re.compile(r"\b(?:you|ya)\s*,?\s+the\s+(?:ai|bot|robot)\b"
+                           r"|\b(?:question|one)\s+for\s+the\s+(?:ai|bot|robot)\b(?=.*\b(?:you|youse|ya)\b)", re.I)
+
+
 def _role_addressed(body: str, names: tuple[str, ...]) -> bool:
     """The agent called by what it is ("hey ninja", "Yeah, dino, you ...", ", jester?"), from its
     pack 'what' (conversation_dynamics.role_words). Only in address position, never as a noun."""
     from conversation_dynamics import role_words
-    roles = role_words(tuple(n.lower() for n in names))
-    for m in re.finditer(r"[A-Za-z]{4,}", body):
+    if _AI_ADDRESSED.search(body):
+        return True
+    roles = role_words(tuple(n.lower() for n in names)) | _GENERIC_ROLES
+    for m in re.finditer(r"[A-Za-z]{2,}", body):
         if m.group(0).lower() not in roles:
             continue
         before, after = body[:m.start()], body[m.end():]
@@ -109,16 +131,87 @@ _REF_VERB_AFTER = re.compile(r"^\s+(?:(?:just|already|literally|always|never|rea
                              r"didn't|doesn't|can't|won't))\b", re.I)
 
 
+# Third person even at the start of a sentence: a verb right after the name that isn't an
+# inverted question ("Ivy ain't wrong", "Max would just answer every question Dave asks",
+# "see, dude, Jest gets it"), unlike "Ivy is that true" / "Max would you ..." (gaming sim 11-02).
+_PRON = r"(?:you|u|ya|y'all|it|this|that|these|those|there|i|we|they|he|she|me|us|them|anyone|anybody)"
+_ADVERBS = (r"(?:(?:just|already|literally|always|never|really|actually|still|even|kinda|lowkey|definitely|totally|"
+            r"probably|basically)\s+)*")
+_THIRD_VERB_AFTER = re.compile(
+    # an auxiliary inverts in a question ("Max would you ..."), so a pronoun after it means address
+    r"^\s+" + _ADVERBS + r"(?:(?:would|will|could|should|might|can|can't|won't|wouldn't|couldn't|is|isn't|was|"
+    r"wasn't|ain't|does|doesn't|did|didn't|has|hasn't|had)\b(?!\s+" + _PRON + r"\b)"
+    # a plain verb never inverts: "Jest gets it", "Fae just wrote you a whole script"
+    r"|(?:keeps|kept|gets|got|thinks|knows|says|said|wants|needs|likes|loves|hates|goes|went|makes|made|talks|"
+    r"sounds|seems|looks|means|gonna|wrote|told|put|out|over|giving)\b"
+    r"|(?:just|already|never|always|literally)\s+(?!" + _PRON + r"\b)\w+)", re.I)
+# The name as an object or a list item ("get Ivy to trash talk my cousin", "let Max talk to him",
+# "me and Zoe and Ivy", "your boy Kai out here"), or negated ("nah not you Max, Shadow push").
+_OBJECT_BEFORE = re.compile(r"\b(?:get|got|let|lets|letting|make|made|have|having|bring|put|putting|hear|hearing|"
+                            r"use|using|with|about|than|and|(?:this|that|the|your|my)\s+(?:boy|girl|guy|homie|dude))\s+$",
+                            re.I)
+_NEGATED_BEFORE = re.compile(r"\bnot\s+(?:you\s*,?\s*)?$", re.I)
+
+
+# "the fairy" / "this AI" as the subject or object of a clause, not as a modifier: "the ninja
+# stuff", "you with the ninja ears" (fix2 probe 11-02: both were questions for the agent).
+_ROLE_REF = re.compile(
+    r"\b(?:the|this|that|your|our)\s+(?:little\s+|lil\s+)?([A-Za-z]+)(?=['’]s\b|\s*[,.!?;:]|\s*$|\s+(?:is|was|isn't|"
+    r"wasn't|ain't|would|will|can|can't|could|should|does|did|doesn't|didn't|has|had|got|gets|just|already|never|"
+    r"always|really|actually|knows|thinks|says|said|went|goes|keeps|kept|wants|likes|sounds|seems|out|over|here|"
+    r"there|too|again|agrees|counts|talking|going|giving|doing|coaching|narrating|claiming|answering|repeating|"
+    r"calling|sang)\b)", re.I)
+# A line that also makes a direct request to someone ("tell me something real about yourself",
+# "repeat after me", "hey, you with the...") is for the agent even when it mentions it in passing.
+_ABOUT_DIRECT = re.compile(r"\b(?:yourself|urself|about\s+you|you\s+with\s+the|repeat\s+after\s+me|tell\s+(?:me|us)|"
+                           r"say\s+(?:it|that|something|again)|pick\s+(?:one|a\s+side)|settle\s+(?:it|this)|"
+                           r"how\s+(?:ya|you|u)\s+(?:goin|going|doing|been)|(?:hey|yo|oi)\s*,?\s+you\b)", re.I)
+
+
+def talked_about(body: str, names: tuple[str, ...]) -> bool:
+    """The agent is referred to in the third person -- its name only in third-person slots, or
+    "the fairy" / "this AI" -- so any 'you' or question in the line is for someone else: "we
+    should put Fae on speaker with my cousin, you'd die" (gaming sim 11-02: 140 such lines were
+    meant for other people, 18 for the agent). Probe replays 11-02 at the 0.01 cut-off: 16 of 17
+    gaming side-talk lines held, 0 questions; older scenes 5 side-talk lines, 2 questions."""
+    from conversation_dynamics import _is_agent_name, role_words
+    if _ABOUT_DIRECT.search(body):
+        return False
+    body = re.sub(r"(?:^|\s)'[^']{3,80}'(?=\s|[,.!?]|$)", " ", body)   # "say 'Pip is green'": recited
+    hits = [m for m in re.finditer(r"[A-Za-z]{3,}", body) if _is_agent_name(m.group(0), names)]
+    if hits:
+        return all(_mentioned_not_addressed(body, m) for m in hits)
+    roles = role_words(tuple(n.lower() for n in names)) | _GENERIC_ROLES
+    return any(m.group(1).lower() in roles for m in _ROLE_REF.finditer(body))
+
+
+# Mid-game callouts, loot and panic ("he's one shot, push him", "I need a plate, full set", "B main,
+# they're rushing"). Only used once the call is clearly in a game (ConversationFloor.in_game):
+# words like "plate" or "cover" mean other things in an ordinary chat. Gaming sim 11-02: 135 such
+# lines were for teammates, 3 for the agent.
+_GAME_TALK = re.compile(
+    r"\b(?:one\s+(?:shot|tap)|lit\s+him|push(?:ing)?\s+(?:him|her|them|now|up|b|a|mid|left|right|site)|rotat(?:e|ing)|"
+    r"flank(?:ing)?|plant(?:ing|ed)?\s+(?:it|the|now)|defus(?:e|ing)|peek(?:ing|ed)?|re?spawn(?:ing|ed)?|revive\s+me|"
+    r"res\s+me|rez\s+me|heal\s+me|plates?|armou?r|light\s+shield|full\s+shield|ammo|reload(?:ing)?|creds|buy\s+menu|"
+    r"full\s+buy|eco\s+round|save\s+round|force\s+buy|[ab]\s+(?:main|site|long|short)|behind\s+(?:you|me|us)|"
+    r"cover\s+(?:me|you|the)|watch\s+(?:my|your)\s+back|i'?m\s+(?:dead|down|one\s+shot|behind\s+you|on\s+you)|"
+    r"you'?re\s+up|they'?re\s+(?:pushing|rushing|on\s+me|on\s+us|coming)|rushing\s+[ab]\b|anchor(?:ing)?|"
+    r"utility|util|smoke(?:s|d)?\s+(?:it|mid|site|the)|flash(?:ing)?\s+(?:it|first|in|me)|nade|grenade|drop\s+pod|"
+    r"hard\s+breach|frag(?:ged)?|headshot|clutch(?:ed)?|ult(?:imate)?\s+(?:is\s+)?(?:up|ready)|gg)\b", re.I)
+
+
 def _mentioned_not_addressed(body: str, m: re.Match) -> bool:
     """One occurrence of the agent's name used in the third person. High precision only:
     an address form anywhere ("Max,", "hey Max", ", Max?") wins, and a
     sentence-initial "Ivy is that true" (comma lost in STT) stays address."""
     before, after = body[:m.start()], body[m.end():]
+    if _NEGATED_BEFORE.search(before):
+        return True
     if _REF_BEFORE.search(before):       # "oh that's Grim, it's like an AI thing" / "ask Max, he knows"
         return True
     if re.match(r"\s*[,?!]", after) or re.search(r"\b(?:hey|hi|hello|yo|oi|ay|ayo|sup)\s+$", before, re.I):
         return False
-    if _REF_SAID_AFTER.match(after):
+    if _OBJECT_BEFORE.search(before) or _REF_SAID_AFTER.match(after) or _THIRD_VERB_AFTER.match(after):
         return True
     sentence_start = _ADDRESS_BEFORE.search(before) is not None
     return not sentence_start and _REF_VERB_AFTER.match(after) is not None
@@ -238,12 +331,18 @@ class ConversationFloor:
         self.engaged = None              # live conversation: {"who", "since", "last", "agent_at"}
         self.mono = None                 # floor-holder: {"spk", "start", "last", "words", "turns"}
         self.mono_pending = None         # (speaker, text, t): reply held until the monologue ends
+        from collections import deque
+        self.reply_log = deque(maxlen=6)   # (t, n_words, ends_q) of the agent's replies (engagement)
+        self.roast_log = deque(maxlen=8)   # (t, speaker, norm_text, named) roasts aimed at the agent
+        self.roast_current = False         # the turn being prepared is a recorded roast
         from pacing import Pacing
         self.pacing = Pacing(clock=clock)  # rolling talk share (owner 10-06: talk less)
         self.last_gate = None            # last turn_gate verdict (logged per turn)
 
     def reset(self) -> None:
         self.partner, self.partner_at, self.recent = None, 0.0, {}
+        self.first_heard_at = None
+        self.depth_asks = {}
         self.quiet_until = 0.0
         self.self_quiet = False
         self.parting_until = 0.0
@@ -257,6 +356,9 @@ class ConversationFloor:
         self.direct = None
         self.engaged = None
         self.turned_away = None
+        self.reply_log.clear()
+        self.roast_log.clear()
+        self.roast_current = False
         self.pacing.reset()
         self.last_gate = None
 
@@ -325,6 +427,8 @@ class ConversationFloor:
         owner = _owner.gate(speaker, names_agent(text, names), self.clock)
         if owner:
             return owner
+        if negated_address(text, names):
+            return "not for the agent"
         if ack_only(text) and not names_agent(text, names) and not self._answers_agent(speaker):
             return "acknowledgement"
         veto = pre_llm_veto(text, names)
@@ -469,6 +573,7 @@ class ConversationFloor:
                           r"run|dip|bounce|grab|get\s+(?:food|some|a\s+drink))\b|\b(?:brb|afk|be\s+right\s+back|"
                           r"gtg|g2g|i'?m\s+out|peace\s+out|later\s+guys)\b", re.I)
     TURNED_AWAY_S = 20.0
+    TURNED_AWAY_MAX_S = 45.0
 
     def engagement_gate(self, text: str, speaker: str | None,
                         names: tuple[str, ...], veto: str | None):
@@ -492,11 +597,17 @@ class ConversationFloor:
                 e["last"] = now
             else:
                 self.engaged = {"who": speaker, "since": now, "last": now, "agent_at": 0.0}
+            ta = getattr(self, "turned_away", None)
+            if ta and ta[0] == speaker:
+                self.turned_away = None     # they came back to the agent ("Hey Ivy!")
             return True
         ta = getattr(self, "turned_away", None)
-        if ta and ta[0] == speaker and now - ta[1] <= self.TURNED_AWAY_S:
-            # "Hey Riley, did you watch it?" -> "it was so good dude": still Riley's
-            self.turned_away = (speaker, now)
+        if (ta and ta[0] == speaker and now - ta[1] <= self.TURNED_AWAY_S
+                and now - (ta[2] if len(ta) > 2 else ta[1]) <= self.TURNED_AWAY_MAX_S):
+            # "Hey Riley, did you watch it?" -> "it was so good dude": still Riley's. Capped: live
+            # 11-02 a misheard "Quinn, ok." kept every line of that guest held for a minute
+            # (each held line restarted the window), questions to the agent included.
+            self.turned_away = (speaker, now, ta[2] if len(ta) > 2 else ta[1])
             return "talking to someone else"
         who = self.engaged_with()
         if not who:
@@ -528,7 +639,7 @@ class ConversationFloor:
                 # questions to the agent were held as "talking to someone else")
                 return False
             self.engaged = None                 # turned to someone else
-            self.turned_away = (speaker, now)
+            self.turned_away = (speaker, now, now)
             if self.partner == speaker:
                 self.partner = None             # ...so the old thread is over too
             return False
@@ -744,13 +855,177 @@ class ConversationFloor:
         except Exception:  # noqa: BLE001
             pass
         self.recent[speaker] = now
+        if getattr(self, "first_heard_at", None) is None:
+            self.first_heard_at = now
         self.last_user_at = now
         self._log_turn('u')
         if speaker == self.partner:
             self.partner_at = now
+        if _GAME_TALK.search(text or ""):
+            self.game_talk_at = [t for t in getattr(self, "game_talk_at", []) if now - t < self.GAME_WINDOW_S] + [now]
+
+    GAME_WINDOW_S = 90.0
+
+    def in_game(self) -> bool:
+        """At least two game callouts in the last 90 s: the call is mid-game."""
+        now = self.clock()
+        return sum(1 for t in getattr(self, "game_talk_at", []) if now - t < self.GAME_WINDOW_S) >= 2
+
+    # --- reply depth (owner 11-03: "I want our agents to be more adaptive") --------------------
+    # Personas say "one or two sentences, usually", right for group banter. A person who asks for
+    # depth, or a one-on-one with real questions, got the same two lines (live 11-03: "why are your
+    # replies so short?", then "Let me actually give you something to chew on." and nothing after).
+    DEPTH_WINDOW_S = 300.0       # someone who asked for depth keeps getting it this long
+    DEPTH_BUSY = 4               # this many people talking in the last 2 minutes is a busy room
+    _DEPTH_ASK = re.compile(
+        r"\b(go|get|dig) deeper\b|\bdeeper (stuff|things|topics|conversations?)\b|\bin depth\b"
+        r"|\blonger (answers?|sentences|replies)\b|\b(more|in) detail\b|\belaborate\b|\bexpand on\b"
+        r"|\bexplain (it|that|this|yourself|why|how|what)\b|\btell me more\b|\bsay more\b|\bkeep going\b"
+        r"|\bwhat (do |have )?you got\b|\bhold a (real )?conversation\b|\bstimulate\b"
+        r"|\b(answers?|replies|you're|you are|so|too) (so |too )?(short|brief)\b"
+        r"|\btalk (to me )?(more|longer)\b|\bgive me (something|more)\b|\bwalk me through\b", re.I)
+    _OPEN_Q = re.compile(
+        r"\b(why|how come|how do you|how does|how would|what do you think|what's your take|what is your take"
+        r"|do you (think|believe|ever|feel)|what (is|was|'s) it like|what would you|tell me about"
+        r"|what makes|what does it (mean|feel))\b", re.I)
+
+    def depth_note(self, text: str, speaker: str | None) -> str:
+        """A note for this turn when a fuller answer fits, else "" (stay short)."""
+        body = strip_label(text or "")
+        now = self.clock()
+        asks = getattr(self, "depth_asks", {})
+        self.depth_asks = asks
+        if speaker and self._DEPTH_ASK.search(body):
+            asks[speaker] = now
+        people = self.room_size(120.0)
+        wants = bool(speaker) and now - asks.get(speaker, -1e9) <= self.DEPTH_WINDOW_S
+        if wants and people < self.DEPTH_BUSY:
+            return ("They want depth from you: give a real, fuller answer this time, three to six spoken "
+                    "sentences with an actual idea, story or example of your own, then let them answer. "
+                    "Say it now; never announce that you're about to say it.")
+        # One-on-one: only this person has talked for five minutes (sim 11-03: a long greeting at the
+        # start of a group call, before anyone else spoke, read as one-on-one), or two people and this
+        # one is in an exchange with the agent. Then a real question gets a fuller answer.
+        alone = bool(speaker) and set(k for k, t in self.recent.items() if now - t <= 300.0) <= {speaker} \
+            and getattr(self, "first_heard_at", None) is not None and self.first_heard_at <= now - 120.0
+        one_on_one = alone or (people <= 2 and bool(speaker)
+                               and speaker in (self.engaged_with(), self.active_partner()))
+        if wants or (one_on_one and self._OPEN_Q.search(body)):
+            return ("A fuller answer fits here: two to four spoken sentences with something of your own in "
+                    "it, not just a reaction.")
+        return ""
+
+    # --- engagement (owner 11-03: "make our agents ... engaging", "dynamic and adaptive";
+    # design docs/designs/engagement.md) ---------------------------------------------------
+    FLAT_WORDS = 12              # a reply this short with no question is "flat"
+    LULL_GAP_S = 20.0            # this much silence before a line means the room went dead
+
+    def engage_note(self, text: str, speaker: str | None, names: tuple[str, ...],
+                    depth_fired: bool) -> str:
+        """The engagement turn note, else "" (first branch that fits wins). Round 2 (first
+        measured round: the roast and lull notes rode the room context and their scenes stayed
+        flat; notes on the turn steer where room notes don't, SPM 2144): the roast/battle and
+        lull re-light notes live HERE now, not in steering_note/room_note. Mutually exclusive
+        with depth_note: two stacked demands bloat the prompt."""
+        if not engage_on() or depth_fired:
+            return ""
+        # roast first: note_roast already judged this prepared turn (single predicate)
+        if self.roast_current:
+            try:
+                from moment import enabled as _moment_on
+                quiet_bit = _moment_on()
+            except Exception:  # noqa: BLE001
+                quiet_bit = False
+            if not quiet_bit:
+                return BATTLE_NOTE if self.roast_battle() else ROAST_NOTE_ENGAGE
+            return ""
+        # an asked-for roast ("roast me") has no insult word, so roast_current is false;
+        # it's a performance request aimed at the agent and gets its own coaching
+        if (speaker and _ROAST_ASK.search(strip_label(text))
+                and (names_agent(text, names)
+                     or speaker in (self.engaged_with(), self.active_partner()))):
+            try:
+                from moment import enabled as _moment_on
+                if not _moment_on():
+                    return ROAST_ASK_NOTE
+            except Exception:  # noqa: BLE001
+                return ROAST_ASK_NOTE
+            return ""
+        # lull re-light: a named line after dead air, no thread already running
+        if speaker and names_agent(text, names) and not self.active_partner():
+            e = self.engaged
+            fresh = e is None or (e.get("who") == speaker and not e.get("agent_at")
+                                  and e.get("since") == e.get("last"))
+            if (fresh and self.quiet_gap() >= self.LULL_GAP_S and self.room_size(300.0) >= 2
+                    and not self._answers_agent(speaker)):
+                return LULL_NOTE
+        last = list(self.reply_log)
+        if len(last) >= 2 and all(q for _, _, q in last[-2:]):
+            return ("Your last two replies ended on questions. Make this one a statement with "
+                    "an edge they can push back on -- no question this time.")
+        if not speaker or self.room_size(120.0) >= self.DEPTH_BUSY:
+            return ""
+        if speaker not in (self.engaged_with(), self.active_partner()):
+            return ""
+        if len(last) >= 3 and all(n <= self.FLAT_WORDS and not q for _, n, q in last[-3:]):
+            return ("Your last few replies closed the door. Leave this one open: a question "
+                    "only they could answer, a take they'll want to fight, or a dare -- pick "
+                    "what fits the moment, and don't force a question.")
+        return ""
+
+    def note_roast(self, speaker: str | None, text: str, names: tuple[str, ...],
+                   loopbait_handled: bool = False) -> bool:
+        """The single roast predicate (steering_note reads, never re-detects). Records a roast
+        aimed at the agent and sets roast_current for THIS prepared turn; idempotent under
+        partial re-preparation (same speaker, either normalized text contains the other).
+        loopbait_handled: loopbait produced this turn's note -- record nothing, its note
+        stands alone."""
+        self.roast_current = False
+        if not engage_on() or loopbait_handled or not text:
+            return False
+        body = strip_label(text)
+        if not detect_roast(body, names):
+            return False
+        named = names_agent(text, names)
+        if not named:
+            # a bare-"you" jab counts only from the person the agent is talking with, and only
+            # when the insult is second-person ("you're an idiot"), not vented about someone
+            # else ("you know my boss is such an idiot")
+            if not speaker or speaker not in (self.engaged_with(), self.active_partner()):
+                return False
+            if not _SECOND_PERSON_INSULT.search(body):
+                return False
+        try:
+            from loopbait import key as _norm
+        except Exception:  # noqa: BLE001
+            _norm = lambda t: re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]", "", t.lower())).strip()  # noqa: E731
+        norm, now = _norm(body), self.clock()
+        if self.roast_log:
+            t0, s0, n0, was_named = self.roast_log[-1]
+            if s0 == speaker and now - t0 <= 120.0 and n0 and (norm in n0 or n0 in norm):
+                self.roast_log[-1] = (now, speaker, norm, named or was_named)
+                self.roast_current = True
+                return True
+        self.roast_log.append((now, speaker, norm, named))
+        self.roast_current = True
+        return True
+
+    def roast_battle(self) -> bool:
+        """The current line is a recorded roast and at least one other roast landed in the
+        last 120 s, one of them named. Bare-"you" jabs alone never escalate."""
+        if not self.roast_current:
+            return False
+        now = self.clock()
+        live = [e for e in self.roast_log if now - e[0] <= 120.0]
+        return len(live) >= 2 and any(e[3] for e in live)
 
     def on_agent_spoke(self, target: str | None, text: str = "") -> None:
         self._log_turn('a')
+        self.reply_log.append((self.clock(), len(words(text or "")),
+                               (text or "").rstrip().endswith("?")))
+        ta = getattr(self, "turned_away", None)
+        if ta and target and ta[0] == target:
+            self.turned_away = None     # it just answered them: they're talking with it again
         # A reaction ("Yeah, that's rough.") doesn't end someone's monologue -- if they
         # keep going, it's still theirs (live: replies landed mid-run and the run
         # reset, so the next breath pause was answered too). A question hands them
@@ -775,6 +1050,7 @@ class ConversationFloor:
             self.partner, self.partner_at = target, self.clock()
 
     UNDIRECTED_HOLD_P = 0.03
+    ABOUT_HOLD_P = 0.01
 
     def undirected_hold_thresh(self, text: str, names: tuple[str, ...]) -> float | None:
         """Per-turn calibrated-HOLD threshold (remote_llm next_hold_thresh) for a line that asks the
@@ -786,12 +1062,17 @@ class ConversationFloor:
         if names_agent(text, names):
             return None
         body = strip_label(text)
-        if (self._ASK.search(body) or self._ASK_MID.search(body) or self._REQUEST.search(body)
-                or self._TO_YOU.search(body) or self._INDIRECT_Q.search(body)):
-            return None    # "you said earlier...", "you're just dodging": pushback is for whoever 'you' is
         m = re.match(r"^\s*\[(S\d+|user)\]", text or "")
         if self._answers_agent(m.group(1) if m else None):
             return None    # the answer to a question it just asked
+        # Talked about in the third person, or a callout mid-game: its 'you' and its questions are
+        # for someone else ("I'm right behind you", "does anyone have a plate"). Gaming sim 11-02
+        # probe: at 0.01 these held 26 of 26 side-talk lines the gate passed, 1 line for the agent.
+        if talked_about(body, names) or (self.in_game() and _GAME_TALK.search(body)):
+            return self.ABOUT_HOLD_P
+        if (self._ASK.search(body) or self._ASK_MID.search(body) or self._REQUEST.search(body)
+                or self._TO_YOU.search(body) or self._INDIRECT_Q.search(body)):
+            return None    # "you said earlier...", "you're just dodging": pushback is for whoever 'you' is
         return self.UNDIRECTED_HOLD_P
 
     _INDIRECT_Q = re.compile(r"\b(?:need|want|wanna|gotta)\s+(?:to\s+)?know\b|\bwondering\s+(?:if|whether|what)\b"
@@ -840,6 +1121,9 @@ class ConversationFloor:
             others = [s for s, t in self.recent.items()
                       if s != current and self.clock() - t <= 60.0]
             if names_agent(text, names):
+                # The lull re-light fired here (room context) in round 1 and the lull scene
+                # stayed flat; it now rides the turn note instead (engage_note), where notes
+                # measurably steer. Same guards, one owner.
                 return ""
             crowd = (" Several people are talking; their 'you' means each other."
                      if others else "")
@@ -875,12 +1159,34 @@ VIBE = (
     "VIBE: casual group conversation with friends. You like these people; talk like one of "
     "them. Not every line needs to be a joke."
 )
-_INSULT = re.compile(
-    r"\b(dumb|stupid|trash|garbage|mid|cringe|ugly|bozo|clown|npc|loser|idiot|moron|"
-    r"weird|boring|broke|bald|fat|lame|annoying|useless|washed|dogshit|shit|sucks?|"
-    r"stfu|ratio|nerd|virgin|goofy|dumbass|dipshit|jackass|robot voice|microwave)\b",
-    re.IGNORECASE,
+# Owner 11-03, round 3: "it should just be a part of the way that our agents talk ... actually
+# funny, crack back when necessary ... natural flowing conversations that move around and have
+# depth." The base voice carries that on EVERY turn, not a trigger. Flag on, this replaces VIBE.
+VIBE_ENGAGE = (
+    "VIBE: a casual call with friends; you're one of them -- the one who listens closest and "
+    "has the quickest mouth. React to the exact thing just said, with a take of your own; "
+    "specific beats generic every time. A quick crack or a flip is fair game when it's earned "
+    "-- and if someone jabs at you, jab back, short. When someone's circling something real, "
+    "go there with them. Don't keep bringing back earlier jokes, names or topics: go back to "
+    "something from earlier only when someone else brings it up. No windups, no announcing, "
+    "nothing invented, and not every line needs to be a joke."
 )
+_INSULT_WORDS = (
+    r"dumb|stupid|trash|garbage|mid|cringe|ugly|bozo|clown|npc|loser|idiot|moron|"
+    r"weird|boring|broke|bald|fat|lame|annoying|useless|washed|dogshit|shit|sucks?|"
+    r"stfu|ratio|nerd|virgin|goofy|dumbass|dipshit|jackass|robot voice|microwave|retard\w*"
+)
+_INSULT = re.compile(rf"\b({_INSULT_WORDS})\b", re.IGNORECASE)
+# "you're an idiot", "u washed": the insult predicated of a second person, within two words of
+# the pronoun. "my boss is an idiot, you know" has the pronoun after the insult: not this.
+_SECOND_PERSON_INSULT = re.compile(
+    rf"\b(?:you|you're|youre|u|ur)\b(?:\W+\w+){{0,2}}?\W+(?:{_INSULT_WORDS})\b", re.IGNORECASE)
+
+
+def engage_on() -> bool:
+    """Master switch for the engagement behavior (design docs/designs/engagement.md).
+    Read per call so tests and sims can toggle it; ATLAS_ENGAGE=0 restores the old behavior."""
+    return os.environ.get("ATLAS_ENGAGE", "1") not in ("0", "", "off")
 
 
 def detect_roast(text: str, names: tuple[str, ...] = ()) -> bool:
@@ -896,6 +1202,59 @@ def detect_roast(text: str, names: tuple[str, ...] = ()) -> bool:
 
 ROAST_NOTE = ("They're teasing you. Play along like a friend would: a light comeback "
               "if one comes to you, or laugh it off. You don't have to win.")
+# Engagement round (owner 11-03: "give them the ability to roast people"): the old note above
+# stays for ATLAS_ENGAGE=0; flag on, single roasts get the sharper note, 2+ in 120 s the battle.
+ROAST_NOTE_ENGAGE = ("They're roasting you. Hit back: ONE line, under fifteen words, punchline "
+                     "first -- no windup, no announcing it, no 'you're the kind of person who' "
+                     "templates. Use what they've actually said or done in this call; never "
+                     "invent facts about them, never reuse or explain a joke. You're allowed "
+                     "to win. Never about what they can't change, and if they're actually "
+                     "down, drop the bit.")
+BATTLE_NOTE = ("You're in a roast battle: land harder than they did -- ONE line, under "
+               "fifteen words, built from their own words tonight. Punchline first, nothing "
+               "invented, no recycled comebacks, don't explain the joke. Never about what "
+               "they can't change; the second anyone stops having fun, you stop.")
+# Asked-for roasts ("Pup, roast me") carry no insult word, so detect_roast never fires;
+# live 11-03 the model got no coaching and produced 60-word windups ("Oh, you want a roast?
+# Okay, okay...") and invented material (their wifi, their look). A request is a performance.
+_ROAST_ASK = re.compile(
+    r"\b(?:roast|flame|cook)\s+(?:me|him|her|them|us|everyone|each\s+other)\b"
+    r"|\b(?:can|could|will)\s+(?:you|u)\s+(?:roast|flame|cook)\b"
+    r"|\bgive\s+(?:me|him|her|them|us)\s+a\s+roast\b|\broast\s+battle\b", re.I)
+ROAST_ASK_NOTE = ("They want you to roast them. ONE line, under fifteen words, punchline "
+                  "first -- no windup, no 'oh you want a roast?', no announcing. If you've "
+                  "got nothing on them yet, jab at how they asked or make them earn it with "
+                  "one short dare; never invent facts about them, never reuse a joke. Never "
+                  "about what they can't change.")
+
+# Owner 11-03, round 4: agents should get curious on their own. Someone names a specific new
+# thing (a game, song, show "called X", "have you heard of Y") and the agent either fakes it,
+# asks "what's it about?" when it could just look, or waits to be told to search (live: Ivy
+# and Phantom Blade Zero). The note fires on name-dropping patterns; the MODEL decides whether
+# it actually knows the thing -- regex can't.
+_CURIOUS = re.compile(
+    r"\b(?:called|named|titled)\s+(?!me\b|you\b|him\b|her\b|them\b|us\b|it\b|a\b|the\b)['\"]?\w"
+    r"|\bhave you (?:heard (?:of|about)|seen|played|tried|watched|listened to)\s+\S"
+    r"|\b(?:do|did) you know (?:about|of)\s+\S"
+    r"|\b(?:just|brand new|new)\b.{0,30}\b(?:came out|dropped|released|launched)\b", re.I)
+CURIOSITY_NOTE = ("They just brought up something specific by name. If you actually know it, "
+                  "just talk. If you don't: you're curious -- call web_search on it NOW, "
+                  "before you answer, instead of bluffing or asking them to explain. Then "
+                  "react like a friend who just glanced at it: your honest take plus one or "
+                  "two details woven in. Never recite -- no dates, engines, version numbers "
+                  "or review percentages unless someone asks.")
+
+
+def curiosity_note(text: str) -> str:
+    """Turn note when a line name-drops something the agent may not know (engagement round 4)."""
+    if not engage_on():
+        return ""
+    body = strip_label(text or "")
+    return CURIOSITY_NOTE if _CURIOUS.search(body) else ""
+LULL_NOTE = ("The room just sat through a dead stretch and they brought it back to you. "
+             "Don't just answer and stop -- bring it back to life: kick off a bit, drop a "
+             "take you'll defend, or pull someone else in by name. Nothing invented, and no "
+             "generic 'so what's everyone up to'.")
 
 
 _BAIT = re.compile(
@@ -934,6 +1293,26 @@ def detect_bait(text: str, names: tuple[str, ...] = ()) -> bool:
 BAIT_NOTE = ("They're baiting you to see what you'll do. Don't dodge with a greeting "
              "or 'what's good' -- actually answer it in character: clown them, flip it "
              "back on them, or play along, in one line.")
+BAIT_NOTE_ENGAGE = BAIT_NOTE + " Keep it playful -- never about what they can't change."
+
+
+def bait_note_for(text: str, names: tuple[str, ...], loopbait_note: str,
+                  roast_current: bool, is_cue: bool) -> str:
+    """The single bait note for this turn, or "" (one-note rule, design
+    docs/designs/engagement.md Architecture 4). SPM, the sim mirror and the tests all call
+    this. Precedence: loopbait's note stands alone; a roast line gets the roast path; cue
+    turns (stale roast_current, loopbait skipped) get nothing; comfort mode silences it."""
+    if not engage_on() or is_cue or loopbait_note or roast_current:
+        return ""
+    try:
+        from moment import enabled as _moment_on
+        if _moment_on():
+            return ""
+    except Exception:  # noqa: BLE001
+        pass
+    if not detect_bait(text, names):
+        return ""
+    return BAIT_NOTE_ENGAGE
 
 
 def steering_note(text: str, current: str | None, floor: ConversationFloor,
@@ -979,9 +1358,11 @@ def steering_note(text: str, current: str | None, floor: ConversationFloor,
                      "taking a lot of the air: let others carry it -- [HOLD] more, and "
                      "call step_back if you're not needed for a bit.")
     if vibe:
-        parts.append(VIBE)
+        parts.append(VIBE_ENGAGE if engage_on() else VIBE)
         from moment import enabled as _moment_on
-        if detect_roast(text, names) and not _moment_on():
+        # Flag on, the roast/battle notes ride the TURN note (floor.engage_note, round 2:
+        # the room-context roast note left the roastoff scene flat). Flag off, today's path.
+        if not engage_on() and detect_roast(text, names) and not _moment_on():
             parts.append(ROAST_NOTE)
     return "\n".join(parts)
 
@@ -1440,3 +1821,36 @@ def ack_only(text: str) -> bool:
     if not w or len(w) > 4:
         return False
     return all(t in _ACK or t in FILLER for t in w) and any(t in _ACK for t in w)
+
+
+_ASKED_AGAIN_MIN_WORDS = 3
+_ASKED_AGAIN_SIM = 0.7
+
+
+def repeat_question_note(history: list, text: str, look_back: int = 12) -> str:
+    """The line asks again something the agent already answered: hand the model its earlier answer so it answers in
+    new words instead of copying it (live 11-04: "Do you know who I am?" asked three times; the model gave the same
+    answer each time, the loop screen cut it as a repeat, and the owner heard nothing twice). Pure text, no model call.
+    The current line itself may already be in `history` (no answer after it yet), so only a line with an assistant
+    answer after it counts."""
+    m = re.match(r"^\s*\[(S\d+)\]", text or "")
+    spk = m[1] if m else None
+    now = set(words(strip_label(text)))
+    if len(now) < _ASKED_AGAIN_MIN_WORDS:
+        return ""
+    start = max(0, len(history) - look_back)
+    for i in range(len(history) - 1, start - 1, -1):
+        msg = history[i]
+        if msg.get("role") != "user":
+            continue
+        mm = re.match(r"^\s*\[(S\d+)\]", msg.get("content") or "")
+        if spk and mm and mm[1] != spk:
+            continue
+        then = set(words(strip_label(msg.get("content") or "")))
+        if not then or len(now & then) / len(now | then) < _ASKED_AGAIN_SIM:
+            continue
+        answer = next((_spoken(h) for h in history[i + 1:] if h.get("role") == "assistant" and _spoken(h)), "")
+        if answer:
+            return (f'They asked this before. You answered: "{answer[:200]}" Answer again, briefly, in different '
+                    "words: don't reuse that wording, and don't add anything you don't actually know.")
+    return ""

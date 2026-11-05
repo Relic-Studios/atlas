@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.6.0 — agents that remember
+
+**New**
+- **A new memory that keeps experiences, not people.** After a call ends (30 quiet minutes, or when you quit), a background pass turns it into a few short memories for each agent: what you talked about, what was funny, how it went. It runs at low priority on the CPU, stops the moment anyone speaks, and only sends text to a cloud provider if you tick "Allow cloud processing". Other people's names are taken out before anything is saved, and agents never keep facts about your friends or their voices from one call to the next. Personal facts are kept only for you, from things you said yourself. It replaces the old graph memory.
+  - **"Remember that…"** saves something on the spot; **"forget that"** removes it; **"off the record"** keeps a stretch of the call out of memory until you say you're back.
+  - **The agent's Memory window** shows the calls it remembers and the facts about you, with switches to use memories, pause, or allow cloud processing, plus "Delete memories" for the past hour, day, week or everything. Upgrading? "Delete old memory data" (under More) removes what the old memory kept.
+  - Until you turn on **Use memories**, agents only use what you asked them to remember. The switch unlocks only when the shipped evaluation report matches the memory code (included as `memory_eval_report.json`): on 36 held-out real calls no stored memory kept a name, and on 1,371 trap probes nothing from off-the-record lines was kept.
+- **The agent recognizes your voice.** Press **This is me** on your row in the room list once; every agent knows it's you in later calls. "Not me" undoes a wrong match for that call; "Forget my voice" deletes it.
+- **Replies fit the moment.** Short banter in a busy room; two to four sentences for a real question one-on-one; a longer answer with an actual idea when someone asks for depth ("go deeper", "tell me more").
+- **Think while listening** (Plugins > Room, off by default; needs a self-hosted vLLM server): the agent thinks privately while someone talks and decides at the pause whether to answer. In simulated group calls it answered side talk less often (19% → 15% of side-talk lines).
+- **Live screen** (Plugins > Senses, off by default; needs Eyes and a self-hosted vLLM server with a vision model): the agent watches the screen or one program live instead of taking occasional screenshots, keeps a short log of what happened, and can give rare tips in known single-player games.
+- **Discord-aware.** In a Discord call the agent knows where it is, and "which channel are we in?" or "who's in the call?" makes it look at Discord's window (just that window, sidebar up close) instead of guessing.
+
+**Changes and fixes**
+- Agents make far fewer callbacks: an unprompted memory needs a strong match and comes at most once every 10 minutes, and earlier lines of the same call come up only when someone asks about them.
+- Agents answer side talk and game chatter less often, and lines about the agent ("is Max a bot?") aren't taken as talking to it.
+- Agents speak as "I", never about themselves in the third person.
+- Faster replies: the decision to speak and the reply come from one request.
+- A question asked right after a short reaction ("All right, what do you got?") is no longer lost; misheard words aren't taken as someone's name.
+- Dashboard: smoother, with the orb and meters drawn at your display's refresh rate, lighter live transcript updates, and buttons that never wait on the voice pipeline.
+- Removed: the Voice mail and Bets plugins.
+
+**Install and uninstall**
+- **New installs go to your own Program Files** (`%LOCALAPPDATA%\Programs\ATLAS`), no admin rights needed. Upgrades keep the folder you already have.
+- **A real uninstaller:** Windows Settings > Apps > ATLAS, "Uninstall ATLAS" in the Start menu, or "Uninstall ATLAS" in the ATLAS folder. It stops ATLAS, removes the shortcuts, the private Python environment, the desktop shell and the app, and asks before deleting your data (settings, voices, agents, memories, call recordings). Installed from source: double-click "Uninstall ATLAS.cmd" (Windows) or run `bash uninstall.sh` (Linux).
+- The installer warns when there's less than 20 GB free, and downloads the small name tagger the memory needs (~590 MB) instead of an unused 2.3 GB embedding model.
+
+**Dependencies**
+- All 122 Python packages an install resolves to, and the desktop shell's packages, were checked against the OSV advisory database. filelock is updated to 4.2.9 and nltk is pinned to 3.10.4 for their published security fixes (the nltk exception in SECURITY.md is gone), and the unused sentence-transformers package is removed.
+- PyTorch stays at 2.8.0 in this release. Its published advisories concern loading untrusted model checkpoints and crafted input to specific functions; ATLAS loads only the models on its fixed download list. A PyTorch update needs its own round of speech and voice testing.
+
 ## 0.5.0 — agents that glance
 
 **New**

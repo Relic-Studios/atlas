@@ -264,6 +264,7 @@ class TranscriptionProcessor:
             self.silence_time = self._get_recorder_param("speech_end_silence_start", 0.0)
             self._potential_end_triggered = False
             self._last_silence_start = None
+            self._potential_end_text = ""
 
             while not self.shutdown_performed:
                 speech_end_silence_start = self.silence_time # Use cached value updated by callback
@@ -304,13 +305,18 @@ class TranscriptionProcessor:
                     if speech_end_silence_start != self._last_silence_start:
                         self._last_silence_start = speech_end_silence_start
                         self._potential_end_triggered = False
+                    # ...and once more if the text changes within the same silence: the partials lag the
+                    # audio, so "Did you feel that?" can fire and "...with this woman?" land a moment later
+                    # in the same pause (live 11-04). Without a new trigger, the longer line got no draft.
+                    current_text = self.realtime_text if self.realtime_text else ""
+                    if self._potential_end_triggered and current_text and current_text != self._potential_end_text:
+                        self._potential_end_triggered = False
                     if time_since_silence > potential_sentence_end_time and not self._potential_end_triggered:
-                        # Check if realtime_text exists before logging/detecting
-                        current_text = self.realtime_text if self.realtime_text else ""
                         logger.info(f"👂🔚 {Colors.YELLOW}Potential sentence end detected (timed out){Colors.RESET}: {current_text}")
                         # Use force_yield=True because this is triggered by timeout, not punctuation detection
                         self.detect_potential_sentence_end(current_text, force_yield=True, force_ellipses=True) # Force ellipses if timeout occurs
                         self._potential_end_triggered = True
+                        self._potential_end_text = current_text
 
                     # 2. Allow TTS synthesis shortly before the final silence duration elapses
                     tts_allowance_time = silence_waiting_time - self._TTS_ALLOWANCE_OFFSET_S
@@ -341,7 +347,9 @@ class TranscriptionProcessor:
                              self.potential_full_transcription_abort_callback()
                     hot = False
 
-                time.sleep(0.001) # Short sleep to prevent busy-waiting dominating CPU
+                # 5 ms, not 1: a thousand GIL grabs a second made this loop the biggest GIL holder in the heavy-call
+                # test (11-04, py-spy); the timings it checks are hundreds of ms
+                time.sleep(0.005)
 
         monitor_thread = threading.Thread(target=monitor, daemon=True)
         monitor_thread.start()

@@ -16,8 +16,8 @@
     <div class="fld"><label>Voice</label><select id="voiceSel"></select></div>
     <div class="fld"><label>Model</label><div id="modelName">—</div></div>
     <div class="headR">
-      <div class="pill own" id="pMute" title="Hard mute: agent says nothing (Ctrl+Shift+M). Click to toggle."><i></i><span id="muteLbl">LIVE</span><div class="eyepop"><div>Hard mute stops the reply mid-word and blocks every turn until you unmute.<br>Hotkey: <b>Ctrl+Shift+M</b> (works from any window).</div></div></div>
-      <div class="pill own q" id="pQuiet" title="Quiet mode: agent only answers when named."><i></i><span id="quietLbl">QUIET</span><div class="eyepop"><div id="quietMeta">Quiet mode: only answers when someone says its name. Click the pill to toggle (10 min).</div><div class="ownrow">quiet<input type="range" id="talkSlider" min="0" max="1" step="0.05">chatty <span id="talkVal"></span></div><div style="font-size:10.5px;color:var(--muted)">Talkativeness for the active agent (saved).</div></div></div>
+      <div class="pill own" id="pMute" tabindex="0" role="button" title="Hard mute: agent says nothing (Ctrl+Shift+M). Click to toggle."><i></i><span id="muteLbl">Live</span><div class="eyepop"><div>Hard mute stops the reply mid-word and blocks every turn until you unmute.<br>Hotkey: <b>Ctrl+Shift+M</b> (works from any window).</div></div></div>
+      <div class="pill own q" id="pQuiet" tabindex="0" role="button" title="Quiet mode: agent only answers when named."><i></i><span id="quietLbl">Quiet</span><div class="eyepop"><div id="quietMeta">Quiet mode: only answers when someone says its name. Click the pill to toggle (10 min).</div><div class="ownrow">quiet<input type="range" id="talkSlider" min="0" max="1" step="0.05">chatty <span id="talkVal"></span></div><div class="phint">Talkativeness for the active agent (saved).</div></div></div>
       <a class="pill plug" id="pPlugins" href="/static/plugins.html" title="Plugins: switch agent abilities on and off, add keys"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v5M15 3v5M7 8h10v3a5 5 0 01-10 0zM12 16v5"/></svg>Plugins</a>
     </div>
   </header>
@@ -26,12 +26,12 @@
     <div class="glass orbwrap">
       <canvas id="orb"></canvas>
       <div class="pname" id="orbName">ATLAS</div>
-      <div class="statebadge" id="orbState">STANDBY</div>
+      <div class="statebadge" id="orbState">Standby</div>
       <div class="lamps">
-        <div class="lamp" id="lHear" style="--lc:94,234,212">HEARING</div>
-        <div class="lamp" id="lThink" style="--lc:167,139,250">THINKING</div>
-        <div class="lamp" id="lSpeak" style="--lc:52,211,153">SPEAKING</div>
-        <div class="lamp" id="lQuiet" style="--lc:251,191,36">QUIET</div>
+        <div class="lamp" id="lHear" style="--lc:94,234,212">Hearing</div>
+        <div class="lamp" id="lThink" style="--lc:167,139,250">Thinking</div>
+        <div class="lamp" id="lSpeak" style="--lc:52,211,153">Speaking</div>
+        <div class="lamp" id="lQuiet" style="--lc:251,191,36">Quiet</div>
       </div>
     </div>
     <div class="glass guide hidden" id="guide">
@@ -41,17 +41,17 @@
     </div>
     <div class="glass meters">
       <div class="ptitle">Audio<span class="right" id="devLabel">—</span></div>
-      <div class="meter"><span>CALL IN</span><div class="bar"><b id="mIn"></b></div><span id="vIn">-∞</span></div>
-      <div class="meter"><span>CLEAN</span><div class="bar"><b id="mClean"></b></div><span id="vClean">-∞</span></div>
-      <div class="meter"><span>VOICE OUT</span><div class="bar"><b id="mOut"></b></div><span id="vOut">-∞</span></div>
-      <div class="meter stutter" title="Voice playback health: audible gaps (buffer ran dry mid-reply), total gap time, current jitter buffer"><span>SMOOTH</span><span id="vStutter" style="grid-column:2/4;text-align:right;font-variant-numeric:tabular-nums">—</span></div>
+      <div class="meter"><span>Call in</span><div class="bar"><b id="mIn"></b></div><span id="vIn">-∞</span></div>
+      <div class="meter"><span>Clean</span><div class="bar"><b id="mClean"></b></div><span id="vClean">-∞</span></div>
+      <div class="meter"><span>Voice out</span><div class="bar"><b id="mOut"></b></div><span id="vOut">-∞</span></div>
+      <div class="meter stutter" title="Voice playback health: audible gaps (buffer ran dry mid-reply), total gap time, current jitter buffer"><span>Smooth</span><span id="vStutter">—</span></div>
       <canvas id="spec"></canvas>
       <canvas id="scope"></canvas>
+      <div class="pipe" id="pipe"><div data-s="hear" title="Hearing someone">Hear</div><div data-s="end" title="Their turn ended">End</div><div data-s="decide" title="Deciding whether to answer">Decide</div><div data-s="gen" title="Writing the reply">Write</div><div data-s="speak" title="Speaking">Speak</div></div>
     </div>
     <div class="glass partial">
       <div class="ptitle">Hearing now<span class="right" id="curSpk">—</span></div>
       <div class="txt empty" id="partialTxt">waiting for speech…</div>
-      <div class="pipe" id="pipe"><div data-s="hear">HEAR</div><div data-s="end">TURN END</div><div data-s="decide">DECIDE</div><div data-s="gen">GENERATE</div><div data-s="speak">SPEAK</div></div>
     </div>
   </section>
 
@@ -61,11 +61,13 @@
     <div class="controls">
       <button class="btn" id="clearBtn" title="Clear the model's conversation history">Clear history</button>
       <button class="btn" id="clearView">Clear view</button>
-      <div class="speed"><span>Turn-taking</span><span style="color:var(--faint)">fast</span><input type="range" id="speed" min="0" max="100" value="0"><span style="color:var(--faint)">patient</span><span id="speedV" style="font-family:var(--mono);min-width:62px;color:var(--accent)">SNAPPY</span></div>
+      <div class="speed"><span class="lbl">Turn-taking</span><span class="hint" style="color:var(--faint)">fast</span><input type="range" id="speed" min="0" max="100" value="0" aria-label="Turn-taking: fast to patient"><span class="hint" style="color:var(--faint)">patient</span><span id="speedV" style="min-width:4.4rem;color:var(--accent);font-weight:600">Snappy</span></div>
     </div>
   </section>
 
   <aside class="side">
+    <div class="sidegrp" id="sideCall">
+      <div class="grph">Call</div>
     <div class="glass panel">
       <div class="ptitle">Latency<span class="right" id="turnsN"></span></div>
       <div class="kpis">
@@ -73,13 +75,35 @@
         <div class="kpi"><div class="l">Decision</div><div class="v" id="kHdr">—</div><canvas id="sHdr"></canvas></div>
         <div class="kpi"><div class="l">Turn pause</div><div class="v" id="kPause">—</div><canvas id="sPause"></canvas></div>
       </div>
-      <div class="kpis" style="margin-top:8px">
+      <div class="kpis">
         <div class="kpi"><div class="l">Speak</div><div class="v" id="cSpeak" style="color:var(--ok)">0</div></div>
         <div class="kpi"><div class="l">Hold</div><div class="v" id="cHold" style="color:var(--warn)">0</div></div>
         <div class="kpi"><div class="l">Invalid / err</div><div class="v" id="cBad" style="color:var(--bad)">0</div></div>
       </div>
     </div>
-
+    <div class="glass panel">
+      <div class="ptitle">Room<span class="right" id="roomN">—</span></div>
+      <div class="floorrow" id="floorRow"></div>
+      <div class="meform" id="meForm" hidden></div>
+      <div class="rowlist" id="roster"></div>
+    </div>
+    <div class="glass panel">
+      <div class="ptitle">Threads<span class="right">arbiter</span></div>
+      <div id="threads"><div class="stats">no open threads</div></div>
+    </div>
+    </div>
+    <div class="sidegrp" id="sideSys">
+      <div class="grph">System</div>
+    <div class="glass panel">
+      <div class="ptitle">Pipeline feed
+        <div class="tabs"><span class="on" data-t="events">Events</span><span data-t="logs">Log</span></div></div>
+      <div class="events" id="events"></div>
+      <div class="logs" id="logs" style="display:none"></div>
+    </div>
+    <div class="glass panel">
+      <div class="ptitle">Model context<span class="right" id="ctxStats">—</span></div>
+      <div class="note" id="roomNote">—</div>
+    </div>
     <div class="glass panel">
       <div class="ptitle">GPU<span class="right" id="gpuName">—</span></div>
       <div class="gpugrid">
@@ -87,38 +111,13 @@
         <canvas class="ring" id="rMem" width="192" height="192"></canvas>
         <div class="stats" id="gpuStats">—</div>
       </div>
-      <canvas id="gpuHist" style="width:100%;height:46px;display:block;margin-top:8px"></canvas>
-      <div class="rowlist" id="gpuProcs" style="margin-top:8px"></div>
+      <canvas id="gpuHist" style="width:100%;height:3.3rem;display:block;margin-top:.6rem"></canvas>
+      <div class="rowlist" id="gpuProcs" style="margin-top:.6rem"></div>
     </div>
-
     <div class="glass panel">
       <div class="ptitle">Models<span class="right" id="procStats">—</span></div>
       <div class="rowlist" id="models"></div>
     </div>
-
-    <div class="glass panel">
-      <div class="ptitle">Room<span class="right" id="roomN">—</span></div>
-      <div class="floorrow" id="floorRow"></div>
-      <div class="rowlist" id="roster"></div>
-    </div>
-
-    <div class="glass panel">
-      <div class="ptitle">Threads<span class="right">arbiter</span></div>
-      <div id="threads"><div class="stats">no open threads</div></div>
-    </div>
-
-    <div class="glass panel">
-      <div class="ptitle">Model context<span class="right" id="ctxStats">—</span></div>
-      <div class="note" id="roomNote">—</div>
-    </div>
-
-    <div class="glass panel">
-      <div class="ptitle">Pipeline feed
-        <div class="tabs"><span class="on" data-t="events">EVENTS</span><span data-t="logs">LOG</span></div></div>
-      <div class="events" id="events"></div>
-      <div class="logs" id="logs" style="display:none"></div>
-    </div>
-
     <div class="glass panel">
       <div class="ptitle">Audio routing</div>
       <div class="devgrid">
@@ -126,14 +125,15 @@
         <div class="fld"><label>Output (voice to call)</label><select id="devOut"></select></div>
       </div>
     </div>
+    </div>
   </aside>
   <footer class="status">
-      <div class="pill" id="pBackend"><i></i>backend</div>
-      <div class="pill" id="pOllama"><i></i>ollama</div>
-      <div class="pill" id="pBridge"><i></i>call</div>
-      <div class="pill" id="pWs"><i></i>link</div>
-      <div class="pill eyes" id="pEyes" title="Let agents look at your screen when asked. Click to toggle."><i></i>EYES<div class="eyepop" id="eyePop"><img id="eyeImg" alt=""><div id="eyeMeta">No looks yet</div></div></div>
-      <div class="pill brain hidden" id="pBrain" title="Where the LLM runs. Click to switch."><i></i><span id="brainLbl">LOCAL</span><div class="eyepop"><div id="brainMeta">…</div></div></div>
+      <div class="pill" id="pBackend"><i></i>Backend</div>
+      <div class="pill" id="pOllama"><i></i>Ollama</div>
+      <div class="pill" id="pBridge"><i></i>Call</div>
+      <div class="pill" id="pWs"><i></i>Link</div>
+      <div class="pill eyes" id="pEyes" title="Let agents look at your screen when asked. Click to toggle."><i></i>Eyes<div class="eyepop" id="eyePop"><img id="eyeImg" alt=""><div id="eyeMeta">No looks yet</div></div></div>
+      <div class="pill brain hidden" id="pBrain" title="Where the LLM runs. Click to switch."><i></i><span id="brainLbl">Local LLM</span><div class="eyepop"><div id="brainMeta">…</div></div></div>
       <div class="sp"></div>
       <div class="clock" id="uptime">--:--:--</div>
   </footer>
@@ -144,15 +144,15 @@
   <div id="ovMsg" style="color:var(--muted);font-size:12px;margin-top:6px">reconnecting…</div></div></div>
 <div class="modal" id="creatorModal">
   <div class="glass creator" role="dialog" aria-label="Create agent">
-    <div class="ch"><div class="ttl">NEW AGENT</div>
-      <div class="steps"><b id="stp1" class="on">1 · DESCRIBE</b><b id="stp2">2 · REFINE</b></div>
+    <div class="ch"><div class="ttl">New agent</div>
+      <div class="steps"><b id="stp1" class="on">1 · Describe</b><b id="stp2">2 · Refine</b></div>
       <div class="x" id="crClose" title="Close (Esc)">✕</div></div>
     <div class="cb" id="crStep1">
       <div class="preview-row">
         <div class="av big" id="crAv1">?</div>
         <div class="row">
           <div class="fld"><label>Name</label><input class="cin" id="crName" maxlength="40" placeholder="e.g. Gordon"></div>
-          <div class="fld"><label>Voice</label><div style="display:flex;gap:6px"><select id="crVoice" style="flex:1"></select><button class="btn" id="crVoiceUp" title="Import a voice from an audio clip (4-20 s of one person talking, no music)">+ VOICE</button></div><div class="hint" id="crVoiceHint"></div></div>
+          <div class="fld"><label>Voice</label><div style="display:flex;gap:6px"><select id="crVoice" style="flex:1"></select><button class="btn" id="crVoiceUp" title="Import a voice from an audio clip (4-20 s of one person talking, no music)">+ Voice</button></div><div class="hint" id="crVoiceHint"></div></div>
         </div>
       </div>
       <div class="fld"><label>Who are they? Describe them in your own words</label>
@@ -184,10 +184,10 @@
     </div>
     <div class="cf">
       <div class="err" id="crErr"></div>
-      <button class="btn" id="crBack" style="display:none">BACK</button>
-      <button class="btn" id="crSkip" title="Use the description as-is without the model">SKIP MODEL</button>
-      <button class="btn primary" id="crNext">INTERPRET →</button>
-      <button class="btn primary" id="crCreate" style="display:none">CREATE &amp; SWITCH</button>
+      <button class="btn" id="crBack" style="display:none">Back</button>
+      <button class="btn" id="crSkip" title="Use the description as-is without the model">Skip model</button>
+      <button class="btn primary" id="crNext">Interpret →</button>
+      <button class="btn primary" id="crCreate" style="display:none">Create &amp; switch</button>
     </div>
   </div>
 </div>
@@ -195,9 +195,40 @@
 <input type="file" id="crVoiceFile" accept="audio/*,.wav,.mp3,.flac,.ogg,.m4a" style="display:none">
 <div class="modal" id="memModal">
   <div class="glass agmem" role="dialog" aria-label="Agent memory">
-    <div class="ch"><div class="ttl" id="memTitle">MEMORY</div><span class="x" id="memClose" title="Close">×</span></div>
+    <div class="ch"><div class="ttl" id="memTitle">Memory</div><span class="x" id="memClose" title="Close">×</span></div>
     <div class="cb">
       <div class="counts" id="memCounts"><span>loading…</span></div>
+      <div class="memsec">
+        <div class="memh">Calls this agent remembers</div>
+        <div class="memlist" id="memEpisodes"></div>
+        <div class="memlist" id="memReview"></div>
+      </div>
+      <div class="memsec">
+        <div class="memh">Shared by every agent</div>
+        <div class="memswitches">
+          <label title="Agents use the memories the post-call pass made. Turns on once the evaluation passes.">
+            <input type="checkbox" id="memUse"> Use memories</label>
+          <label title="Stop making new memories; agents still use what's kept"><input type="checkbox" id="memPause"> Pause</label>
+          <label title="Let the post-call pass send redacted transcripts to a cloud model provider">
+            <input type="checkbox" id="memCloud"> Allow cloud processing</label>
+        </div>
+        <div class="hint" id="memReport"></div>
+        <div class="memh2">About you</div>
+        <div class="memlist" id="memFacts"></div>
+        <div class="memrow"><span class="hint" id="memCalls"></span><span class="sp"></span>
+          <button class="btn" id="memProcess" title="Make memories from finished calls now">Process now</button></div>
+        <details class="memmore"><summary>More</summary>
+          <div class="memh2">Game and product names to keep (one per line)</div>
+          <textarea id="memAllow" rows="3" spellcheck="false"></textarea>
+          <div class="memrow"><span class="sp"></span><button class="btn" id="memAllowSave">Save names</button></div>
+          <div class="memh2">Memory pass log</div>
+          <pre class="memlog" id="memLog"></pre>
+          <div class="memrow">
+            <button class="btn danger" id="memClearFacts">Clear facts about you</button>
+            <button class="btn danger" id="memOld">Delete old memory data</button>
+          </div>
+        </details>
+      </div>
       <div>
         <div class="wipe">
           <select id="memWindow" aria-label="How far back to delete">
@@ -207,21 +238,22 @@
             <option value="1w">Past week</option>
             <option value="all">Everything</option>
           </select>
-          <button class="btn danger" id="memWipe">DELETE MEMORIES</button>
+          <button class="btn danger" id="memWipe">Delete memories</button>
         </div>
         <div class="hint" id="memHint" style="margin-top:6px"></div>
       </div>
     </div>
     <div class="cf">
-      <button class="btn" id="memOpen" title="Open this agent's memory folder">OPEN FOLDER</button>
+      <button class="btn" id="memOpen" title="Open this agent's memory folder">Open folder</button>
       <span class="sp"></span>
-      <button class="btn danger" id="memDelAgent" style="display:none">DELETE AGENT</button>
-      <button class="btn" id="memDone">CLOSE</button>
+      <button class="btn danger" id="memDelAgent" style="display:none">Delete agent</button>
+      <button class="btn" id="memDone">Close</button>
     </div>
   </div>
 </div>
 <div class="avtip" id="avTip"></div>
 <div class="toast glass" id="toast"></div>
+<div class="vnotice glass" id="voiceNote" role="status" hidden><span class="vtext"></span><span class="mebtn" id="voiceNoteNotMe" tabindex="0" role="button">Not me</span></div>
 <script src="/static/atlas.js"></script>
 </body>
 </html>

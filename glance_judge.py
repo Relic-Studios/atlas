@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import logging
 import math
+import re
+import threading
 import time
 
 logger = logging.getLogger(__name__)
@@ -93,6 +95,103 @@ def p_glance(line: str, before: str = "", timeout: float = TIMEOUT_S):
     p = yes / (yes + no)
     stats["yes"] += p >= THRESHOLD
     return p
+
+
+# Live screen (docs/designs/live_screen.md): does a line said to the agent need a look at the screen right now?
+# Phase 0 (work/egm/live-screen/phase0_results.md): this wording, threshold 0.75, caught every screen line of
+# the held-out half with no false alarm; the first wording counted any game talk. Acting on its verdicts since
+# 11-03 (live_screen.config.SCREEN_DETECT; owner's call after that day's real calls).
+SCREEN_SYSTEM = (
+    "You are part of a voice assistant in a Discord call. It can look at the player's game screen or a friend's "
+    "stream. Decide if the line just said, which was said to the assistant, needs the assistant to look at the "
+    "screen right now to answer or react well: a question or remark about what is on the screen at this moment "
+    "(what is happening, what something is, where to go or what to do here, what just happened, text on the "
+    "screen). Answer no for general game knowledge or strategy that does not depend on this screen, for talk about "
+    "other times or places, and for anything that is not about a screen. Answer yes or no.")
+screen_stats = {"asked": 0, "yes": 0, "errors": 0, "ms": []}
+
+
+def p_screen(line: str, timeout: float = TIMEOUT_S):
+    """Probability the line needs a look at the screen right now; None if the model can't answer."""
+    s, cfg = _client()
+    if s is None:
+        return None
+    body = {"model": cfg["model"], "temperature": 0, "max_tokens": 1, "logprobs": True, "top_logprobs": 10,
+            "messages": [{"role": "system", "content": SCREEN_SYSTEM},
+                         {"role": "user", "content": f"Line: \"{line.strip()}\""}],
+            "chat_template_kwargs": {"enable_thinking": False}}
+    screen_stats["asked"] += 1
+    t0 = time.perf_counter()
+    try:
+        r = s.post(cfg["url"] + "/v1/chat/completions", json=body, timeout=(1.0, timeout))
+        top = r.json()["choices"][0]["logprobs"]["content"][0]["top_logprobs"]
+    except Exception as e:  # noqa: BLE001
+        screen_stats["errors"] += 1
+        logger.debug("screen judge failed: %s", e)
+        return None
+    finally:
+        screen_stats["ms"] = (screen_stats["ms"] + [round((time.perf_counter() - t0) * 1000)])[-200:]
+    yes = sum(math.exp(t["logprob"]) for t in top if t["token"].strip().lower() == "yes")
+    no = sum(math.exp(t["logprob"]) for t in top if t["token"].strip().lower() == "no")
+    if yes + no <= 0:
+        return None
+    return yes / (yes + no)
+
+
+# Verdicts by line. The judge took ~0.2 s in front of every reply to a line said to the agent (heavy-call test 11-04,
+# owner: "the lag started appearing after our live video system was implemented"), so a question is judged from the
+# partial transcripts while its last words come in, and the turn usually finds its verdict ready.
+VERDICT_KEEP_S = 60.0
+PREFETCH_MAX = 2                   # judge requests from partials in flight at once
+_verdicts: dict = {}
+_vlock = threading.Lock()
+
+
+def _key(line: str) -> str:
+    """The same words however the transcript spelled them ("All right," / "Alright")."""
+    return re.sub(r"[^a-z0-9]+", "", (line or "").lower().replace("all right", "alright"))
+
+
+def _judge_into(line: str, entry: dict) -> None:
+    try:
+        entry["p"] = p_screen(line)
+    finally:
+        entry["done"].set()
+
+
+def prefetch_screen(line: str) -> bool:
+    """Judge this line in the background (a partial that may be the finished line). Never blocks; at most
+    PREFETCH_MAX at once. True if a judge request started."""
+    key = _key(line)
+    if not key:
+        return False
+    now = time.time()
+    with _vlock:
+        for k in [k for k, e in _verdicts.items() if now - e["t"] > VERDICT_KEEP_S]:
+            del _verdicts[k]
+        if key in _verdicts or sum(not e["done"].is_set() for e in _verdicts.values()) >= PREFETCH_MAX:
+            return False
+        entry = _verdicts[key] = {"t": now, "p": None, "done": threading.Event()}
+    threading.Thread(target=_judge_into, args=(line, entry), name="screen-question", daemon=True).start()
+    return True
+
+
+def screen_verdict(line: str, timeout: float = TIMEOUT_S):
+    """p_screen for a line said to the agent: the verdict judged while it was being said (waiting for one still
+    running, never past its own timeout), else judged now. None if the model can't answer."""
+    key = _key(line)
+    with _vlock:
+        entry = _verdicts.get(key)
+        if entry is None:
+            entry = _verdicts[key] = {"t": time.time(), "p": None, "done": threading.Event()}
+            mine = True
+        else:
+            mine = False
+    if mine:
+        _judge_into(line, entry)
+    else:
+        entry["done"].wait(max(0.0, entry["t"] + timeout + 0.05 - time.time()))
+    return entry["p"]
 
 
 # Cheap prefilter: the judge only runs on lines that could be about something visible.

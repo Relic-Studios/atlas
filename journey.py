@@ -3,7 +3,7 @@
     Set up  ->  Make an agent  ->  Start a conversation  ->  Review
 
 Pure reads of state that already exists (settings, agent registry, recordings,
-memory candidates); no model calls, safe to poll. GET /api/journey (owner only)
+owner facts waiting for confirmation); no model calls, safe to poll. GET /api/journey (owner only)
 returns the steps, which one is current and a one-line hint for it.
 
 Review is the step that makes agents better over time (approve memories, read
@@ -50,10 +50,11 @@ def _user_agents() -> list[str]:
 
 
 def _pending_candidates(agents: list[str]) -> int:
+    """Memory items waiting for the owner: "to confirm" owner facts and failed calls (experience_memory)."""
     try:
-        import call_memory as CM
-        return sum(1 for a in agents for i in CM.load(a) if i.get("status") == "candidate")
-    except Exception:  # noqa: BLE001
+        import experience_memory as EM
+        return int(EM.review_count())
+    except Exception:  # noqa: BLE001 - nothing to review until the experience memory is in place
         return 0
 
 
@@ -78,7 +79,7 @@ def state(settings: dict | None = None, rec_dir: Path = REC_DIR) -> dict:
         "setup": "Pick a model (local or cloud), your audio devices and a voice.",
         "agent": "Click + in the Agent dock: give it a voice and describe who it is.",
         "call": "Bring it into a group conversation (a voice call or the room you're in) and say its name. It answers when it's spoken to.",
-        "review": (f"{pending} memory suggestion(s) waiting. Right-click an agent to review or clear its memory."
+        "review": (f"{pending} memory item(s) waiting for you to check. Right-click an agent to open its memory."
                    if pending else "Your last conversation is ready to look over: what it said and what it remembered."),
     }
     if all(done.values()):

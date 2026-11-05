@@ -427,6 +427,14 @@ class LLM:
                     state["cancelled"] = True
                     streams.append(state["stream"])
                     state["stream"] = None
+        if streams:
+            # A remote session may still be inside post() (e.g. finishing a thought): stop that too.
+            interrupt = getattr(self.ollama_session, "interrupt", None)
+            if callable(interrupt):
+                try:
+                    interrupt()
+                except Exception as exc:
+                    logger.warning("Error interrupting remote session: %s", exc)
         for stream in streams:
             self._close_stream(stream)
         return bool(streams)
@@ -621,6 +629,60 @@ class LLM:
         logger.error(f"🤖🔥💥 Prewarm failed after exhausting retries. Last error: {last_error}")
         return False
 
+    def build_messages(self, text: str, history: Optional[List[Dict[str, str]]] = None,
+                       use_system_prompt: bool = True, participation: bool = False,
+                       memory_context: str = '', room_context: str = '', log: bool = True) -> list:
+        """The chat messages generate() sends: system prompt (+ decision protocol, room note, memory),
+        history copies, and the user turn (with /no_think when set). Also used by the think-while-
+        listening thinker (think_listen.py) with log=False."""
+        messages = []
+        if use_system_prompt and self.system_prompt_message:
+            messages.append(dict(self.system_prompt_message))
+        if participation:
+            from response_decision import DECISION_PROMPT
+            speaker_match = re.match(r'^\s*\[(S\d+)\]', text)
+            current_speaker = speaker_match[1] if speaker_match else 'user'
+            protocol = (DECISION_PROMPT + '\n\nCURRENT TURN: speaker=' + current_speaker
+                        + '. If speaking, the required first header is [SPEAK to='
+                        + current_speaker + ']. If silent, output only [HOLD].')
+            if room_context:
+                protocol += '\n' + room_context
+            if messages:
+                messages[0]['content'] += '\n\n' + protocol
+            else:
+                messages.append({'role': 'system', 'content': protocol})
+        if memory_context:
+            # local-model (Qwen3.5) template rejects any system message that isn't
+            # the FIRST message. Merge into the lead system message instead of
+            # appending a second one (that second message 500'd ollama).
+            if messages:
+                messages[0]['content'] += '\n\n' + memory_context
+            else:
+                messages.append({"role": "system", "content": memory_context})
+        if history:
+            # Deep-copy each history dict: generate() mutates the tail message
+            # (prepends "/no_think"), and without copies that mutation leaks back
+            # into SpeechPipelineManager.history, corrupting context across turns.
+            messages.extend(dict(m) for m in history)
+
+        # A held room turn leaves a USER at the tail. That is not necessarily
+        # the current turn; never silently discard a new utterance based on role.
+        if (not messages or messages[-1]["role"] != "user"
+                or messages[-1].get('content') != text):
+            added_text = text # for normal text
+            if self.no_think:
+                 # Qwen3-native token-level instruction. Empirically cuts the
+                 # pre-content reasoning trace ~209 -> ~59 tokens (TTFT 11.5s -> 3.5s),
+                 # unlike chat_template_kwargs which the model ignores.
+                added_text = f"/no_think {text}"
+            if log:
+                logger.info(f"🧠💬 llm_module.py generate adding role user to messages, content: {added_text}")
+            messages.append({"role": "user", "content": added_text})
+        elif self.no_think and messages[-1]["role"] == "user":
+            # last message is already a user turn (history tail): prefix it in place
+            messages[-1]["content"] = f"/no_think {messages[-1]['content']}"
+        return messages
+
     def generate(
         self,
         text: str,
@@ -662,53 +724,11 @@ class LLM:
         memory_context = kwargs.pop('memory_context', '')
         room_context = kwargs.pop('room_context', '')
         prefetch_tool = kwargs.pop('prefetch_tool', None)
-        messages = []
-        if use_system_prompt and self.system_prompt_message:
-            messages.append(dict(self.system_prompt_message))
         if participation:
-            from response_decision import DECISION_PROMPT
-            speaker_match = re.match(r'^\s*\[(S\d+)\]', text)
-            current_speaker = speaker_match[1] if speaker_match else 'user'
-            protocol = (DECISION_PROMPT + '\n\nCURRENT TURN: speaker=' + current_speaker
-                        + '. If speaking, the required first header is [SPEAK to='
-                        + current_speaker + ']. If silent, output only [HOLD].')
-            if room_context:
-                protocol += '\n' + room_context
             for _k, _v in PARTICIPATION_SAMPLING.items():
                 kwargs.setdefault(_k, _v)
-            if messages:
-                messages[0]['content'] += '\n\n' + protocol
-            else:
-                messages.append({'role': 'system', 'content': protocol})
-        if memory_context:
-            # local-model (Qwen3.5) template rejects any system message that isn't
-            # the FIRST message. Merge into the lead system message instead of
-            # appending a second one (that second message 500'd ollama).
-            if messages:
-                messages[0]['content'] += '\n\n' + memory_context
-            else:
-                messages.append({"role": "system", "content": memory_context})
-        if history:
-            # Deep-copy each history dict: generate() mutates the tail message
-            # (prepends "/no_think"), and without copies that mutation leaks back
-            # into SpeechPipelineManager.history, corrupting context across turns.
-            messages.extend(dict(m) for m in history)
-
-        # A held room turn leaves a USER at the tail. That is not necessarily
-        # the current turn; never silently discard a new utterance based on role.
-        if (not messages or messages[-1]["role"] != "user"
-                or messages[-1].get('content') != text):
-            added_text = text # for normal text
-            if self.no_think:
-                 # Qwen3-native token-level instruction. Empirically cuts the
-                 # pre-content reasoning trace ~209 -> ~59 tokens (TTFT 11.5s -> 3.5s),
-                 # unlike chat_template_kwargs which the model ignores.
-                added_text = f"/no_think {text}"
-            logger.info(f"🧠💬 llm_module.py generate adding role user to messages, content: {added_text}")
-            messages.append({"role": "user", "content": added_text})
-        elif self.no_think and messages[-1]["role"] == "user":
-            # last message is already a user turn (history tail): prefix it in place
-            messages[-1]["content"] = f"/no_think {messages[-1]['content']}"
+        messages = self.build_messages(text, history, use_system_prompt, participation, memory_context,
+                                       room_context)
         logger.debug(f"🤖💬 [{req_id}] Prepared messages count: {len(messages)}")
 
         stream_iterator = None
@@ -1117,14 +1137,18 @@ class LLM:
     def _run_prefetch(self, prefetch, working, seen_queries, request_id) -> None:
         """Execute one tool up front and append call + result to `working` (never raises)."""
         try:
-            name, args = prefetch
+            # (name, args, result): the turn already ran the tool (a Live screen look, run before the turn's
+            # notes were written so they know whether frames came back); use that result.
+            name, args = prefetch[0], prefetch[1]
+            ran = len(prefetch) > 2
             calls = [{"function": {"name": name, "arguments": dict(args or {})}}]
             if self.on_tool_call is not None:
                 try:
                     self.on_tool_call(calls)
                 except Exception as e:  # noqa: BLE001
                     logger.warning(f"🤖⚠️ [{request_id}] on_tool_call error: {e}")
-            result = self.tool_executor(name, dict(args or {}))
+            result = prefetch[2] if ran else self.tool_executor(name, dict(args or {}))
+            live = isinstance(result, dict) and bool(result.get("live"))
             cb = getattr(self, "on_tool_result", None)
             if cb is not None:
                 try:
@@ -1137,7 +1161,15 @@ class LLM:
                 glance = bool(result.get("glance"))
                 result = str(result.get("text") or "")
             result = str(result)
-            if images and glance:
+            if live and images and glance:
+                result += ("\n[You glanced at the live screen just now, on your own. Let it show only if it "
+                           "fits what they said; don't describe the frames.]")
+            elif live and images:
+                result += ("\n[These frames are from the live screen, for this turn. Describe only what is in "
+                           "them; anything you said about the screen before is out of date.]")
+            elif live:
+                pass                                   # "can't see": its own text says so
+            elif images and glance:
                 result += ("\n[You glanced at the screen just now, on your own. Let it show only if it "
                            "fits what they said; don't describe the screenshot.]")
             elif images:

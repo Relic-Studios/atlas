@@ -11,8 +11,13 @@ class Predictions(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
+        import call_boundary          # no call in progress here: nothing to scrub (design D8)
+        from unittest import mock
+        self._p = mock.patch.object(call_boundary, "BOUNDARY", call_boundary.CallBoundary(write_files=False))
+        self._p.start()
 
     def tearDown(self):
+        self._p.stop()
         self.tmp.cleanup()
 
     def test_log_check_resolve_record(self):

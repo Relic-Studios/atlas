@@ -736,7 +736,32 @@ def note_room_name(name: str, when: Optional[float] = None) -> None:
     import time as _t
     n = (name or "").strip().lower()
     if 2 <= len(n) <= 24 and n not in _NOT_NAMES:
+        new = n not in _ROOM_NAMES
         _ROOM_NAMES[n] = _t.time() if when is None else when
+        if new:
+            try:   # the pending file keeps the call's names (docs/designs/experience_memory.md, D2)
+                import call_boundary as _cbn
+                _cbn.name_event("room", (name or "").strip())
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def clear_room_names() -> None:
+    """Call end (docs/designs/experience_memory.md, S4): names used in this call do not carry into the next one."""
+    _ROOM_NAMES.clear()
+
+
+def room_names() -> list:
+    """Names the room has used in this call (call_boundary.call_names reads them)."""
+    return list(_ROOM_NAMES)
+
+
+try:
+    import call_boundary as _cb
+    _cb.register("conversation_dynamics.clear_room_names", clear_room_names, order=6)
+    _cb.BOUNDARY.add_name_source("room_names", room_names)
+except Exception:  # noqa: BLE001
+    pass
 
 
 def _is_room_name(word: str) -> bool:
@@ -746,12 +771,33 @@ def _is_room_name(word: str) -> bool:
 
 
 _GREETING_LEAD_RE = re.compile(
-    r"^\s*(?:(?:hey|hi|hello|yo|oi|ay+|ok|okay|alright|so|wait|oh|and|but|well|"
-    r"listen|look|bro|dude|man)\b[,!.]?\s+)+", re.I)
-# Name after a greeting, any case: "hey perma, ..." / "Yo Kraken did you ...".
+    r"^\s*(?:(?:hey|hi|hello|yo|oi|ay+|ok|okay|alright|aight|so|wait|oh\s+my\s+(?:god|gosh)|omg|oh|and|but|well|"
+    r"listen|look|bro|dude|man|dale|vale|órale|orale|pues)\b[,!.]?\s+)+", re.I)
+# Name after a greeting, any case: "hey perma, ..." / "Yo Kraken did you ..." / "yo Kayy what song"
+# (offcall sim 11-02: comma-less question to a friend, answered by the agent).
 _GREETED_NAME_RE = re.compile(
     r"^([A-Za-z][A-Za-z0-9]{1,15})(?:(?P<p>\s*[,!?]|\s*$)|\s+(?:you|u|ya|your|you're)\b|"
-    r"\s+(?:did|do|can|could|would|will|are|were|have)\s+(?:you|u|ya)\b)", re.I)
+    r"\s+(?:did|do|can|could|would|will|are|were|have)\s+(?:you|u|ya)\b|"
+    r"\s+(?:what|what's|whats|who|who's|where|where's|why|how|how's|when|which)\b)", re.I)
+# Lines for people who aren't in the call (offcall sim 11-02): a streamer talking to their chat
+# ("vale chat, chat, calm down", "gracias for the follow, Lucas", "chat says I'm bad") and someone
+# answering family at home ("mom I'm on a call"). Only checked when the agent isn't named.
+_STREAM_CHAT_RE = re.compile(
+    r"\b(?:thanks|thank\s+you|thx|ty|gracias|merci|danke)\s+(?:so\s+much\s+)?for\s+(?:the\s+)?(?:follow|sub|subs|"
+    r"subscription|raid|bits|prime|gifted|gift|dono|donation|host)\b"
+    r"|(?:^|[,.!?;:]\s*|\b(?:okay|ok|vale|yo|hey|alright|aight|no|yes|yeah|nah|bro|wait|pues|ay)\s+)chat\b(?!\s*gpt)",
+    re.I)
+_HOUSEHOLD_RE = re.compile(
+    r"(?:^|[,.!?;:]\s*|\b(?:hey|hi|hello|yo|ay|oh)\s+)(mom|mum|mommy|mama|dad|daddy|papa|grandma|nana|abuela|abuelo)\b"
+    r"(?=\s*(?:[,!.?]|$|i'm\b|im\b|i'll\b|i\s|wait\b|hold\b|one\s+sec|give\b|what\b|yes\b|yeah\b|no\b|okay\b|ok\b|"
+    r"stop\b|leave\b|please\b|coming\b))", re.I)
+# The agent called "AI" in address position wins over everything else in the line: "chat wants
+# to know, what do you think, AI, ..." (gaming sim 11-02: held as "addressed to chat").
+_AI_VOCATIVE_RE = re.compile(r"(?:^|[,.!?;:]\s*|\b(?:hey|hi|yo|okay|ok|alright|aight|so|oi|oye)\s+)"
+                             r"(?:ai|a\.i\.|bot|robot)\s*(?:[,?!.]|$)", re.I)
+# Someone answering a phone or a person at home: "I'm on a call", "estoy en una llamada".
+_ON_A_CALL_RE = re.compile(r"\b(?:i'?m|i\s+am)\s+(?:on|in)\s+a\s+call\b|\bestoy\s+en\s+una\s+llamada\b"
+                           r"|\b(?:i'?ll|i\s+go|let\s+me)\s+call\s+you\s+back\b", re.I)
 # Mid-sentence vocative set off by commas, aimed at someone:
 # "...and now I've heard, Perma, you were talking about your brain."
 _MID_VOCATIVE_RE = re.compile(
@@ -849,7 +895,37 @@ def detect_other_addressee(text: str, names: tuple[str, ...]) -> Optional[str]:
         return None
     if who and who.lower() in role_words(tuple(n.lower() for n in names)):
         return None               # "hey ninja, ..." to Kai is the agent itself
+    if who and _not_really_address(_SPEAKER_LABEL_RE.sub("", text or ""), who):
+        return None
     return who
+
+
+_REACTION_ONLY = re.compile(r"\s*,\s*(?:ok|okay|exactly|right|yeah|yes|yep|no|nope|true|sure|nice|wow|cool|correct|"
+                            r"same|facts|damn|lol|indeed)\s*(?:[.!?]|$)", re.I)
+
+
+def _not_really_address(body: str, who: str) -> bool:
+    """A capitalised word before a comma that isn't someone being spoken to (live 11-02: each of these
+    held the line, and the speaker's next lines were held as "talking to someone else" -- a guest
+    asking Ivy about GPUs got no answer for a minute): a repeated word ("Admin, admin, I'm the
+    admin", "Betra, betra"), a list ("Syria, Lebanon, Palestine and Jordan"), or a word the room has
+    never used as a name followed by only a reaction ("Deadlock, exactly.", "Quinn, ok." for Qwen)."""
+    if who.lower() in ("chat", "phone") or _HOUSEHOLD_RE.search(who + ","):
+        return False
+    w = re.escape(who)
+    # doubled AND used as a plain noun or spelled out: "Admin, admin, I'm the admin" / "Betra, betra,
+    # ja. P-E-T-R-E" -- but "Bob, Bob, run to me" is address (gaming sims: 33 such lines)
+    noun_use = re.search(r"\b(?:the|a|an|my|your|our|this|that)\s+" + w + r"\b", body, re.I)
+    spelled = re.search(r"\b[A-Z](?:-[A-Z]){2,}\b", body)
+    for m in re.finditer(r"\b" + w + r"\b", body):
+        after = body[m.end():]
+        if (noun_use or spelled) and re.match(r"\s*,?\s*" + w + r"\b", after, re.I):
+            return True
+        if re.match(r"\s*,\s*[A-Z][a-z]+(?:\s*,\s*[A-Z][a-z]+|\s+and\s+[A-Z][a-z]+)", after):
+            return True
+        if not _is_room_name(who) and _REACTION_ONLY.match(after):
+            return True
+    return False
 
 
 def _detect_other_addressee(text: str, names: tuple[str, ...]) -> Optional[str]:
@@ -861,8 +937,15 @@ def _detect_other_addressee(text: str, names: tuple[str, ...]) -> Optional[str]:
         if _is_agent_name(token, names) and (token[0].isupper()
                                              or token.lower() in tuple(n.lower() for n in names)):
             return None
-    if any(p.search(body) for p in _GENERIC_ALIAS_PATTERNS):
+    if any(p.search(body) for p in _GENERIC_ALIAS_PATTERNS) or _AI_VOCATIVE_RE.search(body):
         return None
+    if _STREAM_CHAT_RE.search(body):
+        return "chat"
+    hm = _HOUSEHOLD_RE.search(body)
+    if hm:
+        return hm.group(1)
+    if _ON_A_CALL_RE.search(body):
+        return "phone"
     # Greeting + handle, per sentence ("I'm here. Hey Perma, you back?").
     for sent in re.split(r"(?<=[.!?])\s+", body):
         g = _GREETING_LEAD_RE.match(sent)

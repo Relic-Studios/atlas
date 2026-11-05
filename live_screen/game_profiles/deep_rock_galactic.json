@@ -1,0 +1,12 @@
+{
+ "name": "Deep Rock Galactic",
+ "processes": [
+  "fsd-win64-shipping.exe",
+  "fsd.exe"
+ ],
+ "titles": [
+  "Deep Rock Galactic"
+ ],
+ "competitive": false,
+ "spoilers": "full"
+}

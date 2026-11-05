@@ -14,11 +14,17 @@ candidates so the agent can clarify ("wait, are you Maya?").
 Optional cross-call memory: learned names are saved with the diarizer's voice
 centroid (memory_db/voiceprints.json). A new voice that matches a saved print is
 only a *probable* name that the agent is told to confirm; it is never asserted.
+
+The owner is different (owner_voice.py, docs/designs/owner_voice.md): `NameBook.owner`
+is the session's owner_voice.Adopter. A label it has adopted reads the owner's name
+at read time (nothing is copied into a Person), and no other label may take the
+owner's name from anything said in the call. With `owner = None` nothing changes.
 """
 from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import threading
 import time
@@ -173,8 +179,86 @@ class NameBook:
         self.store = Path(store) if store else None
         self._prints: dict[str, list[float]] = {}
         self.aliases: dict[str, str] = {}       # diarizer folded label -> surviving label
+        self.owner = None                       # owner_voice.Adopter (the owner-name hook), or None
         self._lock = threading.Lock()
         self._load()
+
+    # ------------------------------------------------------------ the owner (owner_voice.Adopter)
+    def _owner_of(self, label) -> str | None:
+        """The owner's name if this label (after merges) is adopted as the owner, else None."""
+        o = self.owner
+        if o is None or not label:
+            return None
+        try:
+            return o.owner_name(self._resolve(label))
+        except Exception:  # noqa: BLE001 - the hook must never break naming
+            return None
+
+    def _owner_first(self) -> str:
+        """First word of the stored owner name (casefolded) while a voice is stored, else ''."""
+        o = self.owner
+        try:
+            name = o.stored_name() if o is not None else None
+        except Exception:  # noqa: BLE001
+            name = None
+        w = str(name or "").split()
+        return w[0].casefold() if w else ""
+
+    def _is_owner_name(self, name) -> bool:
+        first = self._owner_first()
+        w = str(name or "").split()
+        return bool(first) and bool(w) and w[0].casefold() == first
+
+    def _ask_held(self, label) -> bool:
+        """While a voice is stored, a label isn't asked its name until the owner check has had its turns (it may be
+        the owner, whose spoken name would be refused before adoption)."""
+        o = self.owner
+        if o is None:
+            return False
+        try:
+            if not o.has_voice():
+                return False
+            import owner_voice as _ov
+            return o.seen(self._resolve(label)) < _ov.ADOPT_TURNS
+        except Exception:  # noqa: BLE001
+            return False
+
+    def call_names(self) -> list[str]:
+        """Every name this call has learned (bound to a voice) or heard (said in the room, not yet bound), for the
+        name scrub (docs/designs/experience_memory.md, D2). The owner's saved name is handled separately."""
+        with self._lock:
+            names = [p.name for p in self.people.values() if p.name]
+            names += list(self.heard)
+        return names
+
+    def known_names(self, stored: bool = False) -> list[str]:
+        """Names Atlas knows belong to voices in this call: learned names, plus the owner's while a label is adopted
+        (or, with `stored`, whenever the owner's voice is stored: name protection must not wait for adoption)."""
+        names = [p.name for p in list(self.people.values()) if p.name]
+        o = self.owner
+        try:
+            if o is not None and o.stored_name() and (stored or o.labels()):
+                names.append(o.stored_name())
+        except Exception:  # noqa: BLE001
+            pass
+        return names
+
+    def owner_adopted(self, label: str) -> None:
+        """A label was just adopted as the owner: their name is no longer an unmatched name heard in the room, and it
+        is a room name (as `_assign` does for learned names)."""
+        o = self.owner
+        name = o.stored_name() if o is not None else None
+        if not name:
+            return
+        with self._lock:
+            for k in [k for k in self.heard if k.split()[:1] == [name.split()[0].casefold()]]:
+                self.heard.pop(k, None)
+            self.heard.pop(name.lower(), None)
+        try:
+            import conversation_dynamics as _cd
+            _cd.note_room_name(name)
+        except Exception:  # noqa: BLE001
+            pass
 
     # ------------------------------------------------------------ persistence
     def _load(self) -> None:
@@ -184,6 +268,23 @@ class NameBook:
             except Exception as e:  # noqa: BLE001
                 logger.warning("voiceprints unreadable: %s", e)
 
+    def _write_prints(self) -> None:
+        """voiceprints.json written atomically (temporary file, sync, replace)."""
+        self.store.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.store.with_name(self.store.name + ".tmp")
+        try:
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(self._prints, fh)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, self.store)
+        except Exception:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+            raise
+
     def _save_print(self, label: str, name: str) -> None:
         if not (self.store and self.voice_lookup):
             return
@@ -192,10 +293,38 @@ class NameBook:
             if c is None:
                 return
             self._prints[name] = [round(float(x), 5) for x in c]
-            self.store.parent.mkdir(parents=True, exist_ok=True)
-            self.store.write_text(json.dumps(self._prints), encoding="utf-8")
+            self._write_prints()
         except Exception as e:  # noqa: BLE001
             logger.warning("voiceprint save failed: %s", e)
+
+    def drop_prints(self, name, voice, sim: float = 0.70) -> int:
+        """"Forget my voice": remove saved voiceprints named like the owner (first word, any case) or sounding like
+        them (similarity >= sim to `voice`). Returns how many were removed."""
+        import numpy as np
+        first = str(name or "").split()[:1]
+        first = first[0].casefold() if first else ""
+        v = None if voice is None else np.asarray(voice, dtype=np.float32).reshape(-1)
+        with self._lock:
+            drop = []
+            for k, c in self._prints.items():
+                if first and str(k).split()[:1] and str(k).split()[0].casefold() == first:
+                    drop.append(k)
+                    continue
+                if v is not None:
+                    c = np.asarray(c, dtype=np.float32).reshape(-1)
+                    den = float(np.linalg.norm(c) * np.linalg.norm(v)) or 1.0
+                    if c.shape == v.shape and float(c @ v) / den >= sim:
+                        drop.append(k)
+            for k in drop:
+                self._prints.pop(k, None)
+            if drop and self.store:
+                try:
+                    self._write_prints()
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("voiceprint cleanup failed: %s", e)
+        if drop:
+            logger.info("👤 removed %d saved voiceprint(s) of the owner", len(drop))
+        return len(drop)
 
     def _match_print(self, label: str, threshold: float = 0.70) -> str | None:
         if not (self._prints and self.voice_lookup):
@@ -209,7 +338,7 @@ class NameBook:
             taken = {p.name for p in self.people.values() if p.name}
             best, best_sim = None, threshold
             for name, v in self._prints.items():
-                if name in taken:
+                if name in taken or self._is_owner_name(name):    # the owner is named by voice only (owner_voice)
                     continue
                 v = np.asarray(v, dtype=np.float32)
                 sim = float(np.dot(c, v) / ((np.linalg.norm(c) * np.linalg.norm(v)) or 1.0))
@@ -261,10 +390,29 @@ class NameBook:
                 logger.info("👤 %s sounds like %s (voiceprint, unconfirmed)", label, guess)
         return p
 
-    def _assign(self, p: Person, name: str, source: str) -> str:
+    def _assign(self, p: Person, name: str, source: str) -> str | None:
+        if self._owner_of(p.label):
+            return None                      # the owner's name changes only from the dashboard
+        if self._is_owner_name(name):
+            # Nobody else carries the owner's name, from any source (intro, answer, correction, a guess's "yes"):
+            # stop asking this voice (it isn't refusing, so not "declined")
+            logger.info("👤 %s said the owner's name; not naming that voice", p.label)
+            p.asks = self.max_asks
+            p.asked_at = None
+            try:   # the pending file keeps the call's names for the post-call pass (docs/designs/experience_memory.md, D2)
+                import call_boundary as _cbn
+                _cbn.owner_event("namesake", name=name)
+            except Exception:  # noqa: BLE001
+                pass
+            return None
         for other in self.people.values():   # one name, one voice
             if other is not p and other.name == name and source != "voice":
                 other.name, other.source = None, ""
+        try:   # the pending file keeps the call's names for the post-call pass (docs/designs/experience_memory.md, D2)
+            import call_boundary as _cbn
+            _cbn.name_event("learned", name)
+        except Exception:  # noqa: BLE001
+            pass
         changed = p.name != name
         try:
             import conversation_dynamics as _cd
@@ -288,6 +436,8 @@ class NameBook:
             self._note_vocative(body)
             if not label or label in ("user", "self"):
                 return None
+            if self._owner_of(label):
+                return None                  # nothing said in the call renames the owner
             p = self._person(label)
             now = self.clock()
             f = _FORGET.search(body)
@@ -361,22 +511,29 @@ class NameBook:
 
     def peek_intro(self, text: str) -> str | None:
         """Name a turn introduces, without changing this book (for UI labels)."""
-        scratch = NameBook()
+        scratch = NameBook(store=None)
         scratch.agent_names = set(self.agent_names)
         try:
-            return scratch.learn("S0", text)
+            name = scratch.learn("S0", text)
         except Exception:  # noqa: BLE001
             return None
+        return None if name and self._is_owner_name(name) else name
 
     def _note_vocative(self, body: str) -> None:
         m = _VOCATIVE.match(body)
         name = _clean_name(m[1]) if m else None
         if name and name.lower() not in self.agent_names \
-                and name not in {p.name for p in self.people.values()}:
+                and name not in {p.name for p in self.people.values()} \
+                and not (self._is_owner_name(name) and self.owner is not None and self.owner.labels()):
             self.heard[name.lower()] = self.clock()
             try:
                 import conversation_dynamics as _cd
                 _cd.note_room_name(name)
+            except Exception:  # noqa: BLE001
+                pass
+            try:   # the pending file keeps the call's names for the post-call pass (docs/designs/experience_memory.md, D2)
+                import call_boundary as _cbn
+                _cbn.name_event("heard", name)
             except Exception:  # noqa: BLE001
                 pass
         # People call each other by name mid-line too ("You see, Jefe, even...", "See,
@@ -402,6 +559,9 @@ class NameBook:
 
     # ------------------------------------------------------------ reading
     def name_of(self, label: str | None) -> str | None:
+        own = self._owner_of(label)
+        if own:
+            return own
         p = self.people.get(self._resolve(label or ""))
         return p.name if p else None
 
@@ -409,7 +569,10 @@ class NameBook:
         """Human-facing label for UI/logs."""
         if not label or label in ("user", "you", "YOU"):
             return "you"
-        p = self.people.get(label)
+        own = self._owner_of(label)
+        if own:
+            return own
+        p = self.people.get(self._resolve(label))
         if p and p.name:
             return p.name
         if p and p.probable:
@@ -426,6 +589,11 @@ class NameBook:
                      "S-tag out loud and never call anyone 'speaker'. Use real names below; "
                      "for someone unnamed just say 'you', or describe them by what they said):"]
             for l in labels[:8]:
+                own = self._owner_of(l)
+                if own:
+                    lines.append(f"- {l}{' (talking now)' if l == current else ''}: you recognize this voice: it's "
+                                 f"{own}; if asked how, just say you know their voice.")
+                    continue
                 p = self._person(l)
                 if p.name:
                     d = f"{p.name}"
@@ -449,6 +617,8 @@ class NameBook:
 
     def _ask_cue(self, current, roster) -> str:
         if not current or current in ("user", "self"):
+            return ""
+        if self._owner_of(current) or self._ask_held(current):
             return ""
         p = self._person(current)
         if p.name or p.declined or p.asks >= self.max_asks:
@@ -474,6 +644,9 @@ class NameBook:
         """Replace any spoken S-tag with a name, 'you', or 'someone'."""
         def sub(m):
             lab = m[1].upper()
+            own = self._owner_of(lab)
+            if own:
+                return "you" if lab == (target or "").upper() else own
             if lab not in self.people and lab != (target or "").upper():
                 # Live 10-02: Fae said "S130" aloud -- a voice label from
                 # before a persona switch / beyond the book. Only product

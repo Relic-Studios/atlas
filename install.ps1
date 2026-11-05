@@ -51,6 +51,12 @@ function Winget-Install($id, $label) {
 
 $T = 6
 
+# Room for the Python environment, PyTorch and the speech models (about 15 GB in all).
+try {
+    $free = (Get-PSDrive -Name ($Root.Substring(0, 1))).Free / 1GB
+    if ($free -lt 20) { Warn ("Only {0:N0} GB free on drive {1}: ATLAS needs about 15 GB, plus room for your recordings." -f $free, $Root.Substring(0, 1)) }
+} catch {}
+
 # 1. Prerequisites --------------------------------------------------------
 Step 1 $T 'Checking Python 3.12 and Node.js'
 $py = $null
@@ -164,10 +170,47 @@ else {
         $lnk.Save()
     }
     Ok 'Desktop and Start menu shortcuts: ATLAS'
+    $UninstCmd = Join-Path $Root 'Uninstall ATLAS.cmd'
+    if (Test-Path $UninstCmd) {
+        $lnk = $ws.CreateShortcut((Join-Path ([Environment]::GetFolderPath('Programs')) 'Uninstall ATLAS.lnk'))
+        $lnk.TargetPath = $UninstCmd
+        $lnk.WorkingDirectory = $Root
+        if (Test-Path $icon) { $lnk.IconLocation = $icon }
+        $lnk.Description = 'Uninstall ATLAS'
+        $lnk.Save()
+        Ok 'Start menu: Uninstall ATLAS'
+    }
+}
+
+# Windows Settings > Apps entry, so ATLAS can be uninstalled like any program. The setup program
+# (unins000.exe in this folder, its *_is1 key) registers its own entry; a source install gets this one.
+$SetupEntry = Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall' -ErrorAction SilentlyContinue |
+    Where-Object { $_.PSChildName -like '*_is1' -and
+                   ([string](Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue).InstallLocation).TrimEnd('\') -ieq $Root }
+if ((Test-Path (Join-Path $Root 'uninstall.ps1')) -and -not (Test-Path (Join-Path $Root 'unins000.exe')) -and -not $SetupEntry) {
+    $ver = '0'
+    $cl = Join-Path $Root 'CHANGELOG.md'
+    if (Test-Path $cl) { $m = Select-String -Path $cl -Pattern '^##\s+([0-9][0-9.]*)' | Select-Object -First 1; if ($m) { $ver = $m.Matches[0].Groups[1].Value } }
+    $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\ATLAS'
+    try {
+        New-Item -Path $key -Force | Out-Null
+        $ps = "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe"
+        New-ItemProperty -Path $key -Name 'DisplayName' -Value 'ATLAS' -PropertyType String -Force | Out-Null
+        New-ItemProperty -Path $key -Name 'DisplayVersion' -Value $ver -PropertyType String -Force | Out-Null
+        New-ItemProperty -Path $key -Name 'Publisher' -Value 'Relic Studios' -PropertyType String -Force | Out-Null
+        New-ItemProperty -Path $key -Name 'InstallLocation' -Value $Root -PropertyType String -Force | Out-Null
+        New-ItemProperty -Path $key -Name 'DisplayIcon' -Value (Join-Path $Root 'static\favicon.ico') -PropertyType String -Force | Out-Null
+        New-ItemProperty -Path $key -Name 'UninstallString' -PropertyType String -Force `
+            -Value ('"' + $ps + '" -NoProfile -ExecutionPolicy Bypass -File "' + (Join-Path $Root 'uninstall.ps1') + '"') | Out-Null
+        New-ItemProperty -Path $key -Name 'NoModify' -Value 1 -PropertyType DWord -Force | Out-Null
+        New-ItemProperty -Path $key -Name 'NoRepair' -Value 1 -PropertyType DWord -Force | Out-Null
+        Ok 'Windows Settings > Apps: ATLAS (uninstall from there or with "Uninstall ATLAS")'
+    } catch { Warn "Couldn't add ATLAS to Windows Settings > Apps ($_). Uninstall with ""Uninstall ATLAS.cmd"" in $Root." }
 }
 
 Write-Host ""
 Write-Host "ATLAS is installed." -ForegroundColor Green
 Write-Host "Open it from the ATLAS shortcut. First launch walks you through: language model (local or cloud),"
 Write-Host "audio devices, importing a voice, and creating your first agent."
+Write-Host "To uninstall: Windows Settings > Apps > ATLAS, or ""Uninstall ATLAS"" in the Start menu or in $Root."
 "=== done $(Get-Date -Format s) ===" | Out-File $Log -Append -Encoding utf8

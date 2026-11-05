@@ -1,5 +1,5 @@
 /* ATLAS desktop shell — spawns the Python backend, waits for it, then loads the UI. */
-const { app, BrowserWindow, session, globalShortcut, shell } = require('electron');
+const { app, BrowserWindow, session, globalShortcut, shell, screen } = require('electron');
 const { spawn, spawnSync } = require('child_process');
 const path = require('path');
 const http = require('http');
@@ -124,10 +124,86 @@ async function waitForBackend(timeoutMs = 10 * 60 * 1000) {
   return false;
 }
 
+
+// ---- window memory and zoom --------------------------------------------------------------------------------------
+// The window reopens where the owner left it, at the zoom the owner chose. Zoom is Chromium's page zoom (it scales
+// everything evenly), applied to every page of the backend (dashboard, Plugins, Setup) each time one loads; the local
+// splash page stays at 100%. Nothing here runs at load time: the state is read when the window is created.
+const ZOOM_MIN = 0.8, ZOOM_MAX = 1.5, ZOOM_STEP = 0.1, MIN_W = 1000, MIN_H = 640;
+
+// Saved bounds are reused only if they are big enough and the point just below the middle of the title bar lies in a
+// connected display's work area; otherwise the window opens at the default size.
+function pickBounds(saved, displays) {
+  const b = saved && saved.bounds;
+  if (!b || ![b.x, b.y, b.width, b.height].every(Number.isFinite) || b.width < MIN_W || b.height < MIN_H) return null;
+  const px = b.x + b.width / 2, py = b.y + 15;
+  const on = (displays || []).some((d) => { const w = d && d.workArea;
+    return w && px >= w.x && px < w.x + w.width && py >= w.y && py < w.y + w.height; });
+  return on ? { x: b.x, y: b.y, width: b.width, height: b.height } : null;
+}
+
+// A zoom factor rounded to a 10% step and kept between 80% and 150% (anything unreadable is 100%).
+function clampZoom(z) {
+  const n = Math.round((Number(z) || 1) * 10) / 10;
+  return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, n));
+}
+// One zoom step in a direction: 1 in, -1 out, 0 back to 100%.
+function stepZoom(z, dir) { return dir === 0 ? 1 : clampZoom(clampZoom(z) + dir * ZOOM_STEP); }
+
+function statePath() { return path.join(app.getPath('userData'), 'window-state.json'); }
+function readWindowState() {
+  try { const s = JSON.parse(require('fs').readFileSync(statePath(), 'utf8')); return s && typeof s === 'object' ? s : {}; }
+  catch (_) { return {}; }
+}
+let windowState = { zoom: 1 }, stateTimer = null;
+function saveWindowState(win) {
+  if (!win || win.isDestroyed()) return;
+  windowState = { bounds: win.getNormalBounds(), maximized: win.isMaximized(), zoom: clampZoom(windowState.zoom) };
+  try { require('fs').writeFileSync(statePath(), JSON.stringify(windowState)); } catch (e) { console.error('window state not saved', e); }
+}
+function saveWindowStateSoon(win) { clearTimeout(stateTimer); stateTimer = setTimeout(() => saveWindowState(win), 500); }
+
+function onBackendPage(win) {
+  try { return new URL(win.webContents.getURL()).origin === new URL(APP_URL).origin; } catch (_) { return false; }
+}
+function setZoom(win, z) {
+  windowState.zoom = z;
+  if (onBackendPage(win)) win.webContents.setZoomFactor(z);
+  saveWindowStateSoon(win);
+}
+function wireWindowState(win) {
+  win.on('resize', () => saveWindowStateSoon(win));
+  win.on('move', () => saveWindowStateSoon(win));
+  win.on('close', () => { clearTimeout(stateTimer); saveWindowState(win); });
+  const wc = win.webContents;
+  wc.on('did-finish-load', () => wc.setZoomFactor(onBackendPage(win) ? (windowState.zoom || 1) : 1));
+  // Ctrl (or Cmd) with = + numpad-add: in; - numpad-subtract: out; 0 numpad-0: 100%. preventDefault() also keeps the
+  // default menu's zoom from applying on top; its reload and DevTools shortcuts still work.
+  wc.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown' || !(input.control || input.meta) || input.alt) return;
+    const k = input.key, c = input.code;
+    const dir = (k === '=' || k === '+' || c === 'NumpadAdd') ? 1
+      : (k === '-' || k === '_' || c === 'NumpadSubtract') ? -1 : (k === '0' || c === 'Numpad0') ? 0 : null;
+    if (dir === null) return;
+    event.preventDefault();
+    if (onBackendPage(win)) setZoom(win, stepZoom(windowState.zoom, dir));
+  });
+  // Ctrl + mouse wheel: one step per 100 ms at most (a trackpad sends many events)
+  let lastWheel = 0;
+  wc.on('zoom-changed', (_e, direction) => {
+    const now = Date.now();
+    if (now - lastWheel < 100 || !onBackendPage(win)) return;
+    lastWheel = now;
+    setZoom(win, stepZoom(windowState.zoom, direction === 'in' ? 1 : -1));
+  });
+}
+
 async function createWindow() {
+  const saved = readWindowState();
+  windowState = { zoom: clampZoom(saved.zoom) };
+  const bounds = pickBounds(saved, screen ? screen.getAllDisplays() : []) || { width: 1440, height: 900 };
   mainWindow = new BrowserWindow({
-    width: 1440,
-    height: 900,
+    ...bounds,
     minWidth: 1000,
     minHeight: 640,
     backgroundColor: '#0b0d10',
@@ -136,6 +212,8 @@ async function createWindow() {
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true },
     show: false,
   });
+  wireWindowState(mainWindow);
+  if (saved.maximized && pickBounds(saved, screen ? screen.getAllDisplays() : [])) mainWindow.maximize();
   await mainWindow.loadFile(path.join(__dirname, 'splash.html'));
   mainWindow.once('ready-to-show', () => mainWindow.show());
   // Security: the window may only show ATLAS's own pages. Anything else (a link in
@@ -190,13 +268,66 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-app.on('before-quit', () => {
-  quitting = true;
-  globalShortcut.unregisterAll();
+// Quit: end the call through the API first, so the server writes the call's end and clears what the call held
+// (docs/designs/experience_memory.md, D2), then stop the backend. Only a backend this app started is stopped.
+function endCall(timeoutMs = 3000) {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (v) => { if (!done) { done = true; resolve(v); } };
+    const req = http.request({ host: '127.0.0.1', port: PORT, path: '/api/call/end', method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': 2 } }, (res) => {
+      let body = '';
+      if (res.setEncoding) res.setEncoding('utf8');
+      res.on('data', (c) => { body += c; });
+      res.on('end', () => { try { finish(JSON.parse(body)); } catch (_) { finish(null); } });
+    });
+    req.on('error', () => finish(null));
+    setTimeout(() => { try { req.destroy(); } catch (_) {} finish(null); }, timeoutMs);
+    req.end('{}');
+  });
+}
+
+function startMemoryPass(args) {
+  // args: what /api/call/end said the pass talks to (the live model's mode, URL and name; never a key)
+  const passArgs = Array.isArray(args) && args.length ? args.map(String) : ['--mode', 'remote'];
+  try {
+    const child = spawn(PYTHON, ['memory_writer.py', ...passArgs],
+      { cwd: SERVER_DIR, windowsHide: true, detached: true, stdio: 'ignore' });
+    if (child && child.unref) child.unref();
+  } catch (e) { console.error('memory pass not started', e); }
+}
+
+function stopBackend() {
   // Tree-kill: backend.kill() on Windows only kills python.exe and orphans the
   // RealtimeSTT worker (which keeps Whisper resident on the GPU).
   if (backend) {
     spawnSync('taskkill', ['/PID', String(backend.pid), '/T', '/F'], { windowsHide: true });
     backend = null;
   }
-});
+}
+
+let quitStage = 0;   // 0: not started, 1: ending the call, 2: done
+function beforeQuit(event) {
+  quitting = true;
+  globalShortcut.unregisterAll();
+  if (backend && quitStage === 0) {
+    if (event && event.preventDefault) event.preventDefault();
+    quitStage = 1;
+    return endCall(3000).then((res) => {
+      stopBackend();
+      // The post-call pass, after the server is gone (docs/designs/experience_memory.md, D3): only when the server
+      // said so (never with a model on this PC), detached so it finishes after the window has closed.
+      if (res && res.start_pass) startMemoryPass(res.pass_args);
+      quitStage = 2;
+      app.quit();
+    });
+  }
+  if (quitStage === 1) {               // still ending the call: hold the quit until it is done
+    if (event && event.preventDefault) event.preventDefault();
+    return Promise.resolve();
+  }
+  stopBackend();
+  return Promise.resolve();
+}
+
+app.on('before-quit', (event) => { beforeQuit(event); });

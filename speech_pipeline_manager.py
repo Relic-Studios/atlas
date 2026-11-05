@@ -1,5 +1,6 @@
 # speech_pipeline_manager.py
 from typing import Optional, Callable
+from pathlib import Path
 import threading
 import re
 import os
@@ -86,6 +87,7 @@ BOARD_TOOLS = [
         {"minutes": {"type": "number", "description": "0.5 to 5"}}),
 ]
 import clock as _clock
+import turn_trace as _turn_trace
 import self_tools as _self_tools
 import room_tools as _room
 AGENT_TOOLS = (list(WEB_SEARCH_TOOLS) + READ_PAGE_TOOLS + list(SCREEN_TOOLS) + BOARD_TOOLS
@@ -97,6 +99,8 @@ SEARCH_WAIT_S = 5.0
 # After the agent says "show me": the person's answer within this window gets a glance
 # (server.start_glance looks on its own if nobody answers).
 GLANCE_ANSWER_S = 15.0
+# "I don't see it" within this long after a look at the screen gets a fresh look (capability.cant_see_it).
+RECHECK_S = 180.0
 
 
 def _board_search(query: str) -> str:
@@ -115,7 +119,12 @@ def _execute_tool(name: str, args):
         return _execute_web_search(name, args)
     if name == "check_date_time":
         tz = args.get("timezone", "") if isinstance(args, dict) else ""
-        return _clock.check(str(tz or ""))
+        try:
+            import capability as _cap
+            zone = not _cap.private_setup()
+        except Exception:  # noqa: BLE001
+            zone = True
+        return _clock.check(str(tz or ""), zone=zone)
     return f"unknown tool: {name}"
 
 # (Logging setup)
@@ -134,10 +143,12 @@ SUMMARY_INTERVAL_S = 15.0
 # Diarization-backed, token-budgeted conversation log (conversation_log.py).
 # ATLAS_CONVO_LOG=0 falls back to the raw 16-message history.
 CONVO_LOG_ENABLED = os.environ.get('ATLAS_CONVO_LOG', '1') != '0'
+# A reply whose every word was cut as a repeat is asked for once more (response_decision.filter_response), warmer than
+# the usual 0.6 so it doesn't come back word for word (live 11-04: the retry repeated the cut answer exactly).
+RETRY_TEMPERATURE = float(os.environ.get('ATLAS_RETRY_TEMP', '0.95'))
 VIBE_ENABLED = os.environ.get('ATLAS_VIBE', '1') != '0'  # banter/roast steering (floor.py)
 LOOKUP_TTL_S = 15 * 60
 LOOKUP_SNIPPET_CHARS = 550
-ENABLE_MEMORY = False  # mem0 stripped — slot contention + chromadb bugs out the pipeline
 
 # Agents come from agent_registry (dev pack + user-created). No names are
 # hard-coded here, so a public build with zero agents still boots: it gets one
@@ -151,23 +162,34 @@ PERSONA_META: dict = {}
 DEFAULT_PERSONA = PLACEHOLDER_ID
 
 
+def _replace_in_place(live: dict, new: dict) -> None:
+    """Make `live` equal `new` without ever emptying it: a reader on another thread sees old or new entries, never a
+    half-cleared table (agent switches run off the event loop since 11-04)."""
+    live.update(new)
+    for k in [k for k in list(live) if k not in new]:
+        live.pop(k, None)
+
+
 def _rebuild_personas() -> None:
     """(Re)load every agent's prompt + display meta from the registry, in place."""
     global DEFAULT_PERSONA
-    PERSONA_FILES.clear(); PERSONAS.clear(); PERSONA_META.clear()
+    personas, files, meta = {}, {}, {}
     for _aid in _registry.agent_ids():
         _txt = _registry.prompt_text(_aid)
         if not _txt:
             continue
-        PERSONAS[_aid] = _txt
-        PERSONA_FILES[_aid] = _registry.agent(_aid).get("prompt_file") or ""
-        PERSONA_META[_aid] = _registry.meta(_aid)
+        personas[_aid] = _txt
+        files[_aid] = _registry.agent(_aid).get("prompt_file") or ""
+        meta[_aid] = _registry.meta(_aid)
         logger.info(f"🗣️📄 Persona '{_aid}' loaded ({len(_txt)} chars).")
-    if not PERSONAS:
-        PERSONAS[PLACEHOLDER_ID] = _registry.GENERIC_PROMPT
-        PERSONA_META[PLACEHOLDER_ID] = {"role": "no agents yet", "accent": "#64748b",
-                                        "name": "Setup", "placeholder": True}
+    if not personas:
+        personas[PLACEHOLDER_ID] = _registry.GENERIC_PROMPT
+        meta[PLACEHOLDER_ID] = {"role": "no agents yet", "accent": "#64748b",
+                                "name": "Setup", "placeholder": True}
         logger.warning("🗣️📄 No agents installed. Using the setup placeholder.")
+    _replace_in_place(PERSONAS, personas)
+    _replace_in_place(PERSONA_FILES, files)
+    _replace_in_place(PERSONA_META, meta)
     d = _registry.default_agent()
     try:  # the agent the user created/picked in setup wins in the public build
         import user_settings as _us
@@ -287,7 +309,22 @@ class _AgentField:
         setattr(obj._runtime(), self.name, value)
 
 
+def _serialized(fn):
+    """One at a time per pipeline: the call-end reset, an agent switch and clear history all abort the reply and
+    rewrite per-call state, so they never overlap (docs/designs/experience_memory.md, S4 row 3: the "pipeline" group's
+    guarantee, held by the pipeline itself so a reset thread never waits on the event loop)."""
+    import functools as _ft
+
+    @_ft.wraps(fn)
+    def wrapper(self, *a, **kw):
+        lk = self.__dict__.get("_pl_lock") or self.__dict__.setdefault("_pl_lock", threading.RLock())
+        with lk:
+            return fn(self, *a, **kw)
+    return wrapper
+
+
 class SpeechPipelineManager:
+    on_voice_changed = None   # set by the server: called after every agent or voice switch (re-points the diarizer)
     history = _AgentField()
     lookups = _AgentField()
     floor = _AgentField()
@@ -356,8 +393,11 @@ class SpeechPipelineManager:
             pass
         self.system_prompt = f"Your name is {display_name(DEFAULT_PERSONA)}. {_id_note(DEFAULT_PERSONA, display_name(DEFAULT_PERSONA))} " + system_prompt
         self.current_persona = DEFAULT_PERSONA
-        if tts_engine == "orpheus":
-            self.system_prompt += f"\n{orpheus_prompt_addon}"
+        # The prompt's model addon is kept on every compose (_compose_system, design D4)
+        self._prompt_addon = f"\n{orpheus_prompt_addon}" if tts_engine == "orpheus" else ""
+        self.system_prompt += self._prompt_addon
+        self._persona_prompt = self.system_prompt
+        self._memory_setup()
 
         # --- Instance Dependencies ---
         self.audio = AudioProcessor(
@@ -377,6 +417,7 @@ class SpeechPipelineManager:
             tools=AGENT_TOOLS or None,
             tool_executor=_execute_tool if AGENT_TOOLS else None,
         )
+        self._compose_system()
         # Search backchannels: pre-rendered "hold on, let me look" clips in the
         # active voice, played the moment the model actually calls web_search.
         from backchannels import Backchannels
@@ -389,7 +430,8 @@ class SpeechPipelineManager:
         self.llm.on_tool_result = self._on_tool_result
         # Task board (tasks.py): searches outlive interrupted turns; notes to self.
         from tasks import Boards
-        self.boards = Boards(root="memory_db", searcher=_board_search)
+        self.boards = Boards(root=os.environ.get("ATLAS_TASKS_DIR") or str(Path(__file__).resolve().parent / "memory_db"),
+                             searcher=_board_search)
         if AGENT_TOOLS:
             self.llm.tool_executor = self._run_tool
         # Plugins (plugins.py): the owner switches abilities on/off; the model is only
@@ -435,34 +477,19 @@ class SpeechPipelineManager:
         self.vibe_enabled = VIBE_ENABLED
         # Voice tag -> human name. Survives persona switches (same people in the call).
         from people import NameBook
-        self.people = NameBook(agent_names=tuple(PERSONAS))
+        # Names are learned for this session only: no voiceprints are kept for anyone but the owner (owner 11-04: "we
+        # don't need to keep voiceprints of friends", "no names, no permanent voiceprints"; the owner's own voice is
+        # owner_voice.py). store=None: memory_db/voiceprints.json is neither read nor written.
+        self.people = NameBook(agent_names=tuple(PERSONAS), store=None)
         try:
             import name_hearing
             name_hearing.set_names([display_name(getattr(self, 'current_persona', '') or DEFAULT_PERSONA)])
-            name_hearing.set_protect(lambda: [p.name for p in list(self.people.people.values()) if p.name])
+            # learned names, and the owner's whenever their voice is stored (owner_voice), are never "misheard" agents
+            name_hearing.set_protect(lambda: self.people.known_names(stored=True))
         except Exception as e:  # noqa: BLE001
             logger.warning('name_hearing init failed: %s', e)
-        # Per-agent semantic hypergraph memory (Hebbian strengthening + decay).
-        # Embeds on CPU in a background writer; the reply path only reads, with a time budget.
-        self.hgmem = None
-        try:
-            import hypergraph_memory as _hg
-            if _hg.ENABLED:
-                self.hgmem = _hg.MemoryService()
-                def _warm(svc=self.hgmem):
-                    try:
-                        import call_memory as _cm
-                        import agent_memory as _am
-                        _am.ensure_all(list(PERSONAS))   # every agent gets its memory folder
-                        _hg.shared_embedder().encode(["warm up"])
-                        for p in list(PERSONAS):
-                            svc.sync_approved(p, [it["text"] for it in _cm.approved(p)])
-                        logger.info("hypergraph memory ready")
-                    except Exception as e:  # noqa: BLE001
-                        logger.warning("hypergraph warmup failed: %s", e)
-                threading.Thread(target=_warm, name="HypergraphWarm", daemon=True).start()
-        except Exception as e:  # noqa: BLE001
-            logger.warning("hypergraph memory disabled: %s", e)
+        self._register_call_resets()
+        self._compose_system()
         self.convo_enabled = CONVO_LOG_ENABLED
 
         # --- Threading Events ---
@@ -480,6 +507,7 @@ class SpeechPipelineManager:
         self.abort_block_event = threading.Event()
         self.abort_block_event.set()
         self.check_abort_lock = threading.Lock()
+        self._ctx_lock = threading.RLock()   # _llm_context: the turn and the thinker (think_listen)
 
         # --- State Flags ---
         self.llm_generation_active = False
@@ -503,19 +531,149 @@ class SpeechPipelineManager:
         self.summary_thread = threading.Thread(target=self._summarize_worker, name="SummaryWorker", daemon=True)
         self.summary_thread.start()
 
-        # Situation-memory worker: extracts + persists situation facts off the hot path.
-        self.memories = {}
-        self.memory_queue = Queue()
-        self.memory_lock = threading.Lock()
-        self.memory_worker_thread = threading.Thread(target=self._memory_worker, name="MemoryWorker", daemon=True)
-        self.memory_worker_thread.start()
-
         self.on_partial_assistant_text: Optional[Callable[[str], None]] = None
 
         self.full_output_pipeline_latency = self.llm_inference_time + self.audio.tts_inference_time
         logger.info(f"🗣️⏱️ Full output pipeline latency: {self.full_output_pipeline_latency:.2f}ms (LLM: {self.llm_inference_time:.2f}ms, TTS: {self.audio.tts_inference_time:.2f}ms)")
 
+        self._init_thinker()
         logger.info("🗣️🚀 SpeechPipelineManager initialized and workers started.")
+
+    # ------------------------------------------------------------ think while listening
+    # think_listen.py (design work/egm/think-listen/design_draft.md). Inert unless the
+    # `think_listen` plugin is on and the remote is the vLLM two-stage path (think_listen.active).
+    def _init_thinker(self):
+        try:
+            import think_listen as _TL
+        except Exception as e:  # noqa: BLE001 - public bundles may omit it
+            logger.info("think_listen unavailable: %s", e)
+            self.thinker = None
+            return
+        self.think_busy_fn = getattr(self, "think_busy_fn", None)   # set by server: agent audio playing
+        self._think_inputs_cache = (0.0, (False, False))
+        self._think_snap = None      # (time, line, history, room, memory) the thinker last thought in
+        self.thinker = _TL.Thinker(self._think_cfg, self._think_messages, enabled_fn=self._think_enabled,
+                                   skip_fn=self._think_skip)
+        self.think_thread = threading.Thread(target=self._think_worker, name="ThinkListenWorker", daemon=True)
+        self.think_thread.start()
+
+    def _think_remote(self):
+        return getattr(getattr(self, "llm", None), "remote", None)
+
+    def _think_cfg(self):
+        rs = self._think_remote()
+        return dict(getattr(rs, "cfg", None) or {})
+
+    def _think_enabled(self) -> bool:
+        try:
+            import think_listen as _TL
+            return _TL.active(self._think_remote())
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _think_skip(self, partial: str) -> bool:
+        from floor import filler_only, status_only
+        names = tuple(getattr(getattr(self.agent, "profile", None), "names", ()) or ())
+        return filler_only(partial) or status_only(partial, names)
+
+    def _think_inputs(self):
+        t, val = self._think_inputs_cache
+        if time.time() - t > 5.0:                   # plugins.json read + screen status, at most every 5 s
+            val = self._clean_history_inputs()
+            self._think_inputs_cache = (time.time(), val)
+        return val
+
+    def _think_messages(self, line: str, label):
+        """Think in the decision's own context (owner 11-02): the same builders the turn uses
+        (_llm_context, _memory_context) on the line so far. The turn reuses this snapshot when its
+        history still matches (_think_snapshot), so the decision and reply continue on the
+        server's cached prompt instead of a different one."""
+        import think_listen as _TL
+        history, room = self._llm_context(line, keep_ctx_text=True)
+        mem = self._memory_context(line)       # (text, snippet ids): a turn reusing the snapshot keeps both (D4)
+        self._think_snap = (time.time(), line, history, room, mem)
+        return _TL.thinking_messages(self.llm, self, line, history, self._think_inputs(), room=room,
+                                     clean=False, memory=mem[0])
+
+    THINK_SNAP_MAX_AGE_S = 8.0
+
+    def _think_snapshot(self, txt: str, history: list):
+        """The thinker's (history, room, memory) for this turn, if it thought about this utterance
+        recently and the conversation hasn't moved since; else None (use the fresh context)."""
+        snap = getattr(self, "_think_snap", None)
+        if snap is None or self.thinker is None or not self._think_enabled():
+            return None
+        t, line, s_hist, s_room, s_mem = snap
+        if time.time() - t > self.THINK_SNAP_MAX_AGE_S:
+            return None
+        import think_listen as _TL
+        lab = lambda t: (re.match(r"^\s*\[(S\d+|user)\]", t or "") or [None, None])[1]  # noqa: E731
+        if lab(line) != lab(txt) or not _TL.same_utterance(_TL.strip_label(line), _TL.strip_label(txt)):
+            return None
+        key = lambda h: [(m.get("role"), m.get("content")) for m in h or []]  # noqa: E731
+        if key(s_hist) != key(history):
+            return None
+        return s_hist, s_room, s_mem
+
+    def _think_busy(self) -> bool:
+        gen = self.running_generation
+        if gen is not None and not getattr(gen, "abortion_started", False) and not getattr(gen, "llm_finished", False):
+            return True
+        if self.tts_quick_generation_active or self.tts_final_generation_active:
+            return True
+        fn = getattr(self, "think_busy_fn", None)
+        try:
+            return bool(fn and fn())
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _think_worker(self):
+        """Run thinking requests while a person talks (think_listen Thinking rules)."""
+        import think_listen as _TL
+        th = self.thinker
+        while not self.shutdown_event.is_set():
+            th.event.wait(0.1)
+            th.event.clear()
+            try:
+                if self._think_busy():
+                    continue
+                n = th.want_step()
+                if n <= 0:
+                    continue
+                snap = th.snapshot()
+                start_partial, start_tokens = snap["partial"], snap["tokens"]
+
+                def _restart(th=th, p=start_partial, k=start_tokens):
+                    s2 = th.snapshot()
+                    return (_TL.new_words(p, s2["partial"]) >= _TL.RESTART_WORDS
+                            and s2["tokens"] - k >= _TL.RESTART_MIN_TOKENS) or self._think_busy()
+                th.step(n, should_stop=_restart)
+                if _TL.PAUSE_S > 0:
+                    self.shutdown_event.wait(_TL.PAUSE_S)
+            except Exception as e:  # noqa: BLE001 - thinking must never touch a turn
+                logger.warning("think worker: %s", e)
+                time.sleep(0.5)
+
+    def _think_handover(self, txt: str, trimmed: str, is_cue: bool, directed_thresh):
+        """At a decision point: hand the thought (cut now) to the next remote request, or clear it."""
+        rs = self._think_remote()
+        if rs is None:
+            return
+        thought, thr = None, None
+        th = getattr(self, "thinker", None)
+        if th is not None and not is_cue and self._think_enabled():
+            import think_listen as _TL
+            thought = th.cut(txt)
+            thr = _TL.HOLD_OTHER if directed_thresh is not None else _TL.HOLD_DIRECTED
+            if thought is not None:
+                logger.info("🧠💭 think cut: %d tokens, %.1fs old, closed=%s, reopened=%d",
+                            thought.tokens, thought.age_s, thought.closed, thought.reopened)
+        rs.next_thought = (thought, trimmed, thr) if thr is not None else None
+
+    def _clear_think_handover(self):
+        rs = self._think_remote()
+        if rs is not None:
+            rs.next_thought = None
 
     def is_valid_gen(self) -> bool:
         """
@@ -583,8 +741,10 @@ class SpeechPipelineManager:
         if one exists. This flag might be used for fine-grained timing or state checks.
         """
         logger.info("🗣️🎶 First audio chunk synthesized. Setting TTS quick allowed event.")
-        if self.running_generation:
-            self.running_generation.quick_answer_first_chunk_ready = True
+        gen = self.running_generation
+        if gen:
+            gen.quick_answer_first_chunk_ready = True
+            _turn_trace.mark(gen.id, "first_audio")
 
     def preprocess_chunk(self, chunk: str) -> str:
         """
@@ -690,6 +850,7 @@ class SpeechPipelineManager:
 
                     if token_count == 1:
                         logger.info(f"🗣️🧠⏱️ [Gen {gen_id}] LLM Worker: TTFT: {(time.time() - start_time):.4f}s")
+                        _turn_trace.mark(gen_id, "first_token", **_turn_trace.last_decision())
 
                     # Check for quick answer boundary only if not already provided
                     if not current_gen.quick_answer_provided:
@@ -727,8 +888,12 @@ class SpeechPipelineManager:
             except Exception as e:
                 logger.exception(f"🗣️🧠💥 [Gen {gen_id}] LLM Worker: Error during generation: {e}")
                 current_gen.llm_aborted = True # Mark as aborted on error
+                _turn_trace.done(gen_id, "error", error=str(e)[:120])
             finally:
                 # Clean up state regardless of how the loop/try block exited
+                _turn_trace.done(gen_id, "aborted" if current_gen.llm_aborted else
+                                 "hold" if not (current_gen.quick_answer or "").strip() else "spoke",
+                                 **_turn_trace.last_decision())
                 self.llm_generation_active = False
                 self.stop_llm_finished_event.set() # Signal that this worker's processing attempt is done
 
@@ -790,8 +955,21 @@ class SpeechPipelineManager:
         tail = ' '.join(words[-max_words:])
         return f'{label} {tail}'.strip() if label else tail
 
-    def _llm_context(self, txt: str):
-        """(history, room_context) for this turn. Never raises."""
+    def _llm_context(self, txt: str, keep_ctx_text: bool = False):
+        """(history, room_context) for this turn. Never raises. keep_ctx_text: the thinker's call
+        (another thread) leaves the turn's _ctx_text as it was."""
+        lock = getattr(self, "_ctx_lock", None)
+        if lock is None:
+            lock = self._ctx_lock = threading.RLock()
+        with lock:
+            prev = getattr(self, "_ctx_text", "")
+            try:
+                return self._llm_context_locked(txt)
+            finally:
+                if keep_ctx_text:
+                    self._ctx_text = prev
+
+    def _llm_context_locked(self, txt: str):
         self._ctx_text = txt
         room = self._room_context(txt)
         if not self.convo_enabled:
@@ -831,7 +1009,7 @@ class SpeechPipelineManager:
                 return True
             mc = CUE_RE.search(txt or "")
             if mc:
-                b.attach_gen(int(mc[1]), gen_id)
+                b.attach_gen(int(mc[1]), gen_id, cue=True)
                 return True
             m = re.match(r'^\s*\[(S\d+)\]', txt or "")
             if m:
@@ -856,7 +1034,8 @@ class SpeechPipelineManager:
             body = re.sub(r'^\s*\[S\d+\]\s*', '', txt or '')
             if _cap.wants_look(body):
                 return ""                 # look_note covers asked looks (eyes off)
-            if not (_cap.wants_glance(body) or _cap._GLANCE_CAM.search(body) or _cap.screen_talk(body)):
+            if not (_cap.wants_glance(body) or _cap._GLANCE_CAM.search(body) or _cap.screen_talk(body)
+                    or (self._live_on() and _cap.just_happened(body))):
                 return ""
             import screen_context as _sc
             if _sc.note(getattr(self, "screen_context", None)):
@@ -864,6 +1043,57 @@ class SpeechPipelineManager:
             return ("You haven't looked at the screen this turn, so you can't see them or what they mean "
                     "right now: don't say you can or that you're looking, and don't describe it. Answer "
                     "what they said.")
+        except Exception:  # noqa: BLE001
+            return ""
+
+    def _depth_note(self, txt: str) -> str:
+        """How much to say this turn (floor.depth_note): short by default; fuller when the person asked
+        for depth or it's a one-on-one with a real question. ATLAS_DEPTH_NOTE=0 turns it off."""
+        if os.environ.get("ATLAS_DEPTH_NOTE", "1") == "0":
+            return ""
+        try:
+            m = re.match(r'^\s*\[(S\d+)\]', txt or "")
+            return self.floor.depth_note(txt, m[1] if m else None)
+        except Exception:  # noqa: BLE001
+            return ""
+
+    def _engage_note(self, txt: str, depth_fired: bool) -> str:
+        """Engagement note for this turn: roast/battle, lull re-light, vary guard or hook
+        (floor.engage_note; master switch ATLAS_ENGAGE is read per call inside
+        floor.engage_on). Mutually exclusive with the depth note."""
+        try:
+            names = tuple(getattr(getattr(self.agent, "profile", None), "names", ()) or ())
+            m = re.match(r'^\s*\[(S\d+)\]', txt or "")
+            return self.floor.engage_note(txt, m[1] if m else None, names, bool(depth_fired))
+        except Exception:  # noqa: BLE001
+            return ""
+
+    def _live_status_note(self, txt: str = "", frames: bool = False, can_look: bool = True) -> str:
+        """Live screen at the end of normal reply prompts (live_screen/notes.py): the screen log on turns that
+        need it (questions about earlier, screen questions without frames), then the status line."""
+        if not self._live_on():
+            return ""
+        try:
+            from live_screen import notes
+            parts = [notes.turn_note(txt, frames), notes.status_line(can_look)]
+            return "\n".join(p for p in parts if p)
+        except Exception:  # noqa: BLE001
+            return ""
+
+    def _game_note(self, txt: str, frames: bool = False) -> str:
+        """Mid-game (floor.in_game): it isn't playing and can't see their screens. The identity
+        line alone didn't stop "I'm right there with you", "Me and Shaggy are on A", "I'll hold
+        still" (gaming sim 11-02, 22 invented lines for two agents); notes on the turn work
+        where room notes don't (glance sim 11-01). frames: a Live screen look returned frames this turn."""
+        try:
+            if not self.floor.in_game():
+                return ""
+            if frames:
+                return ("They're in the middle of a game you aren't playing. Your look at their screen is attached "
+                        "this turn; you know only what it shows and what they've said out loud. Don't say you're in "
+                        "the game or that you saw anything the look doesn't show.")
+            return ("They're in the middle of a game you aren't playing: you only know what they've said "
+                    "out loud. Don't say you're in it, where anyone is, or what's happening on their screens.")
         except Exception:  # noqa: BLE001
             return ""
 
@@ -940,9 +1170,162 @@ class SpeechPipelineManager:
         """Did the turn this generation answers ask the agent to look?"""
         try:
             import capability as _cap
-            return _cap.wants_look(getattr(gen, "text", "") or "")
+            text = getattr(gen, "text", "") or ""
+            return (_cap.wants_look(text) or _cap.cant_see_it(text)
+                    or (SpeechPipelineManager._live_on() and _cap.just_happened(text)))
         except Exception:  # noqa: BLE001
             return True
+
+    def _recheck_wanted(self, txt: str) -> bool:
+        """They can't see what it described, and it looked at the screen in the last RECHECK_S seconds."""
+        try:
+            import capability as _cap
+            if not _cap.cant_see_it(txt):
+                return False
+            return time.time() - float(_screen.status().get('last_ts') or 0.0) <= RECHECK_S
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _only_one_talking(self, speaker) -> bool:
+        """It's in a one-on-one with this speaker: engaged with them, or nobody else spoke in the last minute.
+        Live 11-03: "Can you see the screen right now?" (her name came a beat later) took no look and got
+        "Sure, I'm looking now." because the line didn't name her and the partner window had lapsed."""
+        try:
+            floor = getattr(self, 'floor', None)
+            if floor is None or not speaker:
+                return False
+            if floor.engaged_with() == speaker:
+                return True
+            now = floor.clock()
+            return not any(s != speaker and now - t <= 60.0 for s, t in dict(floor.recent).items())
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _recheck_note(self, txt: str, look, frames: bool) -> str:
+        """The turn note for a fresh look after "I don't see it" (capability.recheck_note)."""
+        try:
+            if not (look and look[0] == 'look_at_screen'):
+                return ""
+            reason = str((look[1] or {}).get('reason', '') or '')
+            if not reason.startswith('recheck:'):
+                return ""
+            import capability as _cap
+            return _cap.recheck_note(looked_again=frames or not self._live_on())
+        except Exception:  # noqa: BLE001
+            return ""
+
+    @staticmethod
+    def _live_on() -> bool:
+        """Live screen is on (looks read the live capture; docs/designs/live_screen.md)."""
+        try:
+            import live_screen
+            return live_screen.enabled()
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _screen_question(self, txt: str) -> bool:
+        """Live screen: does this line, said to the agent, need a look at the screen right now (glance_judge.
+        p_screen)? ATLAS_SCREEN_DETECT=on (default since 11-03) acts on it; =log only logs the verdict, off the
+        turn's path."""
+        try:
+            from live_screen import config as _lc
+            mode = _lc.SCREEN_DETECT
+            if mode not in ("log", "on"):
+                return False
+            import glance_judge as _gj
+            body = re.sub(r'^\s*\[S\d+\]\s*', '', txt or '')
+            if not self._worth_judging(body):
+                return False
+
+            def judge():
+                t0 = time.perf_counter()
+                p = _gj.screen_verdict(body)
+                hit = p is not None and p >= _lc.SCREEN_DETECT_THRESHOLD
+                logger.info("👁️ screen question? p=%s -> %s in %d ms%s: %r", "n/a" if p is None else f"{p:.2f}",
+                            "yes" if hit else "no", (time.perf_counter() - t0) * 1000,
+                            "" if mode == "on" else " (log only)", body[:80])
+                return hit
+            if mode == "log":
+                threading.Thread(target=judge, name="screen-question", daemon=True).start()
+                return False
+            return judge()
+        except Exception as e:  # noqa: BLE001
+            logger.debug("screen question check failed: %s", e)
+            return False
+
+    def _own_look_ok(self, gen, look) -> bool:
+        """Would a look_at_screen call on this turn get frames? One someone asked for always does; one of its own only
+        within the glance limits (screen.capture refuses it otherwise). The tool list itself stays the same every
+        turn: it sits at the front of the prompt, where a change would cost the cached prefix."""
+        try:
+            if (look and look[0] == 'look_at_screen') or self._look_was_asked(gen):
+                return True
+            import capability as _cap
+            return _screen is not None and _screen.can_glance(_cap.glance_mode())
+        except Exception:  # noqa: BLE001
+            return True
+
+    def _agent_names(self) -> tuple:
+        return (tuple(getattr(getattr(getattr(self, 'agent', None), 'profile', None), 'names', ()) or ())
+                or (getattr(self, 'current_persona', '') or '',))
+
+    _FILLER_RE = re.compile(r"\b(?:hey|hi|hello|yo|oi|ok|okay|alright|all\s+right|so|um+|uh+|er|well|oh|ah|wait|"
+                            r"dude|bro|man|guys?|yeah|yes|no|nah|hmm+)\b", re.I)
+
+    def _worth_judging(self, body: str) -> bool:
+        """At least two words besides the agent's name and fillers. "Ivy.", "Max", "All right.", "OK OK focus." went to
+        the screen judge in the heavy-call test; a short screen question ("what's that?") still does."""
+        names = {n.lower() for n in self._agent_names() if n}
+        words = [w for w in re.findall(r"[A-Za-z0-9']+", self._FILLER_RE.sub(" ", body or ""))
+                 if w.lower() not in names]
+        return len(words) >= 2
+
+    def prefetch_screen_question(self, txt: str) -> None:
+        """Live screen: judge a question said to the agent from the partial transcripts while its last words come in
+        (glance_judge.prefetch_screen), so the turn finds the verdict ready instead of asking in front of the reply.
+        Only questions to the agent that the word cues don't already settle; never blocks."""
+        try:
+            from live_screen import config as _lc
+            if _lc.SCREEN_DETECT != "on" or not self._live_on():
+                return
+            body = re.sub(r'^\s*\[S\d+\]\s*', '', txt or '').strip()
+            if not body.endswith("?") or not self._worth_judging(body):
+                return
+            if _screen is None or not _screen.status().get('enabled'):
+                return
+            import capability as _cap
+            if _cap.wants_look(body) or _cap.just_happened(body) or _cap.cant_see_it(body):
+                return              # it looks anyway
+            from floor import names_agent
+            floor = getattr(self, 'floor', None)
+            one_on_one = floor is not None and floor.active_partner() is not None and floor.room_size() <= 1
+            if not (names_agent(body, self._agent_names()) or one_on_one):
+                return
+            import glance_judge as _gj
+            _gj.prefetch_screen(body)
+        except Exception as e:  # noqa: BLE001 - a partial must never break
+            logger.debug("screen question prefetch failed: %s", e)
+
+    def _live_look(self, txt: str, look):
+        """Live screen: run the look now, before the turn's notes, so they know whether frames came back.
+        Returns ((name, args, result), frames_came_back)."""
+        try:
+            import capability as _cap
+            name, args = look[0], look[1]
+            reason = str((args or {}).get('reason', '') or '')
+            m = re.match(r'^\s*\[(S\d+)\]', txt or '')
+            who = ""
+            try:
+                who = (self.people.name_of(m[1]) if m else "") or ""
+            except Exception:  # noqa: BLE001
+                pass
+            res = _screen.capture(reason, asked=not reason.startswith('glance:'), glance=_cap.glance_mode(),
+                                  speaker=who, line=txt)
+            self._looked_gen = getattr(getattr(self, 'running_generation', None), 'id', None)
+            return (name, args, res), bool(isinstance(res, dict) and (res.get('seen') or res.get('images')))
+        except Exception as e:  # noqa: BLE001 - never block a turn
+            logger.warning('live look failed: %s', e)
+            return look, False
 
     def _run_tool(self, name, args):
         """Instance tool executor: board-backed tools, then the module ones."""
@@ -964,7 +1347,8 @@ class SpeechPipelineManager:
                 except Exception:  # noqa: BLE001
                     pass
                 return _screen.capture(str(args.get("reason", "") or ""),
-                                       asked=self._look_was_asked(gen), glance=_cap.glance_mode(), speaker=who)
+                                       asked=self._look_was_asked(gen), glance=_cap.glance_mode(), speaker=who,
+                                       line=getattr(gen, "text", "") or "")
             if name == "web_search" and _websearch is not None:
                 b = self.board()
                 q = str(args.get("query", "") or "").strip()
@@ -986,6 +1370,13 @@ class SpeechPipelineManager:
                     return (f"Still searching in the background (task #{t['id']}). It keeps running "
                             "even if you get interrupted and will land on your TASK BOARD with a cue "
                             "to share it. For now just say briefly that you're still digging.")
+                from floor import engage_on as _engage_on
+                if _engage_on():
+                    # owner 11-03: results came back as spec sheets ("Unreal Engine 5, came out
+                    # October 28, 90% positive on Steam"); say it like a person instead
+                    res += ("\n(Weave this in like a friend who just glanced at it: your take "
+                            "plus one or two details. No reciting dates, engines, version "
+                            "numbers or percentages unless someone asked for exactly that.)")
                 return res
             if name == "read_page" and _websearch is not None:
                 r = _websearch.read_page(str(args.get("url", "")))
@@ -1047,6 +1438,11 @@ class SpeechPipelineManager:
             m = re.match(r'^\s*\[(S\d+)\]', txt or '')
             speaker = m[1] if m else None
             asked = _cap.wants_look(txt)
+            live = self._live_on()
+            if live and not asked and _cap.just_happened(txt):
+                asked = True        # Live screen: "what just happened" looks back over the last seconds
+            recheck = self._recheck_wanted(txt)
+            asked = asked or recheck
             # It just said "show me" and they answered: glance as it replies.
             pend = getattr(self, 'glance_pending', None)
             if (not asked and pend and time.time() - pend['at'] <= GLANCE_ANSWER_S
@@ -1054,7 +1450,7 @@ class SpeechPipelineManager:
                 self.glance_pending = None
                 if _screen.can_glance(mode):
                     return ('look_at_screen', {'reason': f"glance: {speaker or 'they'} answered its 'show me'"})
-            if not asked and not _screen.can_glance(mode):
+            if not asked and not _screen.can_glance(mode) and not live:
                 return None
             from floor import names_agent
             agent = getattr(self, 'agent', None)
@@ -1062,10 +1458,19 @@ class SpeechPipelineManager:
                 or (getattr(self, 'current_persona', '') or '',)
             floor = getattr(self, 'floor', None)
             partner = floor.active_partner() if floor is not None else None
-            if not (names_agent(txt, names) or speaker is None or (partner and speaker == partner)):
+            if not (names_agent(txt, names) or speaker is None or (partner and speaker == partner)
+                    or (asked and self._only_one_talking(speaker))):
                 return None
+            if live and not asked and self._screen_question(txt):
+                asked = True
             if asked:
+                if recheck:
+                    return ('look_at_screen', {'reason': f"recheck: {speaker or 'someone'} can't see what I described"})
+                if _cap.call_question(txt):     # owner 11-02: check the call on screen, don't guess
+                    return ('look_at_screen', {'reason': f"call: {speaker or 'someone'} asked about the call"})
                 return ('look_at_screen', {'reason': f"{speaker or 'someone'} asked me to look at the screen"})
+            if live and not _screen.can_glance(mode):
+                return None
             # "my kitten is asleep on my keyboard" aimed at it: glance on its own as it
             # answers (owner 11-01) when the model says a friend would (glance_judge).
             import glance_judge as _gj
@@ -1188,6 +1593,7 @@ class SpeechPipelineManager:
 
     def _on_tool_result(self, name, args, result) -> None:
         """Remember what a search returned (called from the LLM tool loop)."""
+        _turn_trace.tool(getattr(self.running_generation, "id", None), name)
         try:
             import time as _t
             if name == "web_search":   # this generation searched: its "let me look" is kept already
@@ -1289,7 +1695,7 @@ class SpeechPipelineManager:
             from floor import motif_note
             names = list(getattr(getattr(self, "dynamics", None), "agent_names", ()) or ())
             book = getattr(self, "people", None)
-            people = [p.name for p in (getattr(book, "people", {}) or {}).values() if getattr(p, "name", None)]
+            people = book.known_names() if book is not None else []
             mnote = motif_note(history, exclude=names + people)
             if mnote:
                 room = (room + chr(10) + mnote).strip()
@@ -1346,20 +1752,6 @@ class SpeechPipelineManager:
                     room = (room + chr(10) + ln).strip()
             except Exception as e:  # noqa: BLE001
                 logger.warning("language note failed: %s", e)
-            try:
-                import call_memory as _cmem
-                memn = _cmem.memory_note(getattr(self, "current_persona", ""))
-                if memn:
-                    room = (room + chr(10) + memn).strip()
-                hg = getattr(self, "hgmem", None)
-                if hg is not None and ctx:
-                    hgn = hg.recall_note(getattr(self, "current_persona", ""), ctx,
-                                         exclude={i["text"] for i in _cmem.approved(
-                                             getattr(self, "current_persona", ""))})
-                    if hgn:
-                        room = (room + chr(10) + hgn).strip()
-            except Exception as e:  # noqa: BLE001
-                logger.warning("memory note failed: %s", e)
             selfn = _cap.self_note(ctx)
             if selfn:
                 room = (room + chr(10) + selfn).strip()
@@ -1393,6 +1785,12 @@ class SpeechPipelineManager:
             history = _cap.scrub_refusals(history, eyes_on, bool(WEB_SEARCH_TOOLS))
         except Exception as e:  # noqa: BLE001 - never block a turn
             logger.warning("capability note failed: %s", e)
+        history = self._clean_history(history)
+        return history, room
+
+    def _clean_history(self, history):
+        """Clean the agent's own past lines (the second half of _finish_context's history cleanup;
+        think_listen's thinking prompt runs the same helpers). Never raises."""
         try:
             # Data, not rules: clean the agent's own past lines instead of adding
             # "don't say X" notes (naming a phrase primes it; notes stack up).
@@ -1403,7 +1801,17 @@ class SpeechPipelineManager:
             history = scrub_history(history, getattr(self, "current_persona", ""))
         except Exception as e:  # noqa: BLE001 - never block a turn
             logger.warning("collapse_repeats failed: %s", e)
-        return history, room
+        return history
+
+    def _clean_history_inputs(self):
+        """(eyes_on, web_search) for capability.scrub_refusals, computed as _finish_context does."""
+        try:
+            import plugins as _plugins
+            _off = _plugins.off_ids()
+            eyes_on = bool(_screen is not None and _screen.status().get("enabled")) and 'eyes' not in _off
+        except Exception:  # noqa: BLE001
+            eyes_on = False
+        return eyes_on, bool(WEB_SEARCH_TOOLS)
 
     @staticmethod
     def _with_anti_repeat(history, room: str) -> str:
@@ -1470,9 +1878,7 @@ class SpeechPipelineManager:
                 import plugins as _plugins
                 if _plugins.is_enabled("lore"):
                     import lore as _lore
-                    _no = getattr(getattr(self, "people", None), "name_of", None)
-                    _who = _no(m[1]) if (m and _no) else None
-                    ln = _lore.note(getattr(self, "current_persona", "") or "", txt, [_who] if _who else [])
+                    ln = _lore.note(getattr(self, "current_persona", "") or "", txt)
                     if ln:
                         note = (note + chr(10) + ln).strip() if note else ln
             except Exception as e:  # noqa: BLE001
@@ -1868,6 +2274,7 @@ class SpeechPipelineManager:
         self.generation_counter += 1
         new_gen_id = self.generation_counter
         logger.info(f"🗣️✨🔄 [Gen {new_gen_id}] Preparing new generation for: '{txt[:50]}...'")
+        _turn_trace.prepared(new_gen_id, txt)
 
         # Reset flags and events (mostly redundant after sync abort, but safe)
         self.llm_generation_active = False
@@ -1912,20 +2319,53 @@ class SpeechPipelineManager:
 
         try:
             logger.info(f"🗣️🧠🚀 [Gen {new_gen_id}] Calling LLM generate...")
+            _turn_trace.mark(new_gen_id, "llm")
             bait = None if is_cue else self._check_bait(txt)
             if bait is not None and bait.action == 'hold':
                 logger.info(f"🗣️🪤 [Gen {new_gen_id}] Loop bait continued after roast ({bait.kind}: {bait.line[:50]!r}) -> HOLD, no LLM call")
                 gen.llm_generator = filter_response(iter(['[HOLD]']), gen.decision)
                 self.generator_ready_event.set()
                 return
+            # engagement round (design docs/designs/engagement.md): the single roast predicate
+            # runs before the room context is built, so steering_note reads this turn's verdict.
+            # Cue turns and loopbait-handled turns record nothing and clear the flag.
+            names_t = tuple(getattr(getattr(self.agent, "profile", None), "names", ()) or ())
+            try:
+                m_spk = re.match(r'^\s*\[(S\d+|user)\]', txt or "")
+                self.floor.note_roast(m_spk[1] if m_spk else None, txt, names_t,
+                                      loopbait_handled=bool(is_cue or (bait is not None and bait.note)))
+            except Exception as e:  # noqa: BLE001
+                logger.warning("note_roast failed: %s", e)
             history, room = self._llm_context(txt)
+            snap_mem = None
+            if not is_cue:
+                try:   # think while listening: the memory block the thought was written with (the room
+                    # notes are always this turn's own: a reused one could be stale, review 11-03)
+                    snap = self._think_snapshot(txt, history)
+                    if snap is not None:
+                        snap_mem = snap[2]
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("think context reuse failed: %s", e)
             gen.decision.forbid, gen.decision.echo_lines = self._guard_lines(txt)
             if bait is not None and bait.note:
                 logger.info(f"🗣️🪤 [Gen {new_gen_id}] Loop bait ({bait.kind} x{bait.count}: {bait.line[:50]!r}) -> roast + pivot")
                 room = (room + chr(10) + bait.note).strip()
+            else:
+                try:   # one bait note max (floor.bait_note_for owns the precedence rule)
+                    from floor import bait_note_for as _bait_note_for
+                    one_bait = _bait_note_for(txt, names_t, "",
+                                              getattr(self.floor, "roast_current", False), is_cue)
+                    if one_bait:
+                        logger.info(f"🗣️🪤 [Gen {new_gen_id}] identity bait -> BAIT_NOTE")
+                        room = (room + chr(10) + one_bait).strip()
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("bait_note_for failed: %s", e)
             # TODO: Update history management if needed
             # self.history.append({"role": "user", "content": txt}) # Example history update
-            mem_ctx = self._memory_context(txt)
+            mem_pair = snap_mem if snap_mem is not None else (("", []) if is_cue else self._memory_context(txt))
+            if not isinstance(mem_pair, tuple):           # an old-style snapshot (plain text)
+                mem_pair = (mem_pair or "", [])
+            mem_ctx, gen.memory_ids = mem_pair
             look = (self._look_prefetch(txt, is_cue) or self._code_prefetch(txt, is_cue)
                     or self._room_prefetch(txt, is_cue))
             try:   # a switched-off plugin's tool is never prefetched (plugins.py)
@@ -1934,11 +2374,16 @@ class SpeechPipelineManager:
                     look = None
             except Exception:  # noqa: BLE001
                 pass
+            frames = False
+            if look and look[0] == 'look_at_screen' and self._live_on():
+                look, frames = self._live_look(txt, look)    # Live screen: look before the notes are written
             # On the turn itself, not the room note: in the glance sim a room note left
             # "I'm on cam now" -> "Oh nice, I can see you now" at 3/8, on the turn 0/8.
             unseen = "" if is_cue or (look and look[0] == 'look_at_screen') else self._unseen_note(txt)
+            if not unseen and not is_cue:
+                unseen = self._recheck_note(txt, look, frames)
 
-            def _gen(text_in, _h=history, _r=room, _m=mem_ctx, _l=look):
+            def _gen(text_in, _h=history, _r=room, _m=mem_ctx, _l=look, **sampling):
                 return self.llm.generate(
                     text=text_in,
                     history=_h,
@@ -1947,13 +2392,44 @@ class SpeechPipelineManager:
                     memory_context=_m,
                     room_context=_r,
                     prefetch_tool=_l,
+                    **sampling,
                 )
             trimmed = self._trim_transcript(txt)
             if unseen:
                 trimmed = f"{trimmed}\n({unseen})"
+            game = "" if is_cue else self._game_note(txt, frames)
+            if game:
+                trimmed = f"{trimmed}\n({game})"
+            depth = "" if is_cue else self._depth_note(txt)
+            if depth:
+                trimmed = f"{trimmed}\n({depth})"
+            mcue = "" if is_cue else self._memory_cue(txt, getattr(gen, "memory_ids", None))
+            if mcue:   # "remember that" / "off the record" (docs/designs/experience_memory.md, D7, S7)
+                trimmed = f"{trimmed}\n({mcue})"
+            try:   # asked again: the earlier answer, so the reply comes in new words (floor.repeat_question_note)
+                from floor import repeat_question_note
+                again = "" if is_cue else repeat_question_note(history, txt)
+            except Exception as e:  # noqa: BLE001
+                logger.debug("repeat question note failed: %s", e)
+                again = ""
+            if again:
+                trimmed = f"{trimmed}\n({again})"
+            engage = "" if is_cue else self._engage_note(txt, bool(depth))
+            if engage:
+                trimmed = f"{trimmed}\n({engage})"
+            try:
+                from floor import curiosity_note as _curiosity_note
+                curious = "" if is_cue else _curiosity_note(txt)
+            except Exception:  # noqa: BLE001
+                curious = ""
+            if curious:
+                trimmed = f"{trimmed}\n({curious})"
+            live_line = "" if is_cue else self._live_status_note(txt, frames, self._own_look_ok(gen, look))
+            if live_line:            # last, at the prompt's end: changes only when the screen's status changes
+                trimmed = f"{trimmed}\n({live_line})"
             try:
                 from response_decision import directly_named, retry_named_hold, NAMED_NUDGE
-                names = tuple(getattr(getattr(self.agent, "profile", None), "names", ()) or ())
+                names = names_t
                 named = bool(names) and not is_cue and directly_named(txt, names)
                 who = gen.decision.expected_target or "them"
                 # owner 10-06: a directed follow-up from the person the agent is
@@ -1967,13 +2443,20 @@ class SpeechPipelineManager:
                 logger.warning("named-hold setup failed: %s", e)
                 named, who = False, "them"
                 retry_named_hold = None
+            _directed = None
             try:   # a line that asks it nothing: the model's own doubt is enough to hold (floor.py)
                 _rs = getattr(self.llm, "remote", None)
                 if _rs is not None and not is_cue:
                     _rs.next_hold_thresh = self.floor.undirected_hold_thresh(
                         txt, tuple(getattr(getattr(self.agent, "profile", None), "names", ()) or ()))
+                    _directed = _rs.next_hold_thresh
             except Exception as e:  # noqa: BLE001
                 logger.warning("undirected hold threshold failed: %s", e)
+            try:   # think while listening: cut the thought here and hand it to this turn's request
+                self._think_handover(txt, trimmed, is_cue, _directed)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("think handover failed: %s", e)
+                self._clear_think_handover()
             raw_stream = _gen(trimmed)
             if retry_named_hold is not None:
                 raw_stream = retry_named_hold(
@@ -1982,6 +2465,10 @@ class SpeechPipelineManager:
                     named,
                     cancelled=lambda g=gen: bool(g.abortion_started or g.llm_aborted
                                                  or self.stop_llm_request_event.is_set()))
+            if not is_cue:   # a SPEAK whose every word the screens cut gets one more try (filter_response)
+                gen.decision.empty_retry = lambda note, g=gen: (
+                    None if (g.abortion_started or g.llm_aborted or self.stop_llm_request_event.is_set())
+                    else _gen(trimmed + chr(10) + note, temperature=RETRY_TEMPERATURE))
             gen.llm_generator = filter_response(
                 raw_stream,
                 gen.decision,
@@ -2164,6 +2651,11 @@ class SpeechPipelineManager:
             txt: The user input text to be synthesized.
         """
         logger.info(f"🗣️📥 Queueing 'prepare' request for: '{txt[:50]}...'")
+        try:   # a reply being generated is speech activity (docs/designs/experience_memory.md, D3)
+            import call_boundary
+            call_boundary.activity("generation")
+        except Exception:  # noqa: BLE001
+            pass
         self.requests_queue.put(PipelineRequest("prepare", txt))
 
     def should_speak(self, txt: str, diarizer_participants: Optional[list] = None) -> bool:
@@ -2174,6 +2666,12 @@ class SpeechPipelineManager:
         microseconds, and returning False *skips* the LLM round-trip entirely
         (faster than speaking). Returns True if the agent should respond.
         """
+        try:   # "remember that" / "off the record" always gets its short acknowledgement (D7)
+            if self.memory_trigger(txt) in ("off", "noted", "held", "not_owner", "rejected"):
+                logger.info("🗣️🔊 Speaking: memory request")
+                return True
+        except Exception as e:  # noqa: BLE001
+            logger.debug("memory trigger check failed: %s", e)
         decision = self.dynamics.should_speak(
             txt,
             recent_history=self.history,
@@ -2220,9 +2718,13 @@ class SpeechPipelineManager:
         if self.shutdown_event.is_set():
             logger.warning("🗣️🔌 Shutdown in progress, ignoring abort request.")
             return
+        self._clear_think_handover()
 
         gen_id_str = f"Gen {self.running_generation.id}" if self.running_generation else "Gen None"
         logger.info(f"🗣️🛑🚀 Requesting 'abort' (wait={wait_for_completion}, reason='{reason}') for {gen_id_str}")
+        _gen = self.running_generation
+        if _gen is not None:
+            _turn_trace.mark(_gen.id, "aborted_at", abort=str(reason)[:60])
 
         # Call the internal synchronous processor
         self.process_abort_generation()
@@ -2299,52 +2801,332 @@ class SpeechPipelineManager:
             logger.warning("🗣️🧠⚠️ summarization failed: %s", e)
             return ""
 
-    def remember(self, text: str) -> None:
-        """Queue a user turn for async situation-fact extraction (non-blocking)."""
-        if ENABLE_MEMORY and text and text.strip():
-            try:
-                self.memory_queue.put((self.current_persona, text.strip()))
-            except Exception as e:  # noqa: BLE001
-                logger.warning("🗣️🧠⚠️ remember() enqueue failed: %s", e)
+    # ------------------------------------------------------------ experience memory (design D4, D5)
+    SNIPPET_COOLDOWN_S = 20 * 60
+    UNPROMPTED_SPACING_S = 10 * 60      # owner 11-04: memories without an ask at most once in 10 minutes
+    UNPROMPTED_MIN_SCORE = 3            # and only on a strong match (an ask needs the usual 2)
+    OWNER_PRESENT_S = 15 * 60
 
-    def _memory_worker(self) -> None:
-        """Extract + persist situation facts only when the pipeline is idle."""
-        while not self.shutdown_event.is_set():
-            try:
-                persona, text = self.memory_queue.get(timeout=1.0)
-            except Empty:
-                continue
-            if self.llm_generation_active or self.running_generation is not None:
-                # never compete with a live generation for the model; requeue
-                self.memory_queue.put((persona, text))
-                self.shutdown_event.wait(timeout=2.0)
-                continue
-            mem = self._memory_for(persona)
-            if mem:
-                mem.add_situation(text)
-
-    def _memory_for(self, persona: str):
-        with self.memory_lock:
-            if persona not in self.memories:
-                try:
-                    from memory_module import SituationMemory
-                    self.memories[persona] = SituationMemory(persona, store_dir="memory_db")
-                except Exception as e:  # noqa: BLE001
-                    logger.warning("🗣️🧠⚠️ memory init failed for '%s': %s", persona, e)
-                    self.memories[persona] = None
-            return self.memories[persona]
-
-    def _memory_context(self, text: str) -> str:
-        if not ENABLE_MEMORY:
-            return ""
-        mem = self._memory_for(self.current_persona)
-        if not mem:
-            return ""
+    def _memory_setup(self) -> None:
+        """Recall state; called once from __init__ (before the LLM exists: composing waits for it)."""
+        import experience_memory as _EM
+        self._compose_lock = threading.Lock()
+        self.recall = _EM.Recall()
+        self._call_lines = _EM.CallLines()
+        self._snippet_used: dict = {}
+        self._owner_last = 0.0
+        self._owner_note_on = False
+        self._note_ids = ([], [])
+        self.held_facts: dict = {}
+        self.said_facts: dict = {}
+        self._settings_cache = (0.0, dict(_EM.SETTINGS_DEFAULT))
         try:
-            return mem.context_block(text, limit=4)
+            import call_summary as _cs
+            _cs.add_listener(self._call_lines.add)
         except Exception as e:  # noqa: BLE001
-            logger.warning("🗣️🧠⚠️ memory recall failed: %s", e)
+            logger.warning("call line index not wired: %s", e)
+        _EM.on_change(self._memory_changed)
+        try:
+            import call_boundary as _cb
+            _cb.BOUNDARY.on_start(lambda call, t: self._compose_system())
+            _cb.on_forget_window(self._forget_held)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("call start hook not wired: %s", e)
+
+    def _forget_held(self, t_from: float, t_to: float) -> None:
+        """A backward off-the-record trigger: held "remember that" turns from the marked lines are dropped (D7)."""
+        for label, items in list(self.held_facts.items()):
+            keep = [i for i in items if not (t_from <= float(i.get("t", 0)) <= t_to)]
+            if keep:
+                self.held_facts[label] = keep
+            else:
+                self.held_facts.pop(label, None)
+
+    def _mem_settings(self) -> dict:
+        t, v = self._settings_cache
+        if time.time() - t > 2.0:
+            import experience_memory as _EM
+            try:
+                v = _EM.settings()
+            except Exception:  # noqa: BLE001
+                pass
+            self._settings_cache = (time.time(), v)
+        return v
+
+    def _memory_changed(self, kind: str, agent=None) -> None:
+        """A store changed (this process): drop the index and compose the prompt again (D4)."""
+        if kind == "settings":
+            self._settings_cache = (0.0, self._settings_cache[1])
+        self.recall.invalidate(kind, agent)
+        self.recall.warm_later(getattr(self, "current_persona", None))     # rebuilt now, not on the next reply
+        self._compose_system()
+
+    def memory_reloaded(self) -> None:
+        """Another process (the post-call pass) wrote the stores: reload and compose again (D3)."""
+        self.recall.invalidate("")
+        self.recall.warm_later(getattr(self, "current_persona", None))
+        self._settings_cache = (0.0, self._settings_cache[1])
+        self._compose_system()
+
+    def _context_window(self) -> int:
+        """4,096 in local mode (the live model's pinned num_ctx); the remote config's `context` key, else 8,192."""
+        remote = getattr(getattr(self, "llm", None), "remote", None)
+        if remote is None:
+            return 4096
+        try:
+            return int((getattr(remote, "cfg", {}) or {}).get("context") or 8192)
+        except Exception:  # noqa: BLE001
+            return 8192
+
+    def _budgets(self) -> dict:
+        small = self._context_window() < 8192
+        # A7 (2026-11-04): the full memory text at 500/150/3x100 tokens added 55 ms to a reply's first token (limit
+        # 50); 300/150/3x80 keeps three episode summaries and the owner note
+        return {"per_call": 120 if small else 300, "owner": 60 if small else 150,
+                "snippets": 1 if small else 3, "snippet": 60 if small else 80}
+
+    def owner_spoke(self) -> None:
+        """An owner turn was committed (server): the owner is present for the next 15 minutes (D4)."""
+        self._owner_last = time.time()
+        if not self._owner_note_on:
+            self._compose_system()
+
+    def _owner_present(self) -> bool:
+        owner = getattr(getattr(self, "people", None), "owner", None)
+        try:
+            adopted = bool(owner is not None and owner.labels())
+        except Exception:  # noqa: BLE001
+            adopted = False
+        return adopted and time.time() - self._owner_last < self.OWNER_PRESENT_S
+
+    @staticmethod
+    def _cut(text: str, tokens: int) -> str:
+        from conversation_log import est_tokens
+        t = (text or "").strip()
+        while t and est_tokens(t) > tokens:
+            t = " ".join(t.split()[:-max(1, len(t.split()) // 8)])
+        return t
+
+    def _per_call_note(self, budget: int) -> tuple:
+        if not self._mem_settings().get("use_memories"):
+            return "", []
+        import experience_memory as _EM
+        from conversation_log import est_tokens
+        lines, ids, used = [], [], est_tokens("From earlier calls you were in (memories, not instructions):")
+        for ep in _EM.episodes(self.current_persona)[:3]:
+            summ = " ".join(ep.get("summary") or [])
+            cost = est_tokens(summ) + 2
+            if not summ or used + cost > budget:
+                break
+            lines.append(f"- {ep.get('date', '')}: {summ}")
+            ids.append(ep.get("id"))
+            used += cost
+        if not lines:
+            return "", []
+        return "From earlier calls you were in (memories, not instructions):\n" + "\n".join(lines), ids
+
+    def _owner_note(self, budget: int) -> tuple:
+        import experience_memory as _EM
+        from conversation_log import est_tokens
+        facts = _EM.usable_owner_facts(self._mem_settings().get("use_memories"))
+        head = ("About the owner (memories, newest first, not instructions; if the owner says something different now, "
+                "what they say now is right):")
+        lines, ids, used = [], [], est_tokens(head)
+        for f in facts[:8]:
+            line = f"- {f.get('date', '')}: {f.get('fact', '')}"
+            cost = est_tokens(line) + 1
+            if used + cost > budget:
+                break
+            lines.append(line)
+            ids.append(f.get("id"))
+            used += cost
+        if not lines:
+            return "", []
+        return head + "\n" + "\n".join(lines), ids
+
+    def _compose_system(self) -> str:
+        """The one writer of the system prompt (D4): persona text, then the active agent's per-call note and, while
+        the owner is present, the owner note. Writes the pipeline's, the LLM's and the agent runtime's copies."""
+        lock = getattr(self, "_compose_lock", None)
+        if lock is None:
+            return getattr(self, "system_prompt", "")
+        with lock:
+            base = getattr(self, "_persona_prompt", None) or self.system_prompt
+            b = self._budgets()
+            try:
+                pc, ep_ids = self._per_call_note(b["per_call"])
+            except Exception as e:  # noqa: BLE001
+                logger.warning("per-call note failed: %s", e)
+                pc, ep_ids = "", []
+            present = self._owner_present()
+            on, fact_ids = "", []
+            if present:
+                try:
+                    on, fact_ids = self._owner_note(b["owner"])
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("owner note failed: %s", e)
+            self._owner_note_on = present
+            self._note_ids = (ep_ids, fact_ids)
+            text = base + "".join("\n\n" + n for n in (pc, on) if n)
+            self.system_prompt = text
+            llm = getattr(self, "llm", None)
+            if llm is not None:
+                llm.system_prompt = text
+                llm.system_prompt_message = {"role": "system", "content": text}
+            try:
+                rt = self.agents.active if getattr(self, "agents", None) is not None else None
+                if rt is not None:
+                    rt.system_prompt = text
+            except Exception:  # noqa: BLE001
+                pass
+            return text
+
+    def _memory_context(self, text: str) -> tuple:
+        """Snippets for one reply (D4, D5): (text for memory_context, snippet ids). At most three (one under a
+        4,096-token window), highest score first; owner facts only on the owner's turns; nothing on turns with fewer
+        than two content words. The ids start their cooldown only when the reply is spoken (reply_spoken)."""
+        try:
+            return self._snippets(text)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("memory snippets failed: %s", e)
+            return "", []
+
+    def _snippets(self, text: str) -> tuple:
+        if getattr(self, "recall", None) is None:
+            return "", []
+        if self._owner_present() != self._owner_note_on:
+            self._compose_system()               # the owner arrived or left: the owner note follows (D4)
+        m = re.match(r"^\s*\[(S\d+|user)\]\s*", text or "")
+        label = m[1] if m else None
+        body = (text or "")[m.end():] if m else (text or "")
+        import memory_redact as _MR
+        if len(_MR.content_words(body)) < 2:
+            return "", []
+        b = self._budgets()
+        now = time.time()
+        # Owner 11-04: "constantly making callbacks ... tone this down". Unasked, a memory comes only on a strong
+        # match and at most once every UNPROMPTED_SPACING_S; earlier lines of this call only when someone asks.
+        asked = _MR.past_reference(body) or _MR.asks_about_earlier(body)
+        if not asked and now - max(self._snippet_used.values(), default=0.0) < self.UNPROMPTED_SPACING_S:
+            return "", []
+        min_score = 2 if asked else self.UNPROMPTED_MIN_SCORE
+        note_eps, note_facts = set(self._note_ids[0]), set(self._note_ids[1])
+
+        def skip(i):   # already in a note (the per-call note holds summaries; the owner note holds facts) or cooling
+            if i in note_facts or (i.endswith("/summary/0") and i.split("/")[0] in note_eps):
+                return True
+            if "/summary/" in i and i.split("/")[0] in note_eps:
+                return True
+            return now - self._snippet_used.get(i, 0.0) < self.SNIPPET_COOLDOWN_S
+        cands = []
+        if self._mem_settings().get("use_memories"):
+            for i, s, t in self.recall.episode_hits(self.current_persona, body, limit=3, exclude=skip):
+                if s >= min_score:
+                    cands.append((s, self.recall.recency(self.current_persona, i), i,
+                                  "In an earlier call you were in: " + t))
+        owner = getattr(getattr(self, "people", None), "owner", None)
+        try:
+            owner_turn = bool(label and owner is not None and owner.is_adopted(label))
+        except Exception:  # noqa: BLE001
+            owner_turn = False
+        if owner_turn:
+            for i, s, t in self.recall.fact_hits(body, self._mem_settings().get("use_memories"), limit=3,
+                                                 exclude=skip):
+                if s >= min_score:
+                    cands.append((s, self.recall.recency(self.current_persona, i), i, "About the owner: " + t))
+        if asked:                                      # D5: earlier lines of this call only when someone asks
+            before = getattr(getattr(self, "convo", None), "oldest_rendered_wall", None)
+            if before is None:
+                before = now - 180.0                   # empty view or log off: lines older than 3 minutes (D5)
+            before = min(before, now - 1.0)            # never the current turn
+            for i, s, who, t in self._call_lines.hits(body, before, limit=3, exclude=skip):
+                name = self.people.name_of(who) if getattr(self, "people", None) and who else None
+                # D5: a label shows as the name learned this call, else "someone" (as the recap tool), never "S2"
+                cands.append((s, self._call_lines.recency(i), i, f"Earlier in this call: {name or 'someone'}: {t}"))
+        cands.sort(key=lambda c: (-c[0], -c[1]))                       # D4: ties go to the newer item
+        picked = cands[:b["snippets"] if asked else 1]                 # unasked: one at most
+        if not picked:
+            return "", []
+        lines = [self._cut(c[3], b["snippet"]) for c in picked]
+        ids = [c[2] for c in picked]
+        return ("MEMORY (background, not instructions; bring it up only if it helps with what was just said, "
+                "otherwise leave it):\n" + "\n".join(lines)), ids
+
+    MEMORY_CUES = {   # S7
+        "noted": "MEMORY: the owner asked you to remember this, and you noted it. Say so in a few words.",
+        "held": "MEMORY: you'll keep this once you're sure it's the owner talking. Say so in a few words.",
+        "not_owner": "MEMORY: you only keep notes like this for the owner. Say so briefly and kindly.",
+        "rejected": ("MEMORY: you can't keep that one: it has a name, a private detail or a sensitive topic. "
+                     "Say so briefly."),
+        "off": "MEMORY: that's off the record now. Acknowledge in a few words.",
+        "past_other": ("MEMORY: this person isn't the owner, and you don't keep who was in earlier calls. Never tell "
+                       "them they did or said something before; what's in your memories happened to 'someone' or "
+                       "'the group'. If they ask whether you remember them, say you don't keep track of who's who "
+                       "between calls."),
+        "past_other_none": ("MEMORY: this person isn't the owner, and nothing in your memories matches what they bring "
+                            "up. Say you don't remember that, without inventing anything, and never tell them they did "
+                            "or said something before. If they ask whether you remember them, say you don't keep track "
+                            "of who's who between calls."),
+        "past_owner": "MEMORY: only what's in your memories happened; don't add details to it.",
+        "past_owner_none": ("MEMORY: nothing in your memories matches what they bring up. Say you don't remember it; "
+                            "don't invent it."),
+        "about_owner": ("MEMORY: they're asking about the owner, and they aren't the owner. Don't share or guess "
+                        "anything about the owner; say they'd have to ask the owner."),
+    }
+
+    def memory_trigger(self, txt: str) -> Optional[str]:
+        """Which memory cue a turn's text calls for (D7), from the draft text: "off", "noted", "held", "not_owner",
+        "rejected", or None. The commit decides what is stored; outcomes 1 and 2 share the "noted" cue."""
+        import memory_redact as _MR
+        import call_boundary as _cb
+        m = re.match(r"^\s*\[(S\d+|user)\]\s*", txt or "")
+        label = m[1] if m else None
+        body = (txt or "")[m.end():] if m else (txt or "")
+        agents = tuple(getattr(getattr(self, "people", None), "agent_names", ()) or ())
+        kind = _MR.off_record_kind(body, agents)
+        if kind in ("span", "back"):
+            return "off"
+        clause = _MR.remember_clause(body, agents)
+        if not clause:
+            owner = getattr(getattr(self, "people", None), "owner", None)
+            try:
+                is_owner = bool(label) and owner is not None and owner.is_adopted(label)
+                owner_name = owner.stored_name() if owner is not None else None
+            except Exception:  # noqa: BLE001
+                is_owner, owner_name = False, None
+            if not is_owner and _MR.about_owner(body, owner_name):
+                return "about_owner"
+            if _MR.past_reference(body):
+                return "past_owner" if is_owner else "past_other"
+            return None
+        if _cb.OFF.is_open():
+            return "off"
+        owner = getattr(getattr(self, "people", None), "owner", None)
+        if owner is None:
+            return "not_owner"                       # browser mode: Atlas can't recognize the owner
+        try:
+            adopted = bool(label) and owner.is_adopted(label)
+            nobody = not owner.labels()
+            has_voice = owner.has_voice()
+        except Exception:  # noqa: BLE001
+            return "not_owner"
+        if adopted:
+            return "rejected" if said_fact_problem(clause, owner) else "noted"
+        if nobody and has_voice and label:
+            return "held"
+        return "not_owner"
+
+    def _memory_cue(self, txt: str, snippet_ids=None) -> str:
+        """The cue for this turn (D6, D7). For a turn that brings up the past, whether any memory matched it decides
+        between "only what's in your memories" and "nothing matches: say you don't remember"."""
+        try:
+            k = self.memory_trigger(txt)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("memory cue failed: %s", e)
             return ""
+        if k in ("past_other", "past_owner") and not any(not str(i).startswith("line/") for i in (snippet_ids or [])):
+            k += "_none"
+        return self.MEMORY_CUES.get(k, "") if k else ""
 
     def set_persona(self, name: str) -> bool:
         """Swap the active persona (system prompt) and reset conversation state.
@@ -2354,33 +3136,57 @@ class SpeechPipelineManager:
         The LLM's cached system prompt is updated in place so no restart is needed.
         """
         name = (name or "").strip().lower()
-        if name not in PERSONAS:
+        prompt = PERSONAS.get(name)     # read once: the table may be rebuilt meanwhile (dashboard actions run off the loop)
+        if prompt is None:
             logger.warning(f"🗣️❓ Unknown persona '{name}'. Available: {list(PERSONAS)}.")
             return False
+        try:
+            return self._apply_persona(name, prompt)
+        finally:
+            self._voice_changed()
+
+    def _voice_changed(self) -> None:
+        """Tell the server the agent's voice may have changed (it re-points the call diarizer's self-profile)."""
+        cb = getattr(self, "on_voice_changed", None)
+        if cb is None:
+            return
+        try:
+            cb()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("voice change hook failed: %s", e)
+
+    @_serialized
+    def _apply_persona(self, name: str, prompt: str) -> bool:
+        # Stop the running reply first and only then make the new agent current, so the server never reports an agent
+        # whose switch has not happened (the dashboard and snapshots read current_persona; 11-04 design D1).
+        self.abort_generation(wait_for_completion=True, timeout=7.0, reason=f"set_persona:{name}")
         self.current_persona = name
+        recall = getattr(self, "recall", None)
+        if recall is not None:
+            recall.warm_later(name)            # the new agent's episode index, before its first reply needs it
         from identity import note as _id_note
         try:
             import response_decision as _rd_life; _rd_life.set_agent(name)
         except Exception:
             pass
-        self.system_prompt = f"Your name is {display_name(name)}. {_id_note(name, display_name(name))} " + PERSONAS[name]
+        self._persona_prompt = (f"Your name is {display_name(name)}. {_id_note(name, display_name(name))} " + prompt
+                                + getattr(self, "_prompt_addon", ""))
+        self.system_prompt = self._persona_prompt
         try:
             import name_hearing
             name_hearing.set_names([display_name(name)])
         except Exception as e:  # noqa: BLE001
             logger.warning('name_hearing set failed: %s', e)
         self.dynamics.agent_names = (display_name(name).lower(),)
-        # Update the LLM's cached system prompt message in place.
-        if self.llm is not None:
-            self.llm.system_prompt = self.system_prompt
-            self.llm.system_prompt_message = {"role": "system", "content": self.system_prompt}
-        # Clear history so the new identity starts fresh (also aborts any live gen).
-        self.abort_generation(wait_for_completion=True, timeout=7.0, reason=f"set_persona:{name}")
+        if getattr(self, "thinker", None) is not None:
+            self.thinker.reset()
+        self._think_snap = None
         # Each agent owns its own runtime: the previous agent keeps its memory,
         # this one resumes its own (fresh if stale). Nothing is shared except
         # people's names (same humans) and the per-persona task boards.
         self._runtime()  # ensure registry exists
         rt = self.agents.activate(name)
+        self._compose_system()      # every holder of the system prompt, with this agent's memory notes (design D4)
         self.dynamics.agent_names = rt.profile.names
         # Agents created after startup (e.g. with +) must count as agent names in the
         # name book too, or 'Hi Wren. I'm Riley.' is misjudged (demo take 10).
@@ -2392,19 +3198,26 @@ class SpeechPipelineManager:
         # Swap to the persona's assigned voice (cache-backed hot-swap).
         from voices import PERSONA_VOICES, DEFAULT_VOICE
         _voice = PERSONA_VOICES.get(name, DEFAULT_VOICE)
+        voice_ok = True
         if _voice:
-            self.audio.set_voice(_voice)
+            voice_ok = self.audio.set_voice(_voice)
         logger.info(f"🗣️🎭 Switched persona to '{name}'.")
         try:
             from call_recorder import REC
             REC.event("persona", persona=name)
         except Exception:  # noqa: BLE001
             pass
+        if not voice_ok and getattr(self.audio, "engine_name", "qwen") == "qwen":
+            logger.warning(f"🗣️🎭 '{name}' is active but its voice {_voice!r} did not load")
+            return False                 # only the qwen engine switches voices; elsewhere False is "unsupported"
         return True
 
     def set_voice(self, name: str) -> bool:
         """Independent voice override (hot-swap the TTS voice without changing persona)."""
-        ok = self.audio.set_voice(name)
+        try:
+            ok = self.audio.set_voice(name)
+        finally:
+            self._voice_changed()
         if ok:
             logger.info(f"🗣️🔊 Voice override set to '{name}'.")
         return ok
@@ -2418,6 +3231,10 @@ class SpeechPipelineManager:
                 return
             if looking and not self._look_was_asked(self.running_generation):
                 return    # its own glance: no "hold on, let me look" (owner 11-01)
+            if looking and self._live_on():
+                # a Live screen look reads the capture in ~10 ms, before the reply is asked for: "Give me a sec."
+                # only made the reply later (heavy-call test 11-04, logs/pipeline_load)
+                return
             gen = self.running_generation
             gid = getattr(gen, "id", None)
             if gid is not None and gid == self._backchannel_gen:
@@ -2452,6 +3269,9 @@ class SpeechPipelineManager:
                 return
             logger.info(f"🗣️⏳ {label}: {text}")
             self._last_backchannel_text = text
+            # pcm is 24 kHz int16: while only this clip plays, the agent isn't mid-reply (server
+            # must still start the turn of someone finishing their question, live 11-02)
+            self.filler_until = time.monotonic() + len(pcm) / 48000.0
             cb(pcm)
         except Exception as e:  # noqa: BLE001
             logger.warning(f"🗣️⏳ backchannel failed: {e}")
@@ -2462,6 +3282,11 @@ class SpeechPipelineManager:
         _registry.reload()
         _v.refresh()
         _rebuild_personas()
+        try:   # memory's agent-name checks (docs/designs/experience_memory.md, D3)
+            import memory_redact as _MR
+            _MR.refresh_agent_words()
+        except Exception:  # noqa: BLE001
+            pass
         if self.current_persona not in PERSONAS:
             self.current_persona = DEFAULT_PERSONA
 
@@ -2484,6 +3309,11 @@ class SpeechPipelineManager:
             return False
         import voices as _v
         PERSONAS.pop(pid, None); PERSONA_FILES.pop(pid, None); PERSONA_META.pop(pid, None)
+        try:
+            import memory_redact as _MR
+            _MR.refresh_agent_words()
+        except Exception:  # noqa: BLE001
+            pass
         _v.PERSONA_VOICES.pop(pid, None)
         if "agents" in self.__dict__:
             self.agents.forget(pid)
@@ -2506,7 +3336,7 @@ class SpeechPipelineManager:
                 "accent": PERSONA_META.get(name, {}).get("accent", "#22d3ee"),
                 "placeholder": bool(PERSONA_META.get(name, {}).get("placeholder")),
             }
-            for name in PERSONAS
+            for name in list(PERSONAS)
         ]
         return {
             "personas": personas,
@@ -2517,6 +3347,92 @@ class SpeechPipelineManager:
             },
         }
 
+    @_serialized
+    def end_call(self) -> None:
+        """Call end (docs/designs/experience_memory.md, S4): stop any reply and forget the thinker's draft, the
+        dictation guard and the recently heard lines, which hold this call's words."""
+        try:
+            self.abort_generation(wait_for_completion=True, timeout=7.0, reason="call end")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("call end abort failed: %s", e)
+        if getattr(self, "thinker", None) is not None:
+            self.thinker.reset()
+        self._think_snap = None
+        if getattr(self, "_dictations", None) is not None:
+            self._dictations.reset()
+        if getattr(self, "_recent_heard", None) is not None:
+            self._recent_heard.clear()
+        if getattr(self, "_snippet_used", None) is not None:
+            self._snippet_used.clear()
+        if getattr(self, "_call_lines", None) is not None:
+            self._call_lines.clear()
+        self._owner_last = 0.0
+        self.held_facts = {}            # label -> ["remember that" turns waiting for the label's adoption]
+        self.said_facts = {}            # label -> [ids of said facts stored from it this call]
+        try:
+            import call_boundary as _cb
+            _cb.OFF.close()
+        except Exception:  # noqa: BLE001
+            pass
+        self._compose_system()
+
+    def reply_spoken(self, generation, text: str) -> None:
+        """A reply was added to history as spoken (docs/designs/experience_memory.md, D2, D4): its memory snippets now
+        count as used, and the reply goes to the call's pending file, marked "(recalled)" when it held a snippet. A reply
+        spoken while an off-the-record span is open is never written (D2, D7)."""
+        ids = list(getattr(generation, "memory_ids", None) or [])
+        if ids:
+            self._memory_used(ids)
+        self._log_memory(ids)
+        import call_boundary
+        agent = getattr(self, "current_persona", "") or ""
+        try:
+            import agent_memory
+            ident = agent_memory.ident(agent, create=False) if agent else ""
+        except Exception:  # noqa: BLE001
+            ident = ""
+        call_boundary.WRITER.reply(agent=agent, ident=ident, recalled=bool(ids), text=text,
+                                   write=not call_boundary.reply_off_record())
+
+    @staticmethod
+    def _memory_kind(i: str) -> str:
+        return "line" if i.startswith("line/") else "owner_fact" if i.startswith("f-") else "episode"
+
+    def _log_memory(self, ids) -> None:
+        """D4 Log (G6): one server-log line and one recording line per spoken reply, with the kind and id of every
+        snippet and the ids in the notes; never the words."""
+        note_ids = getattr(self, "_note_ids", ([], []))
+        notes = list(note_ids[0]) + list(note_ids[1])
+        snippets = [f"{self._memory_kind(i)}:{i}" for i in ids]
+        logger.info("memory used: snippets=[%s] notes=[%s]", ", ".join(snippets), ", ".join(notes))
+        try:
+            from call_recorder import REC
+            REC.event("memory", snippets=snippets, notes=notes)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _memory_used(self, ids) -> None:
+        """Start the 20-minute cooldown of each snippet a spoken reply held (D4)."""
+        now = time.time()
+        used = getattr(self, "_snippet_used", None)
+        if used is None:
+            used = self._snippet_used = {}
+        for i in ids:
+            used[i] = now
+
+    def _register_call_resets(self) -> None:
+        """Register this pipeline's per-call state with call_boundary (S4); re-registering replaces the old pipeline's."""
+        try:
+            import call_boundary as _cb
+            _cb.register("tasks.Boards.reset_all", self.boards.reset_all, order=2)
+            _cb.register("speech_pipeline_manager.SpeechPipelineManager.end_call", self.end_call, order=3)
+            _cb.register("agent_runtime.AgentRegistry.reset_all", self.agents.reset_all, order=4)
+            _cb.register("people.NameBook.reset", self.people.reset, order=5)
+            _cb.BOUNDARY.add_name_source("namebook", self.people.call_names)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("call reset registration failed: %s", e)
+
+    @_serialized
     def reset(self):
         """
         Resets the pipeline state completely.
@@ -2526,6 +3442,9 @@ class SpeechPipelineManager:
         """
         logger.info("🗣️🔄 Resetting pipeline state...")
         self.abort_generation(wait_for_completion=True, timeout=7.0, reason="reset") # Ensure clean slate
+        if getattr(self, "thinker", None) is not None:
+            self.thinker.reset()
+        self._think_snap = None
         self.agent.reset_conversation()
         self.agent.reset_session()
         logger.info("🗣️🧹 History cleared. Reset complete.")
@@ -2564,7 +3483,6 @@ class SpeechPipelineManager:
             (self.tts_quick_inference_thread, "Quick TTS Worker"),
             (self.tts_final_inference_thread, "Final TTS Worker"),
             (self.summary_thread, "Summary Worker"),
-            (self.memory_worker_thread, "Memory Worker"),
         ]
 
         for thread, name in threads_to_join:
@@ -2578,3 +3496,32 @@ class SpeechPipelineManager:
 
 
         logger.info("🗣️🔌✅ Shutdown complete.")
+
+
+def said_fact_problem(clause: str, owner=None, names=None) -> Optional[str]:
+    """The server-side checks of a "remember that" fact (D7): the reason it can't be kept, or None. Returns
+    (fact, quote) through said_fact() when it can."""
+    return said_fact(clause, owner, names)[2]
+
+
+def said_fact(clause: str, owner=None, names=None) -> tuple:
+    """(fact, quote, problem) for a "remember that" clause (D7): the quote is the clause after the name scrub (the
+    owner's name first becoming "the owner"); the fact is the quote with first-person words rewritten (S5)."""
+    import memory_redact as _MR
+    import call_boundary as _cb
+    names = list(_cb.call_names()) if names is None else list(names)
+    try:
+        owner_name = owner.stored_name() if owner is not None else None
+    except Exception:  # noqa: BLE001
+        owner_name = None
+    try:
+        import memory_writer as _MW
+        allow = _MW._allow_list()
+    except Exception:  # noqa: BLE001
+        allow = []
+    quote = _MR.scrub(clause, names, owner_name, allow=allow)
+    fact = _MR.first_person_to_owner(quote)
+    problem = (_MR.check_names(fact, names, owner_name, allow=allow) or _MR.extra_capitals(fact, allow=allow)
+               or _MR.check_safety(fact, places=True) or _MR.check_directive(fact) or _MR.check_owner_subject(fact)
+               or _MR.check_quote(fact, quote))
+    return fact, quote, problem

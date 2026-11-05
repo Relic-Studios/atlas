@@ -1,0 +1,11 @@
+{
+ "name": "ELDEN RING",
+ "processes": [
+  "eldenring.exe"
+ ],
+ "titles": [
+  "^ELDEN RING"
+ ],
+ "competitive": false,
+ "spoilers": "light"
+}

@@ -37,7 +37,7 @@ TIMER_STALE_S = 15 * 60      # a reminder that couldn't be said for 15 min is dr
 
 # Our own "a timer went off" cue. Never a real user line (floor.steering_note and
 # the pipeline treat it like a TASK CUE: no passivity HOLD, no bait checks).
-ROOM_CUE_RE = re.compile(r"\((?:ROOM|MAIL|BET) CUE #(\d+)\)")
+ROOM_CUE_RE = re.compile(r"\((?:ROOM|MAIL|BET|TIP) CUE #(\d+)\)")    # TIP: Live screen tips
 
 
 # ------------------------------------------------------------------ state
@@ -320,14 +320,13 @@ def claim(tid: int, clock: Callable[[], float] = time.time) -> str:
 
 
 def cue_note(text: str) -> str:
-    import voice_mail
-    mn = voice_mail.cue_note(text)
-    if mn:
-        return mn
-    import bets
-    bn = bets.cue_note(text)
-    if bn:
-        return bn
+    try:
+        from live_screen import tips as _tips
+        tn = _tips.cue_note(text)
+        if tn:
+            return tn
+    except Exception:  # noqa: BLE001
+        pass
     if ROOM_CUE_RE.search(text or ""):
         return ("REMINDER: this turn is your own timer going off, not someone speaking. Say the "
                 "reminder now in one short line, in character. Do not [HOLD].")
@@ -460,20 +459,6 @@ def intent(text: str, poll_open: Optional[bool] = None):
     if rc:
         return rc
     try:
-        import voice_mail as _vm
-        vm = _vm.intent(t)
-    except Exception:  # noqa: BLE001
-        vm = None
-    if vm:
-        return vm
-    try:
-        import bets as _bets
-        bt = _bets.intent(t)
-    except Exception:  # noqa: BLE001
-        bt = None
-    if bt:
-        return bt
-    try:
         import floor_referee as _fr
         fr = _fr.intent(t)
     except Exception:  # noqa: BLE001
@@ -586,38 +571,6 @@ TOOLS_BY_PLUGIN: Dict[str, List[dict]] = {
               {"minutes": {"type": "number", "description": "how far back, default 10"},
                "focus": {"type": "string", "description": "optional topic to focus on"}}),
     ],
-    "voice_mail": [
-        _tool("leave_message", "Save a message for someone who isn't here (or not listening) to pass on "
-              "the next time you hear their voice: 'tell Riley the raid moved to 9 when she joins'.",
-              {"to": {"type": "string", "description": "the recipient's first name"},
-               "message": {"type": "string", "description": "what to pass on, in the sender's words"}},
-              ["to", "message"]),
-        _tool("list_messages", "List messages waiting to be passed on.", {}),
-        _tool("cancel_message", "Cancel a waiting message by id, recipient name or words from it.",
-              {"id": {"type": "integer"}, "words": {"type": "string"}}),
-    ],
-    "bets": [
-        _tool("record_bet", "Log a bet someone makes ('I bet you five bucks the Lakers win tonight'). "
-              "The bettor is the speaker unless they say otherwise. It comes back up on its own when "
-              "it can be settled. Only say it's logged after this returns.",
-              {"claim": {"type": "string", "description": "what the bettor says will happen"},
-               "who": {"type": "string", "description": "the bettor's name, if not the speaker"},
-               "against": {"type": "string", "description": "who took the other side, if anyone"},
-               "stakes": {"type": "string", "description": "what's on the line, e.g. 'five bucks'"},
-               "settle_by": {"type": "string", "description": "when it can be settled: 'tonight', "
-                             "'Sunday', 'end of the month', '2026-10-20'"}}, ["claim"]),
-        _tool("list_bets", "List open bets (all=true includes settled ones) and the scoreboard.",
-              {"all": {"type": "boolean"}}),
-        _tool("settle_bet", "Settle a bet once the room says (or search shows) how it went. Give the "
-              "winner's name (or the loser's) and ATLAS works out the rest; use outcome only for a push "
-              "(tie) or void (called off). Never guess who won. Only say a bet is settled after this returns.",
-              {"winner": {"type": "string", "description": "name of the person who won the bet"},
-               "loser": {"type": "string", "description": "name of the person who lost, if easier"},
-               "id": {"type": "integer"}, "words": {"type": "string", "description": "words from the bet if no id"},
-               "outcome": {"type": "string", "enum": ["push", "void", "won", "lost"],
-                           "description": "push/void; or won/lost from the bettor's side"},
-               "note": {"type": "string", "description": "e.g. the final score"}}),
-    ],
     "floor_referee": [
         _tool("floor_stats", "Who has talked how much in the last N minutes (humans only). Use when asked "
               "who's been talking most, who hasn't spoken, or 'am I talking too much'.",
@@ -642,13 +595,13 @@ TOOLS_BY_PLUGIN: Dict[str, List[dict]] = {
               {"topic": {"type": "string"}, "id": {"type": "integer"}}),
     ],
     "lore": [
-        _tool("add_lore", "Keep a piece of this group's shared canon (a running joke, a nickname, a memorable "
-              "event, a campaign moment) when someone asks you to remember it as lore / says it's canon.",
-              {"title": {"type": "string", "description": "short name, e.g. 'Sam's roof incident'"},
-               "story": {"type": "string", "description": "what happened / the joke, in a sentence or two"},
-               "people": {"type": "array", "items": {"type": "string"},
-                          "description": "names of people in it"}}, ["story"]),
-        _tool("recall_lore", "Look up the group's lore (optionally about one topic or person).",
+        _tool("add_lore", "Keep a piece of this group's shared canon (a running joke, a memorable event, a "
+              "campaign moment) when someone asks you to remember it as lore / says it's canon. Lore keeps the "
+              "story, never who was in it: write it without names.",
+              {"title": {"type": "string", "description": "short name, e.g. 'the roof incident'"},
+               "story": {"type": "string", "description": "what happened / the joke, in a sentence or two, "
+                                                          "without names"}}, ["story"]),
+        _tool("recall_lore", "Look up the group's lore (optionally about one topic).",
               {"topic": {"type": "string"}}),
         _tool("forget_lore", "Drop a lore entry when someone says it's wrong or they want it gone.",
               {"title": {"type": "string"}, "id": {"type": "integer"}}),
@@ -706,29 +659,6 @@ def execute(name: str, args: dict, asker: str = "", voter_name: str = "",
         s = settings("call_summary") or {}
         return call_summary.recap(a.get("minutes") or s.get("minutes") or call_summary.DEFAULT_MIN,
                                   str(a.get("focus") or ""), name_of=name_of)
-    if name in ("leave_message", "list_messages", "cancel_message"):
-        import voice_mail
-        days = float((settings("voice_mail") or {}).get("days") or voice_mail.DEFAULT_DAYS)
-        if name == "list_messages":
-            return voice_mail.list_messages(days)
-        if name == "cancel_message":
-            return voice_mail.cancel(a.get("id"), str(a.get("words") or ""))
-        return voice_mail.leave(str(a.get("to") or ""), str(a.get("message") or ""),
-                                voter_name or "", agent_names=agent_names, days=days)
-    if name in ("record_bet", "list_bets", "settle_bet"):
-        import bets
-        if name == "list_bets":
-            out = bets.list_bets(bool(a.get("all")))
-            return out + " " + bets.scoreboard()
-        if name == "settle_bet":
-            me = voter_name or asker or ""
-            w = str(a.get("winner") or "").replace("@speaker", me)
-            lo = str(a.get("loser") or "").replace("@speaker", me)
-            return bets.settle_bet(a.get("id"), str(a.get("outcome") or ""), str(a.get("note") or ""),
-                                   str(a.get("words") or ""), winner=w, loser=lo)
-        return bets.record_bet(str(a.get("claim") or ""), str(a.get("who") or "") or voter_name or "",
-                               str(a.get("against") or ""), str(a.get("stakes") or ""),
-                               str(a.get("settle_by") or a.get("when") or ""))
     if name in ("floor_stats", "start_topic", "debate_sides"):
         import floor_referee as fr
         mins = a.get("minutes")
@@ -741,7 +671,7 @@ def execute(name: str, args: dict, asker: str = "", voter_name: str = "",
         import teach
         ag = agent or (agent_names[0] if agent_names else "") or "default"
         if name == "learn_lesson":
-            return teach.learn(ag, str(a.get("topic") or ""), str(a.get("content") or ""), voter_name or "")
+            return teach.learn(ag, str(a.get("topic") or ""), str(a.get("content") or ""))
         if name == "forget_lesson":
             return teach.forget(ag, str(a.get("topic") or ""), a.get("id"))
         return teach.recall(ag, str(a.get("topic") or ""))
@@ -749,10 +679,7 @@ def execute(name: str, args: dict, asker: str = "", voter_name: str = "",
         import lore
         ag = agent or (agent_names[0] if agent_names else "") or "default"
         if name == "add_lore":
-            ppl = a.get("people") or []
-            if isinstance(ppl, str):
-                ppl = [p.strip() for p in ppl.split(",")]
-            return lore.add(ag, str(a.get("title") or ""), str(a.get("story") or ""), ppl, voter_name or "")
+            return lore.add(ag, str(a.get("title") or ""), str(a.get("story") or ""))
         if name == "forget_lore":
             return lore.forget(ag, str(a.get("title") or ""), a.get("id"))
         return lore.recall(ag, str(a.get("topic") or ""))
@@ -777,3 +704,36 @@ def execute(name: str, args: dict, asker: str = "", voter_name: str = "",
         s = settings("game_info") or {}
         return game_info.lookup(str(a.get("game") or a.get("name") or ""), s.get("cc", "us"))
     return f"unknown tool: {name}"
+
+
+# ------------------------------------------------------------------ call end (docs/designs/experience_memory.md, S4)
+def end_call(names=()) -> None:
+    """Call end: close the open poll (its votes are keyed by voter), drop timers and reminders aimed at a label (labels
+    mean nothing in the next call), and scrub the call's names out of the other timers' messages."""
+    try:
+        import memory_redact
+    except Exception:  # noqa: BLE001
+        memory_redact = None
+    with _lock:
+        d = _load()
+        changed = d.pop("poll", None) is not None
+        keep = []
+        for t in d.get("timers", []):
+            if t.get("asker"):
+                changed = True
+                continue
+            if memory_redact is not None and names:
+                msg = memory_redact.scrub_names_in(t.get("message", ""), names)
+                if msg != t.get("message", ""):
+                    t["message"], changed = msg, True
+            keep.append(t)
+        if changed:
+            d["timers"] = keep
+            _save(d)
+
+
+try:
+    import call_boundary as _cb
+    _cb.register("room_tools.end_call", end_call, order=1, needs_names=True)
+except Exception:  # noqa: BLE001
+    pass

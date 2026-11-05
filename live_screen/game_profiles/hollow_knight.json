@@ -1,0 +1,11 @@
+{
+ "name": "Hollow Knight",
+ "processes": [
+  "hollow_knight.exe"
+ ],
+ "titles": [
+  "^Hollow Knight"
+ ],
+ "competitive": false,
+ "spoilers": "light"
+}

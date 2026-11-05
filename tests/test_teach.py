@@ -32,6 +32,16 @@ class Lessons(Base):
         self.assertIn("Not saved", T.learn("fae", "contacts", "call me at 555-123-4567", root=self.root))
         self.assertIn("haven't been taught", T.recall("fae", root=self.root))
 
+    def test_review_lessons_are_not_recalled(self):
+        """Experience memory D8: a lesson waiting for the owner's review is never shown to the agent."""
+        T.learn("fae", "dice rule", "doubles roll again", root=self.root)
+        items = T._load("fae", self.root)
+        items[0]["status"] = "review"
+        T._save("fae", items, self.root)
+        self.assertIn("haven't been taught", T.recall("fae", root=self.root))
+        self.assertNotIn("dice", T.recall("fae", "dice rule", root=self.root))
+        self.assertEqual("", T.note("fae", "[S1] what's the dice rule again", root=self.root))
+
     def test_forget_since(self):
         T.learn("fae", "old", "old rule here", root=self.root, clock=lambda: 100.0)
         T.learn("fae", "new", "new rule here", root=self.root, clock=lambda: 200.0)

@@ -20,6 +20,7 @@ Nothing in it runs code yet - an entry is either built in (install = enable) or
 """
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import threading
@@ -97,7 +98,41 @@ def _apply_eyes(settings: dict, enabled: bool) -> None:
         logger.debug("eyes plugin apply: %s", e)
 
 
+def _watch_options() -> List[dict]:
+    """Live screen: the whole screen, or one of the programs open now (plus the saved one if it's closed)."""
+    opts = [{"value": "screen", "label": "Full screen (the Eyes monitor)"}]
+    try:
+        from live_screen import capture
+        opts += capture.program_choices()
+    except Exception as e:  # noqa: BLE001
+        logger.debug("program list: %s", e)
+    saved = (settings_of("live_screen").get("watch") or "screen") if _by_id().get("live_screen") else "screen"
+    if saved not in {o["value"] for o in opts}:
+        opts.append({"value": saved, "label": f"{saved} (not open right now)"})
+    return opts
+
+
+def _test_live_screen(settings: dict) -> dict:
+    try:
+        import live_screen
+        st = live_screen.status()
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "message": f"Live screen isn't available: {e}"}
+    if not st["on"]:
+        return {"ok": False, "message": "Live screen is off: it needs this plugin, Eyes (plugin and toggle) on, "
+                                        "and the remote model server."}
+    if st["state"] == "capturing":
+        return {"ok": True, "message": f"Watching {st['watching']} live" + (f" ({st['title']})." if st['title'] else ".")}
+    return {"ok": False, "message": f"Can't see {st['watching']} right now ({st['state']})."}
+
+
 def _test_eyes(settings: dict) -> dict:
+    try:
+        import live_screen
+        if live_screen.enabled():                  # never a full-monitor grab while Live screen is on
+            return _test_live_screen(settings)
+    except Exception:  # noqa: BLE001
+        pass
     try:
         import screen
         img = screen._grab()
@@ -195,6 +230,26 @@ BUILTIN: List[dict] = [
         "apply": _apply_eyes, "test": _test_eyes,
     },
     {
+        "id": "live_screen", "name": "Live screen", "icon": "eye", "category": "Senses",
+        "summary": "Agents watch your screen live instead of taking screenshots, so they can tell what just "
+                   "happened and answer about what's on it.",
+        "detail": "Watches your whole screen (the monitor picked in Eyes) or one program you choose, about twice a "
+                  "second. Frames stay in memory only, never saved; Windows notification pop-ups are blacked out. "
+                  "Needs Eyes switched on and the remote model server. Looks it takes on its own still follow the "
+                  "Eyes glance setting. Off by default; turning it off goes back to screenshots on the next turn.",
+        "tools": [], "default": False,
+        "settings": [
+            {"key": "watch", "label": "What to watch", "type": "select", "default": "screen",
+             "options": _watch_options},
+            {"key": "name", "label": "Your name (so agents can say whose screen it is)", "type": "text",
+             "default": ""},
+            {"key": "tips", "label": "Tips on their own (at most 4 an hour, never in competitive games; say \"no "
+                                     "tips\" to stop them for the session)", "type": "select", "default": "off",
+             "options": [{"value": "off", "label": "Off"}, {"value": "rare", "label": "Rare, useful tips"}]},
+        ],
+        "test": _test_live_screen,
+    },
+    {
         "id": "clock", "name": "Date & time", "icon": "clock", "category": "Knowledge",
         "summary": "Know today's date and the time anywhere.",
         "detail": "The current local time is always in the agent's context; the tool adds other time zones.",
@@ -268,28 +323,6 @@ BUILTIN: List[dict] = [
         ],
     },
     {
-        "id": "voice_mail", "name": "Voice mail", "icon": "mail", "category": "Social",
-        "summary": "'Tell Riley the raid moved to 9 when she joins.' Messages addressed to a voice, not an account.",
-        "detail": "The agent passes a message on the next time it recognises that person's voice, even days "
-                  "later. Messages are kept on this PC only and expire. Phone numbers, emails, addresses "
-                  "and keys are refused. Recognition is only as good as the voice match, so the agent says "
-                  "the name out loud when it delivers.",
-        "tools": ["leave_message", "list_messages", "cancel_message"], "default": True,
-        "settings": [
-            {"key": "days", "label": "Keep undelivered messages (days)", "type": "number", "default": 7,
-             "min": 1, "max": 30},
-        ],
-    },
-    {
-        "id": "bets", "name": "Bet tracker", "icon": "trophy", "category": "Games",
-        "summary": "'I bet you five bucks the Lakers win tonight.' Logs who bet what and calls it when it's due.",
-        "detail": "Bets are kept on this PC only. When one can be settled, the agent brings it up at a gap "
-                  "in the talk and asks how it went (or checks a public result with search). It never "
-                  "decides a winner on its own. Keeps a running scoreboard.",
-        "tools": ["record_bet", "list_bets", "settle_bet"], "default": True,
-        "settings": [],
-    },
-    {
         "id": "floor_referee", "name": "Floor referee", "icon": "scale", "category": "Room",
         "summary": "For debates and meetings: talk-time balance, timeboxed topics, fair two-sided summaries.",
         "detail": "Uses only this session's in-memory transcript. 'Who's been talking most?', 'give us 5 "
@@ -303,6 +336,21 @@ BUILTIN: List[dict] = [
         ],
     },
     {
+        "id": "think_listen", "name": "Think while listening", "icon": "spark", "category": "Room",
+        "summary": "The agent thinks privately while people talk, then decides at the pause whether to speak.",
+        "detail": "While someone is talking, the model writes a short private thought about who the line is "
+                  "for and what it asks. When they pause, the thought is cut off where it is and the agent "
+                  "decides at once whether to answer; if it does, the reply follows from its thoughts. "
+                  "Thoughts are never spoken or saved. Needs the remote model server. Off by default: "
+                  "turning it off returns to the normal behavior on the next turn, no restart.",
+        "tools": [], "default": False,
+        "settings": [
+            {"key": "finish", "label": "Finish the thought before answering (fewer made-up details, "
+                                       "about 1 s slower to start talking)", "type": "select",
+             "default": "off", "options": [{"value": "off", "label": "Off"}, {"value": "on", "label": "On"}]},
+        ],
+    },
+    {
         "id": "teach", "name": "Teach-me mode", "icon": "book", "category": "Memory",
         "summary": "'Let me teach you how our league scoring works: ...' The agent keeps it and uses it next time.",
         "detail": "Lessons are per agent and stay on this PC (in that agent's memory folder). A lesson only "
@@ -313,7 +361,7 @@ BUILTIN: List[dict] = [
     },
     {
         "id": "lore", "name": "Lore keeper", "icon": "scroll", "category": "Memory",
-        "summary": "Keeps your group's shared canon - running jokes, nicknames, campaign events - and calls back to it later.",
+        "summary": "Keeps your group's shared canon - running jokes and campaign events, without names - and calls back to it later.",
         "detail": "Say 'add that to the lore' or 'that's canon: ...'. By default each new entry waits here for "
                   "your approval before the agent ever uses it. Approved lore comes back only when the talk "
                   "touches it, at most one callback per turn and not the same one twice in 20 minutes. Lore is "
@@ -461,10 +509,19 @@ def _by_id() -> Dict[str, dict]:
 
 
 # ------------------------------------------------------------------ state
+_cache: list = [None, None]      # [(path, mtime_ns, size), parsed state]
+
+
 def _load() -> dict:
+    """The owner's plugin state. Read every turn and from the event loop (a stall dump on 11-04 caught it there), so
+    the file is parsed again only when it changed; callers get their own copy."""
     try:
-        d = json.loads(STATE_PATH.read_text(encoding="utf-8"))
-        return d if isinstance(d, dict) else {}
+        st = STATE_PATH.stat()
+        sig = (str(STATE_PATH), st.st_mtime_ns, st.st_size)
+        if _cache[0] != sig:
+            d = json.loads(STATE_PATH.read_text(encoding="utf-8"))
+            _cache[:] = [sig, d if isinstance(d, dict) else {}]
+        return copy.deepcopy(_cache[1])
     except (OSError, ValueError):
         return {}
 
@@ -474,6 +531,7 @@ def _save(d: dict) -> None:
     tmp = STATE_PATH.with_suffix(".tmp")
     tmp.write_text(json.dumps(d, indent=2), encoding="utf-8")
     tmp.replace(STATE_PATH)
+    _cache[0] = None
 
 
 def _entry(state: dict, pid: str) -> dict:

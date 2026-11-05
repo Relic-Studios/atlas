@@ -1,0 +1,11 @@
+{
+ "name": "Overwatch 2",
+ "processes": [
+  "overwatch.exe"
+ ],
+ "titles": [
+  "^Overwatch"
+ ],
+ "competitive": true,
+ "spoilers": "full"
+}

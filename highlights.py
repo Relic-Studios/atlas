@@ -64,8 +64,9 @@ def _recordings() -> List[str]:
 
 
 def call_live(clock: Callable[[], float] = time.time) -> bool:
-    fs = _recordings()
-    return bool(fs) and clock() - max(os.path.getmtime(f) for f in fs) < LIVE_WINDOW_S
+    """A call is in progress in a live Atlas server (call_boundary, docs/designs/experience_memory.md D2)."""
+    import call_boundary
+    return call_boundary.in_progress()
 
 
 def _rows(path: str) -> list:

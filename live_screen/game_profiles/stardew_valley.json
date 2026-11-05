@@ -1,0 +1,12 @@
+{
+ "name": "Stardew Valley",
+ "processes": [
+  "stardew valley.exe",
+  "stardewvalley.exe"
+ ],
+ "titles": [
+  "Stardew Valley"
+ ],
+ "competitive": false,
+ "spoilers": "full"
+}

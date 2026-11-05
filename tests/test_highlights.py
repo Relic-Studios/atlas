@@ -93,8 +93,9 @@ class Store(unittest.TestCase):
         p.start(); self.addCleanup(p.stop)
 
     def test_live_call_refused(self):
-        os.utime(self.rec, None)
-        self.assertIn("error", H.find(limit=6))
+        import call_boundary
+        with mock.patch.object(call_boundary, "in_progress", return_value=True):
+            self.assertIn("error", H.find(limit=6))
         self.assertIn("call", H.find(force=True, limit=6))
 
     def test_find_feed_delete(self):

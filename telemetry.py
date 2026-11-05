@@ -312,8 +312,14 @@ class Telemetry:
         try:
             import screen as _scr
             s = _scr.status()
-            return {"enabled": s.get("enabled"), "count": s.get("count"), "last_ts": s.get("last_ts"),
-                    "last_reason": s.get("last_reason"), "last_size": s.get("last_size")}
+            out = {"enabled": s.get("enabled"), "count": s.get("count"), "last_ts": s.get("last_ts"),
+                   "last_reason": s.get("last_reason"), "last_size": s.get("last_size")}
+            try:
+                import live_screen as _ls
+                out["live"] = _ls.status()
+            except Exception:  # noqa: BLE001
+                out["live"] = None
+            return out
         except Exception:  # noqa: BLE001
             return None
 
@@ -330,9 +336,15 @@ class Telemetry:
     def _owner(self):
         try:
             import owner_controls as _owner
-            return _owner.snapshot()
+            out = _owner.snapshot()
         except Exception:  # noqa: BLE001
             return None
+        try:   # owner voice recognition: {enrolled, name, samples, labels}, or None when not active
+            import owner_voice
+            out["voice"] = owner_voice.voice_status(getattr(self.app.state, "OwnerAdopter", None))
+        except Exception:  # noqa: BLE001
+            out["voice"] = None
+        return out
 
     def snapshot(self) -> dict:
         st = getattr(self.app, "state", None)
@@ -355,6 +367,15 @@ class Telemetry:
                         "e2e_s": self._stats(self.e2e_s), "pause_s": self._stats(self.pause_s)},
         }
 
+    def _spec_plan(self, n: int):
+        plan = getattr(self, "_spec_plans", None)
+        if plan is None:
+            plan = self._spec_plans = {}
+        if n not in plan:
+            nb = n // 2 + 1
+            plan[n] = (np.hanning(n).astype(np.float32), np.unique(np.geomspace(2, nb - 1, 33).astype(int)))
+        return plan[n]
+
     def fast(self) -> dict:
         st = getattr(self.app, "state", None)
         br = getattr(st, "CallBridge", None)
@@ -363,12 +384,12 @@ class Telemetry:
         if ca is not None:
             blk = getattr(ca, "last_clean_block", None)
             if blk is not None and len(blk) >= 256:
-                x = np.asarray(blk, dtype=np.float32) * np.hanning(len(blk)).astype(np.float32)
-                mag = np.abs(np.fft.rfft(x))
-                n = len(mag)
-                edges = np.unique(np.geomspace(2, n - 1, 33).astype(int))
-                bands = [float(mag[a:b].mean()) if b > a else 0.0 for a, b in zip(edges[:-1], edges[1:])]
-                spec = [round(float(np.clip((20 * np.log10(b + 1e-6) + 20) / 50, 0, 1)), 3) for b in bands]
+                # 30 times a second on the event loop: the window and band edges are made once per block size,
+                # and the bands are one numpy call instead of 32 Python slices
+                win, edges = self._spec_plan(len(blk))
+                mag = np.abs(np.fft.rfft(np.asarray(blk, dtype=np.float32) * win))
+                bands = np.add.reduceat(mag[:edges[-1]], edges[:-1]) / np.diff(edges)
+                spec = np.round(np.clip((20 * np.log10(bands + 1e-6) + 20) / 50, 0, 1), 3).tolist()
         stt = self._stt()
         speaking = False
         try:

@@ -103,6 +103,7 @@ a{color:var(--accent)}
         <div><label>API key</label><input id="cKey" type="password" placeholder="sk-…" autocomplete="off"></div>
       </div>
       <label>Endpoint</label><input id="cUrl">
+      <label>Context window (tokens, optional)</label><input id="cCtx" inputmode="numeric" placeholder="8192">
       <p class="note">Your key is stored only on this computer (user/settings.json) and sent only to the provider you pick.</p>
     </div>
     <div class="msg" id="brainMsg"></div>
@@ -242,6 +243,7 @@ function provChanged(saved) {
   saved = saved && saved.provider === $('prov').value ? saved : {};
   $('cModel').value = saved.model || p.model;
   $('cUrl').value = saved.base_url || p.base_url;
+  $('cCtx').value = saved.context || '';
   $('cKey').placeholder = saved.has_key ? `saved key ${saved.key_hint || ''} (leave empty to keep)` : 'sk-…';
   $('provKeys').innerHTML = p.keys ? `Get a key: <a href="${p.keys}" target="_blank">${esc(p.keys)}</a>` : 'Any OpenAI-compatible server (vLLM, LM Studio, llama.cpp server).';
   $('brainBtn').disabled = mode !== 'cloud' ? $('brainBtn').disabled : false;
@@ -303,7 +305,8 @@ async function saveBrain() {
     } else {
       msg('brainMsg', 'info', 'Testing the connection…');
       const r = await post('/api/setup/llm', {mode: 'cloud', provider: $('prov').value, model: $('cModel').value.trim(),
-        base_url: $('cUrl').value.trim(), api_key: $('cKey').value.trim()});
+        base_url: $('cUrl').value.trim(), api_key: $('cKey').value.trim(),
+        context: parseInt($('cCtx').value, 10) || null});
       $('cKey').value = '';
       W.brain = `${S.providers[$('prov').value].label} · ${$('cModel').value.trim()} (${r.ms} ms)`;
     }

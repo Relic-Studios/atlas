@@ -7,7 +7,7 @@ import plugins
 
 PHRASES = {
     "game_info": "Steam", "weather": "weather", "timers": "timers",
-    "dice_polls": "roll dice", "bets": "bets", "voice_mail": "messages",
+    "dice_polls": "roll dice", 
     "call_summary": "recap", "teach": "be taught the room", "lore": "lore",
     "fact_check": "fact-check", "live_translate": "translate",
     "floor_referee": "referee", "soul_reflection": "propose small changes",

@@ -80,7 +80,7 @@ class MemorySelfQuestionTest(__import__("unittest").TestCase):
     questions must not (those are handled by the never-invent-the-past rule)."""
     def test_memory_questions_trigger(self):
         import capability as C
-        for t in ["Fae, do you have a hypergraph memory?", "how does your memory work",
+        for t in ["Fae, do you have a long-term memory?", "how does your memory work",
                   "do you remember stuff between calls?", "can the other bots see your memories?",
                   "if I tell you my phone number will you remember it?", "do you have long-term memory",
                   "how do you remember things"]:
@@ -99,7 +99,9 @@ class CharacterIdentity(__import__("unittest").TestCase):
         import capability as C
         from unittest import mock
         with mock.patch("agent_registry.traits", return_value={"character_agents": ["pup"]}):
-            self.assertIn("playing a character", C.identity_truth("pup"))
+            # owner 11-02: their world is their own past, in the first person -- not "a robot playing a character"
+            self.assertIn("is your own past", C.identity_truth("pup"))
+            self.assertNotIn("playing a character", C.identity_truth("pup"))
             self.assertIn("no body", C.identity_truth("wren"))
             self.assertNotIn("{BODY}", C.identity_truth("pup") + C.identity_truth(""))
             self.assertIn("say plainly you're an AI", C.identity_truth("Pup"))

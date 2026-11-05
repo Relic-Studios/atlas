@@ -6,6 +6,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -114,11 +115,13 @@ class Reflect(Base):
         self.assertEqual(len(calls), 1)
 
     def test_live_call_refused(self):
+        import call_boundary
         S_rec = S._recordings
         try:
             f = self._rec()
             S._recordings = lambda: [f]
-            r = S.reflect(ask=lambda *a: "[]", root=self.root)
+            with mock.patch.object(call_boundary, "in_progress", return_value=True):
+                r = S.reflect(ask=lambda *a: "[]", root=self.root)
             self.assertIn("error", r)
         finally:
             S._recordings = S_rec

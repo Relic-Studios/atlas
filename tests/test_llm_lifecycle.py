@@ -118,6 +118,18 @@ class LifecycleTests(unittest.TestCase):
                 self.assertEqual(response.closes, 1)
                 self.assertEqual(llm._active_requests, {})
 
+    def test_cancel_during_post_interrupts_the_remote_session(self):
+        """A session still inside post() (think_listen's thought finish) gets interrupt()."""
+        response = Response([packet("must not escape", done=True)])
+        llm = self.make_llm([response])
+        interrupts = []
+        llm.ollama_session.interrupt = lambda: interrupts.append(1)
+        llm.ollama_session.on_post = lambda: llm.cancel_generation("r")
+        self.assertEqual(list(llm.generate("hello", request_id="r")), [])
+        self.assertEqual(interrupts, [1])
+        self.assertFalse(llm.cancel_generation("r"))          # nothing active: no interrupt
+        self.assertEqual(interrupts, [1])
+
     def test_uncancelled_nonetype_attribute_error_is_not_swallowed(self):
         for agentic in (False, True):
             with self.subTest(agentic=agentic):

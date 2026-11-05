@@ -1,0 +1,13 @@
+{
+ "name": "Rainbow Six Siege",
+ "processes": [
+  "rainbowsix.exe",
+  "rainbowsix_be.exe",
+  "rainbowsix_vulkan.exe"
+ ],
+ "titles": [
+  "Rainbow Six"
+ ],
+ "competitive": true,
+ "spoilers": "full"
+}

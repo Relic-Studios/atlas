@@ -1,6 +1,6 @@
 # Safety
 
-ATLAS is **early beta** software (v0.4.x). It works well in the situations we test, listed
+ATLAS is **early beta** software (v0.6.x). It works well in the situations we test, listed
 below, and it has edges we haven't tested, also listed below. This page is meant to be
 read before you put an agent into a conversation with other people.
 
@@ -21,7 +21,7 @@ without review. The core tools:
 | `check_predictions` | Lists the agent's open predictions and marks them right or wrong | Same folder, same limits. |
 | `read_own_code` | Lets the agent read the ATLAS source that runs it, so it can check its own claims about how it works | **Read-only.** Only code and docs in the app folder (`.py`, `.js`, `.md`, …), plus that agent's own persona file. It can never read `private/`, `user/`, memory, recordings, voices, logs, other agents' personas, or any file whose name contains key/token/secret/password. Results are capped small. There is no tool to write or run code. |
 
-### Plugin tools (0.4.0)
+### Plugin tools
 
 | Plugin | Default | What leaves your PC | Stored on your PC |
 |---|---|---|---|
@@ -30,8 +30,6 @@ without review. The core tools:
 | Weather | on | the place name, to Open-Meteo (free, no key) | nothing |
 | Game info | on | the game name, to Steam's public store API | nothing |
 | Call summary | on | nothing (recap goes to your chosen model) | nothing; this session's transcript in memory only |
-| Voice mail | on | nothing | messages addressed to a voice, until delivered or 7 days |
-| Bet tracker | on | nothing | bets and scoreboard; the agent never decides who won |
 | Teach-me mode | on | nothing | lessons, per agent, privacy-filtered, wiped with memory |
 | Lore keeper | on | nothing | group lore, owner-approved by default, wiped with memory |
 | Room-energy sense | on | nothing | nothing; changes tone only, never whether the agent speaks |
@@ -40,6 +38,8 @@ without review. The core tools:
 | Soul reflection | off | nothing (runs off-call on your chosen model) | proposed persona notes; only ones **you approve** are used |
 | Highlight reel | off | nothing | clips in your folder; only opted-in speakers, slurs/abuse skipped |
 | Live translate | off | nothing (your chosen model translates) | nothing |
+| Think while listening | off | nothing (thoughts go to your own vLLM server) | nothing; thoughts are never spoken or saved |
+| Live screen | off | frames of the screen or one program, to your own vLLM server only | a short log of what was on screen, for this session; "forget what you saw" clears it; mail and password-manager windows are skipped |
 
 An agent **cannot**: write or change any file (including its own code), read your files outside the app's source code, run commands, open apps, send messages or
 email, post anywhere, buy anything, or reach the network other than through `web_search`
@@ -47,12 +47,22 @@ and the model you chose.
 
 ## What an agent remembers
 
-- Each agent has its own memory folder on your PC. Agents can't read each other's memory.
-- Phone numbers, email addresses, street addresses and key-like strings are never stored.
-- You can wipe an agent's memory for the last hour, 12 hours, day, week, or everything
-  (right-click the agent). Deleting an agent archives its memory, so a new agent with the
-  same name starts empty.
-- Nothing is uploaded. If you use a cloud model, the conversation text in each prompt goes
+- Memories are made after a call ends (30 quiet minutes, or when you quit ATLAS) by a background
+  pass on your PC that uses your chosen model. With a cloud model it only runs if you tick
+  **Allow cloud processing**, and then only the transcript with names taken out is sent.
+- Names of the people in the call are taken out before anything is stored. Agents keep no facts
+  about anyone but you, and no one's voice, from one call to the next. Facts about you come only
+  from lines you said yourself (ATLAS knows your voice once you press **This is me**).
+- The pass stores nothing about health, sexuality, drugs, religion, politics, money or children,
+  and no line with a phone number, email address, street address or key-like string.
+- "Remember that…" saves something you ask for, "forget that" removes it, and "off the record"
+  keeps the last minute and what follows out of memory until you say you're back.
+- Until you turn on **Use memories**, agents only use what you asked them to remember.
+- Each agent keeps its own memories of the calls it was in; facts about you are shared by every
+  agent. Right-click an agent to open its **Memory** window: see what it keeps, and delete the last
+  hour, 12 hours, day, week, or everything. Deleting an agent archives its memory, so a new agent
+  with the same name starts empty.
+- Nothing else is uploaded. If you use a cloud model, the conversation text in each prompt goes
   to that provider, under their terms.
 
 ## What it says

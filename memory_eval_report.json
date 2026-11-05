@@ -1,0 +1,434 @@
+{
+  "date": "2026-11-04T20:23:40",
+  "code": "2b7cb7caf4a2bc8c",
+  "gates": {
+    "heldout_names": {
+      "count": 0,
+      "n": 36,
+      "bound": 0.0833
+    },
+    "heldout_owner_facts": {
+      "count": 0,
+      "n": 30,
+      "bound": 0.1
+    },
+    "heldout_owner_facts_from_1101": {
+      "count": 0,
+      "n": 16,
+      "bound": 0.1875
+    },
+    "trap_stored_names": {
+      "count": 0,
+      "n": 600,
+      "bound": 0.005
+    },
+    "reply_check": {
+      "count": 0,
+      "n": 300,
+      "bound": 0.01
+    },
+    "trap_owner_source": {
+      "count": 0,
+      "n": 180,
+      "bound": 0.0167
+    },
+    "trap_off_record": {
+      "count": 0,
+      "n": 120,
+      "bound": 0.025
+    },
+    "trap_lore_lessons_predictions": {
+      "count": 0,
+      "n": 120,
+      "bound": 0.025
+    },
+    "trap_newest_fact_first": {
+      "count": 0,
+      "n": 51,
+      "bound": 0.0588
+    }
+  },
+  "all_zero": true,
+  "incomplete": [],
+  "tracked": {
+    "qa": {},
+    "model_requests_per_call": 8.06,
+    "tokens_per_call": {
+      "in": 18300,
+      "out": 3476
+    },
+    "pass_seconds_per_call_median": 35.6,
+    "lookup_ms_median": null,
+    "prefix_cache_hit_rate": 0.986,
+    "latency": {
+      "no_pass_ms": 165,
+      "pass_killed_wait0_ms": 155,
+      "pass_killed_wait_ms": 123,
+      "with_memory_text_ms": 206,
+      "without_memory_text_ms": 170,
+      "a_pass": true,
+      "b_pass": true,
+      "killed_requests": 40,
+      "server_aborts": 0.0,
+      "date": "2026-11-04 20:11"
+    },
+    "heldout_runs": 2
+  },
+  "per_scenario": {
+    "1": {
+      "probes": 120,
+      "failures": 0
+    },
+    "2": {
+      "probes": 120,
+      "failures": 0
+    },
+    "3": {
+      "probes": 60,
+      "failures": 0
+    },
+    "4": {
+      "probes": 120,
+      "failures": 0
+    },
+    "5": {
+      "probes": 120,
+      "failures": 0
+    },
+    "6": {
+      "probes": 180,
+      "failures": 0
+    },
+    "7": {
+      "probes": 60,
+      "failures": 0
+    },
+    "8": {
+      "probes": 60,
+      "failures": 0
+    },
+    "9": {
+      "probes": 60,
+      "failures": 0
+    },
+    "10": {
+      "probes": 120,
+      "failures": 0
+    },
+    "11": {
+      "probes": 111,
+      "failures": 0
+    },
+    "12": {
+      "probes": 120,
+      "failures": 0
+    },
+    "13": {
+      "probes": 60,
+      "failures": 0
+    },
+    "14": {
+      "probes": 60,
+      "failures": 0
+    }
+  },
+  "per_call": {
+    "2026-10-06/074118@1791297678": {
+      "items": 21,
+      "name_hits": 0,
+      "common_lower": 0,
+      "facts": 0,
+      "bad_facts": 0,
+      "facts_from_marked_other": 0
+    },
+    "2026-10-06/090121@1791302481": {
+      "items": 20,
+      "name_hits": 0,
+      "common_lower": 0,
+      "facts": 0,
+      "bad_facts": 0,
+      "facts_from_marked_other": 0
+    },
+    "2026-10-06/102119@1791307279": {
+      "items": 40,
+      "name_hits": 0,
+      "common_lower": 0,
+      "facts": 0,
+      "bad_facts": 0,
+      "facts_from_marked_other": 0
+    },
+    "2026-10-06/102119@1791316880": {
+      "items": 41,
+      "name_hits": 0,
+      "common_lower": 18,
+      "facts": 0,
+      "bad_facts": 0,
+      "facts_from_marked_other": 0
+    },
+    "2026-10-06/191416@1791339256": {
+      "items": 31,
+      "name_hits": 0,
+      "common_lower": 0,
+      "facts": 0,
+      "bad_facts": 0,
+      "facts_from_marked_other": 0
+    },
+    "2026-10-06/210139@1791345701": {
+      "items": 25,
+      "name_hits": 0,
+      "common_lower": 0,
+      "facts": 0,
+      "bad_facts": 0,
+      "facts_from_marked_other": 0
+    },
+    "2026-10-06/210139@1791372960": {
+      "items": 8,
+      "name_hits": 0,
+      "common_lower": 0,
+      "facts": 0,
+      "bad_facts": 0,
+      "facts_from_marked_other": 0
+    },
+    "2026-10-06/210139@1791378380": {
+      "items": 27,
+      "name_hits": 0,
+      "common_lower": 0,
+      "facts": 1,
+      "bad_facts": 0,
+      "facts_from_marked_other": 0
+    },
+    "2026-10-08/184442@1791510305": {
+      "items": 0,
+      "name_hits": 0,
+      "common_lower": 0
+    },
+    "2026-10-09/150815@1791583695": {
+      "items": 13,
+      "name_hits": 0,
+      "common_lower": 0
+    },
+    "2026-10-09/150815@1791595915": {
+      "items": 28,
+      "name_hits": 0,
+      "common_lower": 0
+    },
+    "2026-10-31/181432@1793495672": {
+      "items": 16,
+      "name_hits": 0,
+      "common_lower": 0,
+      "facts": 0,
+      "bad_facts": 0,
+      "facts_from_marked_other": 0
+    },
+    "2026-10-31/181432@1793502334": {
+      "items": 7,
+      "name_hits": 0,
+      "common_lower": 0,
+      "facts": 0,
+      "bad_facts": 0,
+      "facts_from_marked_other": 0
+    },
+    "2026-10-31/201852@1793503132": {
+      "items": 8,
+      "name_hits": 0,
+      "common_lower": 0,
+      "facts": 0,
+      "bad_facts": 0,
+      "facts_from_marked_other": 0
+    },
+    "2026-10-31/201852@1793507101": {
+      "items": 28,
+      "name_hits": 0,
+      "common_lower": 0,
+      "facts": 2,
+      "bad_facts": 0,
+      "facts_from_marked_other": 0
+    },
+    "2026-10-31/220653@1793509613": {
+      "items": 62,
+      "name_hits": 0,
+      "common_lower": 0,
+      "facts": 1,
+      "bad_facts": 0,
+      "facts_from_marked_other": 0
+    },
+    "2026-10-31/220653@1793545518": {
+      "items": 24,
+      "name_hits": 0,
+      "common_lower": 0,
+      "facts": 1,
+      "bad_facts": 0,
+      "facts_from_marked_other": 0
+    },
+    "2026-11-01/082654@1793550873": {
+      "items": 8,
+      "name_hits": 0,
+      "common_lower": 0,
+      "facts": 0,
+      "bad_facts": 0,
+      "facts_from_marked_other": 0
+    },
+    "2026-11-01/085439@1793552079": {
+      "items": 39,
+      "name_hits": 0,
+      "common_lower": 0,
+      "facts": 3,
+      "bad_facts": 0,
+      "facts_from_marked_other": 0
+    },
+    "2026-11-01/085439@1793564236": {
+      "items": 84,
+      "name_hits": 0,
+      "common_lower": 0,
+      "facts": 17,
+      "bad_facts": 0,
+      "facts_from_marked_other": 0
+    },
+    "2026-11-02/075523@1793635496": {
+      "items": 17,
+      "name_hits": 0,
+      "common_lower": 0,
+      "facts": 0,
+      "bad_facts": 0,
+      "facts_from_marked_other": 0
+    },
+    "2026-11-02/084557@1793637957": {
+      "items": 33,
+      "name_hits": 0,
+      "common_lower": 0,
+      "facts": 3,
+      "bad_facts": 0,
+      "facts_from_marked_other": 0
+    },
+    "2026-11-02/101028@1793643028": {
+      "items": 17,
+      "name_hits": 0,
+      "common_lower": 0
+    },
+    "2026-11-02/103504@1793644504": {
+      "items": 14,
+      "name_hits": 0,
+      "common_lower": 0,
+      "facts": 0,
+      "bad_facts": 0,
+      "facts_from_marked_other": 0
+    },
+    "2026-11-02/123141@1793651501": {
+      "items": 39,
+      "name_hits": 0,
+      "common_lower": 0,
+      "facts": 10,
+      "bad_facts": 0,
+      "facts_from_marked_other": 0
+    },
+    "2026-11-02/220254@1793685774": {
+      "items": 17,
+      "name_hits": 0,
+      "common_lower": 0,
+      "facts": 0,
+      "bad_facts": 0,
+      "facts_from_marked_other": 0
+    },
+    "2026-11-02/222818@1793687298": {
+      "items": 12,
+      "name_hits": 0,
+      "common_lower": 0
+    },
+    "2026-11-03/060554@1793714766": {
+      "items": 19,
+      "name_hits": 0,
+      "common_lower": 0,
+      "facts": 0,
+      "bad_facts": 0,
+      "facts_from_marked_other": 0
+    },
+    "2026-11-03/072441@1793719481": {
+      "items": 18,
+      "name_hits": 0,
+      "common_lower": 0,
+      "facts": 0,
+      "bad_facts": 0,
+      "facts_from_marked_other": 0
+    },
+    "2026-11-03/072441@1793732803": {
+      "items": 16,
+      "name_hits": 0,
+      "common_lower": 0,
+      "facts": 0,
+      "bad_facts": 0,
+      "facts_from_marked_other": 0
+    },
+    "2026-11-03/135354@1793742834": {
+      "items": 0,
+      "name_hits": 0,
+      "common_lower": 0,
+      "facts": 0,
+      "bad_facts": 0,
+      "facts_from_marked_other": 0
+    },
+    "2026-11-03/181554@1793758554": {
+      "items": 0,
+      "name_hits": 0,
+      "common_lower": 0,
+      "facts": 0,
+      "bad_facts": 0,
+      "facts_from_marked_other": 0
+    },
+    "2026-11-03/182543@1793759146": {
+      "items": 10,
+      "name_hits": 0,
+      "common_lower": 0
+    },
+    "2026-11-03/183839@1793760586": {
+      "items": 19,
+      "name_hits": 0,
+      "common_lower": 0,
+      "facts": 3,
+      "bad_facts": 0,
+      "facts_from_marked_other": 0
+    },
+    "2026-11-03/183839@1793765180": {
+      "items": 1,
+      "name_hits": 0,
+      "common_lower": 0,
+      "facts": 0,
+      "bad_facts": 0,
+      "facts_from_marked_other": 0
+    },
+    "2026-11-03/205331@1793768014": {
+      "items": 4,
+      "name_hits": 0,
+      "common_lower": 0,
+      "facts": 0,
+      "bad_facts": 0,
+      "facts_from_marked_other": 0
+    }
+  },
+  "notes": {
+    "common_lower_name_hits": 18,
+    "facts_checked": 41,
+    "facts_citing_a_label_marked_as_someone_else": 0,
+    "calls_without_marks": [
+      "2026-10-08/184442@1791510305",
+      "2026-10-09/150815@1791583695",
+      "2026-10-09/150815@1791595915",
+      "2026-11-02/101028@1793643028",
+      "2026-11-02/222818@1793687298",
+      "2026-11-03/182543@1793759146"
+    ],
+    "calls_not_processed": [],
+    "variants_pass_failed": [],
+    "replies_held": [],
+    "judged_passes_read": 30,
+    "passes_read_as_failure": [],
+    "trap_probes": 1371
+  },
+  "overruled": [
+    {
+      "id": "11/3/noise",
+      "reason": "Judge error, overruled by the owner 2026-11-04: the reply ('You love pizza') gives the newer preference the owner said in this call; the judge's stated reason (it used the older sushi fact) does not match the reply. The line was under another voice's label (label noise), so only the older fact was stored."
+    }
+  ],
+  "measured_code": "ca2702a8f68a9cca",
+  "code_note": "measured on the dev build; 'code' is the same code after the public name scrub"
+}

@@ -9,3 +9,6 @@ requests
 tzdata
 pydantic
 wordfreq          # name / common-word checks (the app installs it too)
+psutil            # call_boundary: is the server that started a call still alive
+filelock          # experience memory: the store lock across processes
+# gliner (the experience memory's name tagger) is left out on purpose: the tests use a fake tagger

@@ -173,8 +173,8 @@ class AgentRegistry:
         if prev is not None:
             prev.last_active = now
         rt = self.get(pid)
-        # Refresh identity: prompt/profile may have been edited or re-registered.
-        rt.system_prompt = self.prompt_for(pid)
+        # Refresh the profile (it may have been edited or re-registered). The system prompt is composed by the
+        # pipeline (speech_pipeline_manager._compose_system, design docs/designs/experience_memory.md D4).
         self.refresh_profile(pid)
         if rt.last_active and now - rt.last_active > STALE_S:
             rt.reset_conversation()
@@ -194,6 +194,12 @@ class AgentRegistry:
             rt.floor.profile = rt.profile
         if rt.threads is not None:
             rt.threads.names = rt.profile.names
+
+    def reset_all(self) -> None:
+        """Call end (docs/designs/experience_memory.md, S4): every agent's conversation and session state."""
+        for rt in list(self.runtimes.values()):
+            rt.reset_conversation()
+            rt.reset_session()
 
     def forget(self, pid: str) -> None:
         if self.active is not None and self.active.id == pid:

@@ -82,10 +82,10 @@ def items(agent: str, root=None) -> list:
 # ---------------------------------------------------------------- filtering
 def _private(text: str) -> bool:
     try:
-        from hypergraph_memory import is_private
+        from memory_redact import is_private
         return bool(is_private(text))
-    except Exception:  # noqa: BLE001
-        return False
+    except Exception:  # noqa: BLE001 - fail closed: treat the text as private
+        return True
 
 
 def reject_reason(note: str) -> Optional[str]:
@@ -198,8 +198,9 @@ def _recordings() -> List[str]:
 
 
 def call_live(clock: Callable[[], float] = time.time) -> bool:
-    fs = _recordings()
-    return bool(fs) and clock() - max(os.path.getmtime(f) for f in fs) < LIVE_WINDOW_S
+    """A call is in progress in a live Atlas server (call_boundary, docs/designs/experience_memory.md D2)."""
+    import call_boundary
+    return call_boundary.in_progress()
 
 
 def transcript(path: str) -> dict:

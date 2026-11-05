@@ -52,6 +52,7 @@ class Entry:
     parts: list[str]
     t_start: float
     t_end: float
+    wall: float = 0.0            # wall-clock time of the entry's first turn (the experience memory's D5)
 
     @property
     def text(self) -> str:
@@ -132,7 +133,7 @@ class ConversationLog:
             if rec:
                 rec.last_line = last.text
             return "merged"
-        self.ledger.append(Entry("user", spk, [body], now, now))
+        self.ledger.append(Entry("user", spk, [body], now, now, time.time()))
         if rec:
             rec.last_line = body
         self._cap()
@@ -194,6 +195,7 @@ class ConversationLog:
         out: list[dict] = []
         seen: set = set()
         used = 0
+        self.oldest_rendered_wall = None   # wall time of the oldest entry in this view (design D5); None = empty
         for i in range(len(entries) - 1, -1, -1):
             e = entries[i]
             parts = None
@@ -207,6 +209,8 @@ class ConversationLog:
                 break
             out.append(msg)
             used += cost
+            if e.wall:
+                self.oldest_rendered_wall = e.wall
             if e.role == "user" and e.speaker:
                 seen.add(e.speaker)
         out.reverse()

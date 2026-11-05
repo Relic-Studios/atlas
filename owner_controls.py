@@ -109,6 +109,19 @@ def set_speaker_muted(label: str, on: bool) -> None:
         (STATE["muted_speakers"].add if on else STATE["muted_speakers"].discard)(lab)
 
 
+def clear_muted() -> None:
+    """Call end (docs/designs/experience_memory.md, S4): muted labels name voices of this call only."""
+    with _lock:
+        STATE["muted_speakers"].clear()
+
+
+try:
+    import call_boundary as _cb
+    _cb.register("owner_controls.clear_muted", clear_muted, order=10)
+except Exception:  # noqa: BLE001
+    pass
+
+
 def gate(speaker, names_agent: bool, clock=time.monotonic):
     """HOLD reason from owner controls, or None. Quiet mode yields to the agent's
     name (like the agent's own quiet mode); hard mute and muted speakers don't."""

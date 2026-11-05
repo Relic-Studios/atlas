@@ -3,7 +3,7 @@
 
 Lessons are per agent (agent_state/memory/<agent>/lessons.json), so one agent never sees
 another's. They are taught facts about the group's own stuff (rules, house customs, how a
-game works), not a general memory: the hypergraph already remembers what was said. A lesson
+game works), not a general memory: the experience memory keeps what happened in calls. A lesson
 comes back into the prompt only when the current line is about its topic.
 
 Private details (phone numbers, emails, addresses, keys) are refused, same filter as memory.
@@ -22,7 +22,9 @@ MAX_TOPIC = 60
 MAX_CONTENT = 600
 NOTE_MAX = 2          # lessons injected per turn
 
-_lock = threading.Lock()
+from experience_memory import StoreLock as _StoreLock  # noqa: E402
+
+_lock = _StoreLock()     # the experience memory's cross-process store lock (design D1)
 _STOP = {"the", "a", "an", "our", "my", "your", "how", "what", "works", "work", "is", "are", "of",
          "for", "to", "in", "on", "and", "we", "do", "does", "it", "that", "this", "about", "rules",
          "rule", "thing", "things", "game"}
@@ -42,20 +44,17 @@ def _load(agent: str, root=None) -> list:
         return []
 
 
-def _save(agent: str, items: list, root=None) -> None:
-    p = _path(agent, root)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(".tmp")
-    tmp.write_text(json.dumps(items, ensure_ascii=False, indent=1), encoding="utf-8")
-    tmp.replace(p)
+def _save(agent: str, items: list, root=None, retry_s: float = 2.0) -> None:
+    import experience_memory
+    experience_memory.write_json(_path(agent, root), items, retry_s=retry_s)
 
 
 def _private(text: str) -> bool:
     try:
-        from hypergraph_memory import is_private
+        from memory_redact import is_private
         return bool(is_private(text))
-    except Exception:  # noqa: BLE001
-        return False
+    except Exception:  # noqa: BLE001 - fail closed: treat the text as private
+        return True
 
 
 def _words(text: str) -> set:
@@ -64,8 +63,12 @@ def _words(text: str) -> set:
 
 def learn(agent: str, topic: str, content: str, taught_by: str = "", root=None,
           clock: Callable[[], float] = time.time) -> str:
-    topic = re.sub(r"\s+", " ", (topic or "").strip(" .:,"))[:MAX_TOPIC]
-    content = re.sub(r"\s+", " ", (content or "").strip())[:MAX_CONTENT]
+    import memory_redact as MR
+    if _off_record():
+        return "Not saved: you're off the record right now. Say so briefly."
+    legacy = [taught_by] if taught_by else []
+    topic = MR.store_scrub(re.sub(r"\s+", " ", (topic or "").strip(" .:,"))[:MAX_TOPIC], legacy)
+    content = MR.store_scrub(re.sub(r"\s+", " ", (content or "").strip())[:MAX_CONTENT], legacy)
     if not content:
         return "Nothing to learn: give the lesson's content."
     if not topic:
@@ -73,31 +76,38 @@ def learn(agent: str, topic: str, content: str, taught_by: str = "", root=None,
     if _private(topic + " " + content):
         return ("Not saved: that lesson contains a private detail (phone, email, address or key). "
                 "Tell them you don't keep those.")
+    reason = MR.store_check(topic + ". " + content, legacy)
+    if reason:
+        return MR.refusal(reason)
+    now = clock()
     with _lock:
         items = _load(agent, root)
         key = topic.lower()
         for it in items:
             if it.get("topic", "").lower() == key:
-                it.update(content=content, taught_by=taught_by or it.get("taught_by", ""), at=clock())
+                it.pop("taught_by", None)
+                it.update(content=content, at=now, src_t=_src_t(now), tagger_checked=False)
                 _save(agent, items, root)
                 return f"Updated the lesson '{topic}'. Say it back in your own words to confirm you got it."
         items.append({"id": max([i.get("id", 0) for i in items] + [0]) + 1, "topic": topic,
-                      "content": content, "taught_by": taught_by, "at": clock()})
+                      "content": content, "at": now, "src_t": _src_t(now), "tagger_checked": False})
         items = items[-MAX_LESSONS:]
         _save(agent, items, root)
-    by = f" (taught by {taught_by})" if taught_by else ""
-    return f"Learned '{topic}'{by}. Say it back briefly in your own words so they can correct you."
+    return f"Learned '{topic}'. Say it back briefly in your own words so they can correct you."
 
 
 def _match(items: list, query: str) -> List[dict]:
     q = _words(query)
     if not q:
         return []
+    from memory_redact import overlap_score
     scored = []
     for it in items:
+        if it.get("status") == "review":
+            continue
         tw = _words(it.get("topic", ""))
         cw = _words(it.get("content", ""))
-        s = 3 * len(q & tw) + len(q & cw)
+        s = overlap_score(q, [(tw, 3), (cw, 1)])
         if tw and q & tw:
             scored.append((s, it))
         elif s >= 3:
@@ -108,7 +118,7 @@ def _match(items: list, query: str) -> List[dict]:
 
 def recall(agent: str, topic: str = "", root=None) -> str:
     with _lock:
-        items = _load(agent, root)
+        items = [i for i in _load(agent, root) if i.get("status") != "review"]   # D8: review entries are unused
     if not items:
         return "You haven't been taught anything yet. Say so plainly, and invite them to teach you."
     if topic:
@@ -148,8 +158,7 @@ def forget_since(agent: str, cutoff: float, root=None) -> int:
 def note(agent: str, text: str, root=None) -> str:
     """Per-turn note: lessons whose topic the current line touches. Empty when none."""
     try:
-        with _lock:
-            items = _load(agent, root)
+        items = _load(agent, root)          # reply path: read without the lock (files are replaced atomically)
         hits = _match(items, text)[:NOTE_MAX] if items else []
     except Exception:  # noqa: BLE001
         return ""
@@ -181,3 +190,68 @@ def intent(text: str) -> Optional[tuple]:
     if m:
         return ("recall_lessons", {"topic": (m["topic"] or "").strip()})
     return None
+
+
+def strip_legacy_names(root=None) -> int:
+    """One-time (idempotent) migration (D8): drop `taught_by`, scrub the lesson with it as the name list, and mark a
+    lesson that now fails a check as "review" (unused until the owner looks at it). Returns lessons changed."""
+    import agent_memory
+    import memory_redact as MR
+    base = Path(root) if root else agent_memory.ROOT
+    changed = 0
+    for d in sorted(base.iterdir()) if base.exists() else []:
+        if not d.is_dir() or d.name.startswith("_"):
+            continue
+        with _lock:
+            items = _load(d.name, root)
+            dirty = False
+            for it in items:          # every lesson from before (a teacher's name, or never checked: D8)
+                if "taught_by" not in it and "tagger_checked" in it:
+                    continue
+                names = [it.pop("taught_by", None) or ""]
+                names = [n for n in names if n]
+                it["topic"] = MR.scrub(it.get("topic", ""), names)
+                it["content"] = MR.scrub(it.get("content", ""), names)
+                it["tagger_checked"] = False
+                if MR.write_time_check(it["topic"] + ". " + it["content"], names):
+                    it["status"] = "review"
+                dirty = True
+                changed += 1
+            if dirty:
+                _save(d.name, items, root)
+    return changed
+
+
+def drop_window(t_from: float, t_to: float, root=None) -> int:
+    """Off the record, backward (docs/designs/experience_memory.md, D7): drop entries from lines committed in the
+    window, for every agent. Returns how many."""
+    import agent_memory
+    base = Path(root) if root else agent_memory.ROOT
+    n = 0
+    for d in sorted(base.iterdir()) if base.exists() else []:
+        if not d.is_dir() or d.name.startswith("_"):
+            continue
+        with _lock:
+            items = _load(d.name, root)
+            keep = [i for i in items if not (t_from <= float(i.get("src_t") or -1) <= t_to)]
+            if len(keep) != len(items):
+                n += len(items) - len(keep)
+                _save(d.name, keep, root)
+    return n
+
+
+def _off_record() -> bool:
+    """An open span, or a write from a line a backward trigger marked (D7)."""
+    try:
+        import call_boundary
+        return call_boundary.off_record_at()
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _src_t(now: float) -> float:
+    try:
+        import call_boundary
+        return call_boundary.source_time(now)
+    except Exception:  # noqa: BLE001
+        return now

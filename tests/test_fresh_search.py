@@ -52,9 +52,12 @@ class FreshSearch(unittest.TestCase):
         self.assertEqual(a["status"], "done")
 
     def test_cued_only_once_and_expires(self):
+        # two tries since 11-02 (the only one was cut off by an "Okay..." and the result was lost)
         c = Clock(); b = board(c)
         t = b.start_search("q", "S1", gen=1); b.wait(t, 2)
-        b.claim_delivery(t)
+        for _ in range(T.MAX_DELIVERY_ATTEMPTS):
+            self.assertIs(b.deliverable(), t)
+            b.claim_delivery(t)
         self.assertIsNone(b.deliverable())
         t2 = b.start_search("q2", "S3", gen=2); b.wait(t2, 2)
         c.t += T.DELIVER_TTL_S + 1

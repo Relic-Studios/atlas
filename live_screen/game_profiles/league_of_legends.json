@@ -1,0 +1,11 @@
+{
+ "name": "League of Legends",
+ "processes": [
+  "league of legends.exe"
+ ],
+ "titles": [
+  "League of Legends"
+ ],
+ "competitive": true,
+ "spoilers": "full"
+}

@@ -1,11 +1,13 @@
 ; ATLAS one-file Windows installer. Built by tools/build_installer.py from a clean
-; public export (no dev agents, voices, keys). Copies the app to a per-user folder,
-; then runs install.ps1 (venv, torch, deps, models, shortcut) in a visible console.
+; public export (no dev agents, voices, keys). Copies the app to the user's own Program Files
+; (%LOCALAPPDATA%\Programs\ATLAS, no admin rights needed), then runs install.ps1 (venv, torch, deps,
+; models, shortcuts) in a visible console. Uninstall: Windows Settings > Apps > ATLAS, or "Uninstall ATLAS"
+; in the Start menu or the install folder; the uninstaller runs uninstall.ps1 for what install.ps1 made.
 #ifndef SrcDir
   #error SrcDir must be defined (path to the public export)
 #endif
 #ifndef AppVersion
-  #define AppVersion "0.5.0"
+  #define AppVersion "0.6.0"
 #endif
 
 [Setup]
@@ -13,7 +15,7 @@ AppId={{6E4C2B7A-1F3D-4C8E-9A51-ATLAS0000001}
 AppName=ATLAS
 AppVersion={#AppVersion}
 AppPublisher=Relic Studios
-DefaultDirName={localappdata}\ATLAS
+DefaultDirName={userpf}\ATLAS
 DisableDirPage=no
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
@@ -21,6 +23,7 @@ OutputBaseFilename=ATLAS-Setup-{#AppVersion}
 SetupIconFile={#SrcDir}\static\favicon.ico
 LicenseFile={#SrcDir}\LICENSE
 UninstallDisplayIcon={app}\static\favicon.ico
+UninstallDisplayName=ATLAS
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
@@ -30,15 +33,21 @@ ArchitecturesInstallIn64BitMode=x64compatible
 [Files]
 Source: "{#SrcDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion; Excludes: ".venv\*,__pycache__\*,logs\*,user\*,*.log,*.out,boot.pid,desktop\node_modules\*,site\*,docs\media\*,marketing\*,brand\*,tools\demo\*,.github\*"
 
+[Messages]
+FinishedLabel=ATLAS is installed. Open it from the ATLAS shortcut; the first launch walks you through your language model, your microphone and speakers, a voice, and your first agent. To uninstall later: Windows Settings > Apps > ATLAS, or "Uninstall ATLAS" in the Start menu.
+
 [UninstallDelete]
+; Made by install.ps1, not by this installer (uninstall.ps1 removes them first; these are the fallback).
 Type: filesandordirs; Name: "{app}\.venv"
 Type: filesandordirs; Name: "{app}\__pycache__"
 Type: filesandordirs; Name: "{app}\logs"
 Type: filesandordirs; Name: "{app}\desktop\node_modules"
+Type: files; Name: "{app}\install*.log"
 
 [Code]
 var
   ComponentsFailed: Boolean;
+  RemoveUserData: Boolean;
 
 { Run install.ps1 ourselves so a failure is surfaced: the old [Run] entry ignored
   its exit code and Setup reported success on a broken install. }
@@ -71,6 +80,26 @@ end;
 function InitializeUninstall(): Boolean;
 begin
   Result := True;
-  if MsgBox('Also delete your ATLAS settings, voices and personas (the "user" folder)?', mbConfirmation, MB_YESNO) = IDYES then
-    DelTree(ExpandConstant('{app}\user'), True, True, True);
+  { A silent uninstall (/SUPPRESSMSGBOXES) keeps the data. }
+  RemoveUserData := SuppressibleMsgBox('Also delete your ATLAS data (settings, voices, agents, memories and call recordings)?' + #13#10#13#10 +
+    'Choose No to keep them in the ATLAS folder for a later reinstall.', mbConfirmation, MB_YESNO, IDNO) = IDYES;
+end;
+
+{ Before the app files go: stop ATLAS, remove the shortcuts that point here, the Python environment and
+  the desktop packages, and (if asked) the data, all through uninstall.ps1. }
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  Rc: Integer;
+  Args: String;
+begin
+  if CurUninstallStep = usUninstall then
+  begin
+    Args := '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\uninstall.ps1') + '" -FromInstaller -Yes';
+    if RemoveUserData then Args := Args + ' -RemoveData' else Args := Args + ' -KeepData';
+    if FileExists(ExpandConstant('{app}\uninstall.ps1')) then
+      Exec(ExpandConstant('{sysnative}') + '\WindowsPowerShell\v1.0\powershell.exe', Args, ExpandConstant('{app}'),
+           SW_HIDE, ewWaitUntilTerminated, Rc);
+  end;
+  if (CurUninstallStep = usPostUninstall) and RemoveUserData then
+    DelTree(ExpandConstant('{app}'), True, True, True);
 end;

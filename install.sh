@@ -93,3 +93,4 @@ if [ $HEADLESS -eq 0 ] && [ -d "$HOME/.local/share/applications" -o -d "$HOME/.l
 fi
 ok "run: $ROOT/atlas"
 printf '\n\033[32mATLAS is installed.\033[0m First launch opens the setup wizard.\n'
+printf 'To uninstall later: bash %s/uninstall.sh\n' "$ROOT"

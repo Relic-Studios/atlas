@@ -1,0 +1,11 @@
+{
+ "name": "HELLDIVERS 2",
+ "processes": [
+  "helldivers2.exe"
+ ],
+ "titles": [
+  "HELLDIVERS"
+ ],
+ "competitive": false,
+ "spoilers": "full"
+}

@@ -1,7 +1,8 @@
 """Call summary plugin: "what did we decide?" / "recap the last 10 minutes".
 
-Keeps an in-memory transcript of the current session (never written to disk by
-this module) and hands the model the relevant slice so it can summarise. The
+Keeps an in-memory transcript of the current call (never written to disk by
+this module; cleared when the call ends, docs/designs/experience_memory.md D2) and
+hands the model the relevant slice so it can summarise. The
 model writes the summary; this module only supplies real lines, so nothing in a
 recap can be invented from thin air.
 
@@ -28,12 +29,34 @@ _lock = threading.Lock()
 _buf: deque = deque(maxlen=MAX_LINES)
 
 
+_listeners: list = []
+
+
+def add_listener(cb: Callable[[float, str, str, bool], None]) -> None:
+    """cb(time, who, text, agent) for every noted line (the experience memory's index of this call, design D5)."""
+    if cb not in _listeners:
+        _listeners.append(cb)
+
+
 def note(who: str, text: str, agent: bool = False, clock: Callable[[], float] = time.time) -> None:
     text = re.sub(r"\s+", " ", text or "").strip()
     if not text:
         return
     with _lock:
         _buf.append((clock(), who or "", text, bool(agent)))
+    for cb in list(_listeners):
+        try:
+            cb(_buf[-1][0], who or "", text, bool(agent))
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _register_reset() -> None:
+    try:   # call-end reset (docs/designs/experience_memory.md, S4): the buffer holds the current call only
+        import call_boundary as _cb
+        _cb.register("call_summary.clear", clear, order=7)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def clear() -> None:
@@ -56,8 +79,8 @@ def recap(minutes=DEFAULT_MIN, focus: str = "", name_of: Optional[Callable] = No
         minutes = DEFAULT_MIN
     rows = lines(minutes, clock)
     if not rows:
-        return (f"No conversation recorded in the last {minutes:g} minutes of this session "
-                "(I only hold what was said since ATLAS started). Say so plainly.")
+        return (f"No conversation recorded in the last {minutes:g} minutes of this call "
+                "(I only hold what was said since this call started). Say so plainly.")
 
     def label(who: str, agent: bool) -> str:
         if agent:
@@ -126,3 +149,6 @@ def intent(text: str):
     if f:
         args["focus"] = f[1]
     return ("recap_call", args)
+
+
+_register_reset()

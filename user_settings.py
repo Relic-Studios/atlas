@@ -138,7 +138,7 @@ def cloud_config():
     prov = c.get("provider") or "custom"
     return {"url": url, "model": c["model"], "key": c.get("api_key") or "",
             "label": f"{PROVIDERS.get(prov, {}).get('label', 'Cloud')} · {c['model']}",
-            "vllm": bool(c.get("vllm", False)), "cloud": True}
+            "vllm": bool(c.get("vllm", False)), "cloud": True, "context": int(c.get("context") or 8192)}
 
 
 def audio_devices() -> dict:

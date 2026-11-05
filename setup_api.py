@@ -213,7 +213,7 @@ def pull_state() -> dict:
 # routes
 # ---------------------------------------------------------------------------
 @router.get("/api/setup/status")
-async def setup_status():
+def setup_status():   # plain def: FastAPI runs it off the event loop (nvidia-smi, audio devices, Ollama probe)
     loc = US.local_llm()
     gpu = gpu_info()
     try:
@@ -317,8 +317,15 @@ async def setup_llm(request: Request):
         res = test_cloud(base, model, key)
         if not res["ok"]:
             return JSONResponse(res, status_code=400)
-        US.update({"llm": {"mode": "cloud", "cloud": {"provider": prov, "base_url": base, "model": model,
-                                                       "api_key": key, "vllm": prov == "custom" and bool(b.get("vllm"))}}})
+        cloud = {"provider": prov, "base_url": base, "model": model, "api_key": key,
+                 "vllm": prov == "custom" and bool(b.get("vllm"))}
+        try:   # optional: the model's context window (memory budgets follow it, docs/designs/experience_memory.md D4)
+            ctx = int(b.get("context") or 0)
+        except (TypeError, ValueError):
+            ctx = 0
+        if 2048 <= ctx <= 1_048_576:
+            cloud["context"] = ctx
+        US.update({"llm": {"mode": "cloud", "cloud": cloud}})
         return {**res, "settings": US.public_view(), "restart": True}
     return JSONResponse({"error": "mode must be local or cloud"}, status_code=400)
 

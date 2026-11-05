@@ -1,0 +1,12 @@
+{
+ "name": "Apex Legends",
+ "processes": [
+  "r5apex.exe",
+  "r5apex_dx12.exe"
+ ],
+ "titles": [
+  "Apex Legends"
+ ],
+ "competitive": true,
+ "spoilers": "full"
+}

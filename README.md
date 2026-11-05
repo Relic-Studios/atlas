@@ -18,7 +18,7 @@ Local voice agents for group conversation. They listen to everyone in the room o
 answer when they're talked to, and speak in a voice you choose.
 Everything runs on your PC. No account, no bundled API keys.
 
-> **Early beta (v0.2.x).** It works well in the situations we test and has edges we haven't tested yet.
+> **Early beta (v0.6).** It works well in the situations we test and has edges we haven't tested yet.
 > Read [SAFETY.md](SAFETY.md) for exactly what an agent can do, what's tested, and what isn't.
 
 https://github.com/user-attachments/assets/73d76d07-9bcf-4e2a-a101-3ac32d15ae8e
@@ -41,9 +41,10 @@ Also on the <a href="https://relic-studios.github.io/atlas/#demo">website</a>.</
 ### Windows
 
 1. Download **`ATLAS-Setup-<version>.exe`** from the [latest release](https://github.com/Relic-Studios/atlas/releases/latest) and run it.
+   No admin rights needed: ATLAS goes to your own Program Files (`%LOCALAPPDATA%\Programs\ATLAS`).
    It installs Python 3.12 and Node.js if they're missing, a private Python environment,
-   PyTorch (CUDA), the app, and the speech models (~4 GB). This takes a while the first time.
-2. Open **ATLAS** from the desktop shortcut.
+   PyTorch (CUDA), the app, and the speech models (~2.5 GB). This takes 10–20 minutes the first time.
+2. Open **ATLAS** from the desktop shortcut or the Start menu.
 
 > Windows may show a SmartScreen warning because the installer isn't code-signed yet.
 > Click **More info → Run anyway**.
@@ -51,6 +52,11 @@ Also on the <a href="https://relic-studios.github.io/atlas/#demo">website</a>.</
 From source instead: clone this repo and double-click **Install ATLAS.cmd**
 (or `powershell -ExecutionPolicy Bypass -File install.ps1`). Options: `-SkipModels`, `-NoShortcut`.
 A log is written to `install.log`.
+
+**Uninstall:** Windows Settings > Apps > **ATLAS** > Uninstall, or **Uninstall ATLAS** in the Start menu
+or in the ATLAS folder. It removes the app, its Python environment and shortcuts, and asks whether to
+delete your data too (settings, voices, agents, memories, call recordings). Python, Node.js and the
+downloaded speech models are left in place, since other programs may use them.
 
 ### Linux
 
@@ -60,6 +66,8 @@ Ubuntu 22.04+ with an NVIDIA driver installed:
 git clone https://github.com/Relic-Studios/atlas.git && cd atlas
 bash install.sh   # asks for sudo once for system packages
 ```
+
+To uninstall: `bash uninstall.sh` in that folder (asks before deleting your data).
 
 ## First launch
 

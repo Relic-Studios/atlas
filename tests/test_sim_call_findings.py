@@ -304,8 +304,9 @@ class UndirectedHoldThreshold(unittest.TestCase):
         f = ConversationFloor()
         self.assertEqual(f.undirected_hold_thresh("[S2] and their bench was dead, man, nobody could hit", N),
                          f.UNDIRECTED_HOLD_P)
+        # talked about in the third person: the stricter cut-off (gaming sim 11-02)
         self.assertEqual(f.undirected_hold_thresh("[S2] oh that's Ivy, she's been lurking all night", N),
-                         f.UNDIRECTED_HOLD_P)
+                         f.ABOUT_HOLD_P)
         for t in ("[S2] Ivy you were so wrong about that", "[S2] what would you even pick",
                   "[S2] so like what do you actually do all day", "[S2] cat or dog, pick one",
                   "[S2] you just said cats are smarter, then picked dogs, flip-floppy logic",
@@ -322,6 +323,9 @@ class UndirectedHoldThreshold(unittest.TestCase):
     def test_two_stage_uses_it_for_one_turn(self):
         import json as _j
         import remote_llm as R
+        _old_one = R.ONE_REQUEST
+        R.ONE_REQUEST = False          # pins today's two-request pattern
+        self.addCleanup(setattr, R, "ONE_REQUEST", _old_one)
 
         class Resp:
             def __init__(self, obj=None, lines=None):

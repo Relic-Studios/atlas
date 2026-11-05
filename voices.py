@@ -18,16 +18,18 @@ PERSONA_VOICES: dict[str, str] = {}
 DEFAULT_VOICE: str | None = None
 
 
+def _replace_in_place(live: dict, new: dict) -> None:
+    """Never empty a table another thread may be reading (agent switches run off the event loop since 11-04)."""
+    live.update(new)
+    for k in [k for k in list(live) if k not in new]:
+        live.pop(k, None)
+
+
 def refresh() -> None:
     global DEFAULT_VOICE
-    VOICES.clear()
-    VOICES.update({k: {"wav": v["wav"], **({"text": v["text"]} if v.get("text") else {})}
-                   for k, v in _reg.voices().items() if v.get("wav")})
-    PERSONA_VOICES.clear()
-    for aid in _reg.agent_ids():
-        v = _reg.agent_voice(aid)
-        if v:
-            PERSONA_VOICES[aid] = v
+    _replace_in_place(VOICES, {k: {"wav": v["wav"], **({"text": v["text"]} if v.get("text") else {})}
+                               for k, v in _reg.voices().items() if v.get("wav")})
+    _replace_in_place(PERSONA_VOICES, {aid: v for aid in _reg.agent_ids() if (v := _reg.agent_voice(aid))})
     DEFAULT_VOICE = _reg.default_voice()
 
 

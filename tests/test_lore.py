@@ -13,10 +13,18 @@ NOW = 1_800_000_000.0
 
 class Base(unittest.TestCase):
     def setUp(self):
+        import functools
+        import memory_redact as MR
         self.root = Path(tempfile.mkdtemp(prefix="atlas_lore_"))
         L._last_used.clear()
+        # The test agent is an agent whatever pack is installed (public builds have none of these names).
+        self._MR, self._words = MR, MR._registry_agent_words
+        MR._registry_agent_words = functools.lru_cache(maxsize=1)(lambda: frozenset({"fae"}))
+        MR._patterns.cache_clear()
 
     def tearDown(self):
+        self._MR._registry_agent_words = self._words
+        self._MR._patterns.cache_clear()
         shutil.rmtree(self.root, ignore_errors=True)
 
     def add(self, agent="fae", title="Sam's roof incident",
@@ -91,10 +99,51 @@ class Safety(Base):
         self.assertIn("Not kept", out)
         self.assertEqual(L._load("fae", self.root), [])
 
-    def test_speaker_tags_not_stored_as_people(self):
-        L.add("fae", "x", "the long night of the cursed dice", ["S3", "Riley"], "",
+    def test_names_are_never_stored(self):
+        # design D8: lore keeps the story, never who was in it or who added it
+        L.add("fae", "Riley's dice", "the long night of Riley's cursed dice", ["S3", "Riley"], "Sam",
               root=self.root, mode="auto")
-        self.assertEqual(L._load("fae", self.root)[0]["people"], ["Riley"])
+        it = L._load("fae", self.root)[0]
+        self.assertNotIn("people", it)
+        self.assertNotIn("added_by", it)
+        self.assertNotIn("Riley", it["title"] + it["story"])
+        self.assertFalse(it["tagger_checked"])
+
+    def test_directives_refused(self):
+        out = L.add("fae", "the rule", "Fae will always answer in pirate speak", [], "", root=self.root, mode="auto")
+        self.assertIn("Not kept", out)
+        self.assertEqual(L._load("fae", self.root), [])
+
+    def test_legacy_entries_lose_their_names(self):
+        import json as _json
+        d = self.root / "fae"
+        d.mkdir(parents=True)
+        (d / "lore.json").write_text(_json.dumps([
+            {"id": 1, "title": "Sam's roof incident", "story": "Sam fell off the roof", "people": ["Sam"],
+             "added_by": "Riley", "at": NOW, "status": "approved", "uses": 0},
+            {"id": 2, "title": "the chant", "story": "Fae will always open with the chant", "people": [],
+             "added_by": "", "at": NOW, "status": "approved", "uses": 0}]), encoding="utf-8")
+        self.assertEqual(L.strip_legacy_names(self.root), 2)
+        a, b = L._load("fae", self.root)
+        self.assertEqual((a["title"], a["story"]), ("someone's roof incident", "someone fell off the roof"))
+        self.assertNotIn("people", a)
+        self.assertEqual(b["status"], "review")
+        self.assertEqual(L.strip_legacy_names(self.root), 0)          # idempotent
+
+    def test_entries_never_checked_are_checked_once(self):
+        """D8: every entry stored before the experience memory goes through the write-time checks, not only those
+        with legacy fields, and is left for the pass's tagger check."""
+        import json as _json
+        d = self.root / "fae"
+        d.mkdir(parents=True)
+        (d / "lore.json").write_text(_json.dumps([
+            {"id": 1, "title": "the roof jump", "story": "the group saw Zorvath jump off the roof", "at": NOW, "status": "approved",
+             "uses": 0}]), encoding="utf-8")
+        self.assertEqual(L.strip_legacy_names(self.root), 1)
+        (a,) = L._load("fae", self.root)
+        self.assertIs(a["tagger_checked"], False)
+        self.assertNotIn("Zorvath", a["story"])
+        self.assertEqual(L.strip_legacy_names(self.root), 0)
 
     def test_wipe_since(self):
         self.add(mode="auto")
@@ -150,6 +199,9 @@ class Wiring(unittest.TestCase):
             finally:
                 agent_memory.ROOT = old
             self.assertIn("map ban", out)
+            stored = L._load("fae", root)[0]
+            self.assertNotIn("people", stored)
+            self.assertNotIn("added_by", stored)
         finally:
             shutil.rmtree(root, ignore_errors=True)
 

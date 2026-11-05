@@ -31,7 +31,9 @@ SEARCH_KEEP_S = 30 * 60     # finished searches stay visible for follow-ups this
 NOTE_KEEP_S = 24 * 3600     # notes to self expire after a day
 MAX_NOTES = 8
 MAX_SEARCHES = 6
-MAX_DELIVERY_ATTEMPTS = 1
+# Two tries at a gap: live 11-02 the only try was cut off 0.3 s in by someone's "Okay...", and the
+# finished search was never told (3 minutes of "NOT delivered" until a newer search replaced it).
+MAX_DELIVERY_ATTEMPTS = 2
 NOTE_CHARS = 200
 
 # Synthetic "your result is ready" cue: never a real user line. Recognised by the
@@ -45,7 +47,9 @@ def cue_text(task: dict) -> str:
     return (f"{lead}(TASK CUE #{task['id']}) Nobody is talking right now. This is NOT a new line from "
             f"anyone: it's your own cue. Your background search \"{task['text']}\" finished "
             "(see TASK BOARD). If it still fits the room, bring it up now in one or two lines, "
-            "naturally, like you just found it. If the moment has passed, output [HOLD].")
+            "naturally, like you just found it: your take plus one or two details woven in, "
+            "never a recital of dates, numbers or percentages. If the moment has passed, "
+            "output [HOLD].")
 
 
 # ------------------------------------------------------------ vocal confirmation
@@ -253,11 +257,13 @@ class TaskBoard:
         return t["result"]
 
     # ------------------------------------------------------------ delivery state
-    def attach_gen(self, tid: int, gen) -> None:
+    def attach_gen(self, tid: int, gen, cue: bool = False) -> None:
         with self.lock:
             t = self.get(tid)
             if t:
                 t["gen"] = gen
+                if cue:
+                    t["cue_gen"] = gen
 
     def spoke(self, gen, said: Optional[str] = None) -> list[int]:
         """`said` = what was ACTUALLY voiced (the heard part if they cut in).
@@ -275,19 +281,26 @@ class TaskBoard:
                 if t["kind"] != "search" or t["status"] != "done":
                     continue
                 mine = gen is not None and t.get("gen") == gen
+                cue_mine = gen is not None and t.get("cue_gen") == gen
                 if said is None:
                     ok = mine
                 else:
                     ok = conveys(said, t["result"])
-                    if ok and not mine and not (_facts(said) & _facts(t["text"])):
+                    if not ok and cue_mine and said.strip() and not _STALL.search(said):
+                        # the delivery-cue turn spoke a real reply: that IS the delivery,
+                        # even paraphrased past the fact check (live 11-03: roast-style
+                        # advice got re-told twice because no fact words overlapped)
+                        ok = True
+                    if ok and not mine and not cue_mine and not (_facts(said) & _facts(t["text"])):
                         # another turn voiced it without naming the topic (a resumed,
                         # cut-off delivery): only a strong fact match confirms it
                         ok = conveys(said, t["result"], strong=True)
                 if ok:
                     t["status"], t["updated"] = "delivered", self.clock()
                     out.append(t["id"])
-                elif mine and said is not None:
+                elif (mine or cue_mine) and said is not None:
                     t["gen"] = None            # unclaimed again -> deliverable at the next gap
+                    t["cue_gen"] = None
                     logger.info("📋 task #%d NOT delivered (not voiced): %r", t["id"], said[:80])
             if out:
                 self._save()
@@ -396,6 +409,18 @@ class Boards:
         self.root, self.searcher, self.clock = root, searcher, clock
         self._boards: dict[str, TaskBoard] = {}
         self.on_change = None
+
+    def reset_all(self) -> None:
+        """Call end (docs/designs/experience_memory.md, S4): every board, loaded or not, starts empty (notes keep
+        the asker's label, which names a voice of the call that ended)."""
+        for b in list(self._boards.values()):
+            b.reset()
+        if self.root and os.path.isdir(self.root):
+            for f in os.listdir(self.root):
+                if f.startswith("tasks_") and f.endswith(".json"):
+                    persona = f[len("tasks_"):-len(".json")]
+                    if persona not in self._boards:
+                        TaskBoard(persona, os.path.join(self.root, f), None, self.clock).reset()
 
     def get(self, persona: str) -> TaskBoard:
         b = self._boards.get(persona)

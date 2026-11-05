@@ -14,11 +14,19 @@ STEPS = [
      lambda: __import__("huggingface_hub").snapshot_download("KoljaB/SentenceFinishedClassification")),
     ("Speaker recognition (ECAPA, ~90 MB)",
      lambda: __import__("huggingface_hub").snapshot_download("speechbrain/spkrec-ecapa-voxceleb")),
-    ("Memory embeddings (BGE-M3, ~2.3 GB)",
-     lambda: __import__("huggingface_hub").snapshot_download(
-         "BAAI/bge-m3", allow_patterns=["*.json", "*.txt", "sentencepiece*", "tokenizer*",
-                                        "pytorch_model.bin", "1_Pooling/*", "modules.json"])),
+    ("Name tagger for memories (GLiNER small, ~590 MB)", lambda: _tagger()),
 ]
+
+
+def _tagger():
+    """The model the post-call memory pass uses to keep people's names out of memories (memory_redact.TAGGER_FILES:
+    the GLiNER weights and its backbone's tokenizer, nothing more)."""
+    from pathlib import Path
+    from huggingface_hub import snapshot_download
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    import memory_redact as MR
+    for repo, files in MR.TAGGER_FILES:
+        snapshot_download(repo, allow_patterns=list(files))
 
 
 def main() -> int:

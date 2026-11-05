@@ -1,0 +1,11 @@
+{
+ "name": "Counter-Strike 2",
+ "processes": [
+  "cs2.exe"
+ ],
+ "titles": [
+  "Counter-Strike 2"
+ ],
+ "competitive": true,
+ "spoilers": "full"
+}

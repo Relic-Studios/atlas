@@ -60,6 +60,22 @@ class Journey(unittest.TestCase):
         self.assertEqual(j["current"], "review")
         self.assertIn("2 memory", j["hint"])
 
+    def test_review_counts_facts_to_confirm_and_failed_calls(self):
+        """Experience memory step 2: the review hint counts "to confirm" owner facts and failed calls (no mock)."""
+        import agent_memory
+        import experience_memory as EM
+        old = agent_memory.ROOT
+        agent_memory.ROOT = self.tmp / "memory"
+        self.p_pend.stop()                       # the real count, not the stand-in the other tests use
+        try:
+            EM.add_owner_fact("The owner likes pizza", "I like pizza", "said", False, call=None)
+            (EM.root() / "_pending").mkdir(parents=True, exist_ok=True)
+            (EM.root() / "_pending" / "c1.fails").write_text("3", encoding="utf-8")
+            self.assertEqual(journey._pending_candidates([]), 2)
+        finally:
+            self.p_pend.start()
+            agent_memory.ROOT = old
+
     def test_garbage_lines_dont_crash(self):
         p = self.tmp / "x" / "bad.jsonl"; p.parent.mkdir(parents=True)
         p.write_bytes(b'{"user" not json\n\xff\xfe')

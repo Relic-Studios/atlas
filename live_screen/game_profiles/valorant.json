@@ -1,0 +1,11 @@
+{
+ "name": "VALORANT",
+ "processes": [
+  "valorant-win64-shipping.exe"
+ ],
+ "titles": [
+  "^VALORANT"
+ ],
+ "competitive": true,
+ "spoilers": "full"
+}

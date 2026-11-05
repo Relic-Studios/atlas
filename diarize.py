@@ -407,6 +407,16 @@ class Diarizer:
             self._pending = self._pending[-12:]
             return SpeakerDecision(speaker=None, unknown_probability=1.0)
 
+    def forget_all(self) -> None:
+        """Call end (docs/designs/experience_memory.md, S4): drop every voice. The label counter keeps counting, so a
+        label from the call that ended never names a new voice; the agent's own voice reference stays."""
+        with self._lock:
+            self._profiles = []
+            self._pending = []
+            self._aliases = {}
+            self._merges = []
+            self.last_embedding = None
+
     def _new_label(self) -> str:
         label = f"S{self._next_label}"
         self._next_label += 1

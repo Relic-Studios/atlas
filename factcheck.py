@@ -62,10 +62,10 @@ def _norm(text: str) -> str:
 
 def _private(text: str) -> bool:
     try:
-        from hypergraph_memory import is_private
+        from memory_redact import is_private
         return bool(is_private(text))
-    except Exception:  # noqa: BLE001
-        return False
+    except Exception:  # noqa: BLE001 - fail closed: treat the text as private
+        return True
 
 
 # ------------------------------------------------------------------ claim detection
@@ -290,6 +290,19 @@ def reset() -> None:
     with _lock:
         _items.clear(); _lines.clear(); _seen.clear(); _queue.clear()
         _day.update(day=-1, n=0); _last_bg[0] = 0.0
+
+
+def end_call() -> None:
+    """Call end: forget this call's claims and lines (they hold speakers' names); the daily cap is kept."""
+    with _lock:
+        _items.clear(); _lines.clear(); _seen.clear(); _queue.clear()
+
+
+try:   # call-end reset (docs/designs/experience_memory.md, S4)
+    import call_boundary as _cb
+    _cb.register("factcheck.end_call", end_call, order=8)
+except Exception:  # noqa: BLE001
+    pass
 
 
 TOOL = {

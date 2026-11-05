@@ -52,7 +52,8 @@ class KeepsItLive(unittest.TestCase):
 
     def run_note(self, m, gen, SPM, reply):
         with mock.patch.object(P, "search_query", lambda line, timeout=2.0: "robot bodies with wings"), \
-                mock.patch.object(SPM, "_websearch", object()):
+                mock.patch.object(SPM, "_websearch", object()), \
+                mock.patch("plugins.tool_names_disabled", return_value=set()):   # as with a search key set
             m.note_reply_for_promise("S1", reply, gen)
             time.sleep(0.2)            # the search starts on a background thread
 

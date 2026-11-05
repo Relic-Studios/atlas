@@ -1,0 +1,12 @@
+{
+ "name": "Minecraft",
+ "processes": [
+  "minecraft.windows.exe",
+  "javaw.exe"
+ ],
+ "titles": [
+  "^Minecraft"
+ ],
+ "competitive": false,
+ "spoilers": "full"
+}

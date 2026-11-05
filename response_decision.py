@@ -67,6 +67,9 @@ For spoken replies maintain your persona and brevity AFTER the control header.
 For silence output ONLY [HOLD]. Never explain your routing. Never omit the header.
 Only call search tools for requests to you; no preamble before calling a tool,
 then the required header before the final spoken answer. Do not call tools on HOLD.
+Banter is a performance, not a research task: asked to roast, joke, sing, hype or
+do a bit, you do it from who you are, right now, in one line -- never call
+web_search to learn how. Search is for facts someone actually asked you to find.
 """.strip()
 
 
@@ -93,6 +96,10 @@ class ResponseDecision:
     heard: str = ''
     # people.NameBook: spoken S-tags ("S8") are replaced with names / "you".
     namebook: object = None
+    # Sentences the loop breaker cut, and the pipeline's one retry for a SPEAK that lost every word to the
+    # screens: called with a note for the model, returns a new raw stream or None if the turn was cancelled.
+    loop_dropped: list = field(default_factory=list)
+    empty_retry: object = None
 
 
 def expected_target_for(text: str) -> str:
@@ -195,12 +202,52 @@ def _announce_screen(source, decision):
             yield out
 
 
+EMPTY_NUDGE = ("(Your reply to that was cut before anyone heard it{why}. They are still waiting for an answer: "
+               "reply to {who} with [SPEAK to={who}] in new words.)")
+
+
 def filter_response(source, decision):
+    """The screened SPEAK body. If the model chose to speak but the screens cut every word (a loop line it
+    already said, a parrot), the person hears nothing and has to ask again (live 11-04: "Can you remember who I
+    am based off my voice?" -> "Yeah, I know it's you. Same voice, same you." both dropped as repeats). Then
+    the pipeline's `decision.empty_retry` asks once more with a note saying why; the retry is screened too."""
+    spoke = False
+    for chunk in _filter_once(source, decision):
+        spoke = spoke or bool(chunk.strip())
+        yield chunk
+    retry, decision.empty_retry = decision.empty_retry, None      # one retry per turn
+    if spoke or decision.action != 'SPEAK' or retry is None:
+        return
+    said = ' '.join(decision.loop_dropped)
+    why = f': it repeated what you already said ("{said[:160]}")' if said else ''
+    who = decision.target or decision.expected_target or 'them'
+    again = retry(EMPTY_NUDGE.format(why=why, who=who))
+    if again is None:                                              # the turn was cancelled meanwhile
+        return
+    logger.info('SPEAK with nothing left after screening -> one retry')
+    _rec('retry', why='empty after screening', dropped=said[:200])
+    decision.action, decision.header, decision.target = 'PENDING', '', ''
+    yield from _filter_once(again, decision)
+
+
+def _filter_once(source, decision):
     """Scrub spoken voice tags from a SPEAK body (split-safe across chunks)."""
     carry = ''
     book = getattr(decision, 'namebook', None)
     from speech_safety import screen as _slur_screen
-    for chunk in _ack_screen(_shared_screen(_life_screen(_ai_denial_screen(_reask_screen(_forbid_screen(_slur_screen(_identity_screen(_announce_screen(_parrot_screen(_filter_response(source, decision), decision), decision), decision)), decision)), decision), decision), decision), decision):
+    s = _filter_response(source, decision)
+    s = _parrot_screen(s, decision)
+    s = _announce_screen(s, decision)
+    s = _identity_screen(s, decision)
+    s = _first_person_screen(s, decision)
+    s = _private_screen(s, decision)
+    s = _slur_screen(s)
+    s = _forbid_screen(s, decision)
+    s = _reask_screen(s)
+    s = _ai_denial_screen(s, decision)
+    s = _life_screen(s, decision)
+    s = _shared_screen(s, decision)
+    for chunk in _ack_screen(s, decision):
         if book is None:
             yield chunk
             continue
@@ -258,6 +305,140 @@ def _parrot_screen(source, decision):
         decision.parrot_dropped = dropped
         logger.info('Parrot reply dropped: %r (heard %r)', dropped, heard[-80:])
         _rec('drop', why='parrot', text=' '.join(dropped)[:200])
+
+
+# Pack private_setup (dev): what the agent runs on stays private. Backstop for the prompt rule --
+# live 11-02 Ivy said "The thinking runs on <its model>, a small fine-tune of Qwen, running on an
+# RTX 4090", "I'm on Qwen 3", "the open-weight Qwen3, the 32B version". GPU or model talk that
+# isn't about itself ("The 4070 is the 40-series card", "I'd get a 4090") is untouched. The pack's
+# own model and machine names (trait private_names) are dropped wherever they come up.
+_MODEL_NAME = re.compile(r"\bqwen\s*[\d.]*|\bllama\s*[\d.]*|\bmistral\b|\bgemma\b|\bgpt-?\s?\d|\bdeep\s?seek\b|"
+                         r"\bnvfp4\b|\bvllm\b|\bollama\b", re.I)
+_HARDWARE = re.compile(r"\brtx\s?\d{4}\b|\b(?:30|40|50)[5-9]0(?:\s?ti)?\b|\b\d{1,3}\s?b\b|\bgraphics card\b|\bgpus?\b", re.I)
+_SELF_RUN = re.compile(r"\b(?:I|I'm|I've|me|my)\b[^.!?]{0,60}?\b(?:run|runs|running|built|based|powered|trained|tuned|"
+                       r"on|from)\b|\bthe thinking\b|\bunder the hood\b|\bmy (?:brain|model|hardware|gpu|card|weights|"
+                       r"backend|setup)\b|\b(?:runs?|running|built|based|powered)\s+(?:on|by|off)\b|\bfine-?tune[ds]?\s+of\b",
+                       re.I)
+
+
+def _private_names():
+    """The pack's trait private_names ("My Model 2", "my-box") as one pattern; None without any."""
+    try:
+        from agent_registry import traits
+        names = [str(n).strip() for n in traits().get("private_names") or [] if str(n).strip()]
+    except Exception:  # noqa: BLE001
+        names = []
+    if not names:
+        return None
+    return re.compile(r"\b(?:" + "|".join(r"\s*".join(map(re.escape, n.split())) for n in names) + r")\b", re.I)
+
+
+def _private_screen(source, decision):
+    try:
+        from capability import private_setup
+        active = bool(private_setup())
+    except Exception:  # noqa: BLE001
+        active = False
+    if not active:
+        yield from source
+        return
+    own = _private_names()
+
+    def bad(sent):
+        return bool((own is not None and own.search(sent)) or (_MODEL_NAME.search(sent) and _SELF_RUN.search(sent))
+                    or (_HARDWARE.search(sent) and _SELF_RUN.search(sent) and re.search(
+                        r"\b(?:I|I'm|me|my|the thinking|under the hood)\b", sent, re.I)))
+    buf, said, dropped = "", False, []
+    for chunk in source:
+        buf += chunk
+        parts = re.split(r"(?<=[.!?])\s+", buf)
+        buf = parts.pop()
+        for p in parts:
+            if bad(p):
+                dropped.append(p)
+            else:
+                said = True
+                yield p + " "
+    if buf:
+        if bad(buf):
+            dropped.append(buf)
+        else:
+            said = True
+            yield buf
+    if dropped:
+        logger.info('Private setup dropped: %r', dropped)
+        _rec('drop', why='private_setup', text=str(dropped)[:200])
+        if not said:
+            yield "That part's private, sorry."
+
+
+# Own name as the subject of a sentence about itself -> "I" (owner 11-02: "it's all of our agents
+# that are struggling with talking in third person"; after the prompt fix Pip still said "Pip is
+# boy", "Pip know", "Pip think" in 4 of 12 self-questions). Exclamations ("Pip!"), possessives
+# ("Pip's Island"), introductions ("I'm Pip", "Grim is me") and objects ("to Pip") stay.
+_FP_VERB = {"is": "am", "was": "was", "has": "have", "had": "had", "does": "do", "doesn't": "don't",
+            "isn't": "am not", "wasn't": "wasn't", "hasn't": "haven't", "knows": "know", "thinks": "think",
+            "likes": "like", "loves": "love", "wants": "want", "needs": "need", "gets": "get", "feels": "feel",
+            "says": "say", "remembers": "remember", "goes": "go", "carries": "carry", "sees": "see",
+            "hears": "hear", "makes": "make", "keeps": "keep", "tries": "try", "eats": "eat", "says,": "say,"}
+_FP_KEEP_AFTER = re.compile(r"^\s*(?:[!,.?;:]|$|['’]s\b|is\s+(?:me|my|I)\b|here\b|[A-Z])")
+_FP_KEEP_BEFORE = re.compile(r"(?:\b(?:I'm|I\s+am|call\s+me|name\s+is|it's|that's|this\s+is|me|as|like|from|to|"
+                             r"with|for|about|of|the|a|an|my|your|old|young|little|hey|hi|yo)\s*,?\s*|[\"“'‘])$", re.I)
+_FP_AUX_BEFORE = re.compile(r"\b(did|does|can|will|would|could|should)\s+$", re.I)
+
+
+def first_person(text: str, name: str) -> str:
+    if not name or not text or name.lower() not in text.lower():
+        return text
+    pat = re.compile(r"\b" + re.escape(name) + r"\b")
+    out, pos = [], 0
+    for m in pat.finditer(text):
+        before, after = text[:m.start()], text[m.end():]
+        aux = _FP_AUX_BEFORE.search(before)
+        subject = re.search(r"(?:^|[.!?]\s+|,\s+(?:and|but|so)\s+|\b(?:and|but|so|because|cause|then)\s+)$", before)
+        if _FP_KEEP_AFTER.match(after) or (not aux and (_FP_KEEP_BEFORE.search(before) or not subject)):
+            continue
+        out.append(text[pos:aux.start() if aux else m.start()])
+        if aux:
+            a = aux.group(1)
+            out.append(("do" if a.lower() == "does" else a) + " I")
+            pos = m.end()
+            continue
+        nxt = re.match(r"\s+([A-Za-z']+[,]?)", after)
+        word = nxt.group(1) if nxt else ""
+        rep = _FP_VERB.get(word.lower())
+        if rep is not None:
+            fixed = "I'm" if rep == "am" else ("I'm not" if rep == "am not" else f"I {rep}")
+            out.append(fixed)
+            pos = m.end() + nxt.end()
+        else:
+            out.append("I")
+            pos = m.end()
+    if not out:
+        return text
+    out.append(text[pos:])
+    return "".join(out)
+
+
+def _first_person_screen(source, decision):
+    pid = getattr(decision, "persona", "") or ""
+    try:
+        from agent_registry import display_name
+        name = display_name(pid) if pid else ""
+    except Exception:  # noqa: BLE001
+        name = ""
+    if not name:
+        yield from source
+        return
+    buf = ""
+    for chunk in source:
+        buf += chunk
+        parts = re.split(r"(?<=[.!?])\s+", buf)
+        buf = parts.pop()
+        for p in parts:
+            yield first_person(p, name) + " "
+    if buf:
+        yield first_person(buf, name)
 
 
 def _identity_screen(source, decision):
@@ -369,6 +550,7 @@ def _filter_response(source, decision):
                 yield pending
         if dropped:
             logger.info('Loop filler dropped: %r', dropped)
+            decision.loop_dropped.extend(dropped)
         if decision.action == 'PENDING':
             if decision.cancelled:
                 decision.action = 'CANCELLED'

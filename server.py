@@ -17,6 +17,11 @@ logger = logging.getLogger(__name__)
 _REC_NAMES: dict = {}
 
 
+def clear_rec_names() -> None:
+    """Call end (docs/designs/experience_memory.md, S4): the recorder's label -> name map belongs to the call."""
+    _REC_NAMES.clear()
+
+
 def _rec_name(speaker, mgr):
     """Write a {"k": "name"} event the first time a speaker's name is known (or changes),
     so offline tools (Highlight reel) can show real names instead of S-labels."""
@@ -158,6 +163,14 @@ async def lifespan(app: FastAPI):
         app: The FastAPI application instance.
     """
     logger.info("🖥️▶️ Server starting up")
+    __import__("stall_watch").start()
+    try:   # how often a thread running Python must hand the GIL to a waiting one (Python's default: 5 ms)
+        _sw = float(os.environ.get("ATLAS_GIL_SWITCH_MS", "") or 0)
+        if _sw > 0:
+            sys.setswitchinterval(_sw / 1000.0)
+            logger.info("🖥️🔀 GIL switch interval %g ms", _sw)
+    except ValueError:
+        pass
     # Post-call report for the previous call (tools/call_report.py), off the hot path.
     def _prev_call_report():
         try:
@@ -188,6 +201,12 @@ async def lifespan(app: FastAPI):
         no_think=NO_THINK,
         orpheus_model=TTS_ORPHEUS_MODEL,
     )
+
+    try:   # Live screen (plugin, off by default) needs to know which model server replies
+        import live_screen as _live_screen
+        _live_screen.bind(app.state.SpeechPipelineManager)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("live screen unavailable: %s", e)
 
     app.state.Upsampler = UpsampleOverlap()
     app.state.AudioInputProcessor = AudioInputProcessor(
@@ -235,6 +254,12 @@ async def lifespan(app: FastAPI):
             logger.error("🖥️💥 CallBridge failed to start: %s", e)
             app.state.CallBridge = None
 
+    # every agent or voice switch re-points the call diarizer at the new voice (on the switch's worker thread)
+    app.state.SpeechPipelineManager.on_voice_changed = lambda: _sync_bridge_self_reference(app)
+
+    _setup_owner_voice(app)
+    _setup_call_boundary(app)
+
     # Refresh the selected remote transport and release any old local standby.
     # Startup already selects remote before prewarm; a failure retains that mode.
     try:
@@ -254,14 +279,28 @@ async def lifespan(app: FastAPI):
     app.state.headless = None
     if ENABLE_CALL_BRIDGE and app.state.CallBridge is not None:
         app.state.headless = _start_headless_session(app)
+    app.state.call_ticker = asyncio.create_task(_call_ticker(app))
 
     yield
 
     if getattr(app.state, "headless", None):
         for t in app.state.headless["tasks"]:
             t.cancel()
+    if getattr(app.state, "call_ticker", None) is not None:
+        app.state.call_ticker.cancel()
+    try:
+        import call_boundary
+        await asyncio.to_thread(call_boundary.BOUNDARY.end, "shutdown", True, 5.0)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("call end at shutdown failed: %s", e)
 
     logger.info("🖥️⏹️ Server shutting down")
+    __import__("turn_trace").flush_all()
+    try:
+        import live_screen as _live_screen
+        _live_screen.shutdown()
+    except Exception:  # noqa: BLE001
+        pass
     if app.state.CallBridge is not None:
         app.state.CallBridge.stop()
     app.state.AudioInputProcessor.shutdown()
@@ -314,16 +353,24 @@ async def telemetry_snapshot():
 
 @app.websocket("/telemetry")
 async def telemetry_ws(ws: WebSocket):
-    """Pushes `fast` frames (~15 Hz: meters/spectrum/state), `snap` frames
+    """Pushes `fast` frames (~30 Hz while anything moves: meters/spectrum/state), `snap` frames
     (~1 Hz: GPU/model/pipeline/room) and incremental events + log lines."""
     await ws.accept()
     ev_seq = max((e["seq"] for e in TELEMETRY.events_since(0)), default=0) - 60
     ln_seq = max((l["seq"] for l in TELEMETRY.lines_since(0)), default=0) - 80
-    last_snap = 0.0
+    last_snap = last_fast = 0.0
+    last_idle = False
     try:
         while True:
             now = time.time()
-            frames = [TELEMETRY.fast()]
+            # 30 Hz while anything moves (owner 11-04: a high refresh rate); a silent room sends 4 frames a second
+            fast = TELEMETRY.fast()
+            idle = (max(fast["in"], fast["clean"], fast["out"]) < 1e-3
+                    and not (fast["speaking"] or fast["recording"] or fast["thinking"] or fast["partial"]))
+            frames = [] if (idle and last_idle and now - last_fast < 0.25) else [fast]
+            if frames:
+                last_fast = now
+            last_idle = idle
             if now - last_snap >= 1.0:
                 last_snap = now
                 snap = await asyncio.to_thread(TELEMETRY.snapshot)
@@ -339,7 +386,7 @@ async def telemetry_ws(ws: WebSocket):
                 frames.append({"type": "lines", "items": lns[-120:]})
             for f in frames:
                 await ws.send_text(json.dumps(f, default=str))
-            await asyncio.sleep(1 / 15)
+            await asyncio.sleep(1 / 30)
     except (WebSocketDisconnect, RuntimeError):
         pass
     except Exception as e:  # noqa: BLE001
@@ -370,11 +417,39 @@ async def screen_set(request: Request):
     _scr.set_enabled(bool(body.get("enabled")))
     return _scr.status()
 
+@app.get("/api/screen/log")
+async def screen_log(request: Request):
+    """Live screen's screen log (owner only): what the watcher saw this session, oldest first."""
+    if not _is_owner(request):
+        return JSONResponse({"error": "owner only"}, status_code=403)
+    import live_screen as _live_screen
+    return {"entries": _live_screen.log_snapshot()}
+
+
+@app.post("/api/screen/log/clear")
+async def screen_log_clear(request: Request):
+    if not _is_owner(request):
+        return JSONResponse({"error": "owner only"}, status_code=403)
+    import live_screen as _live_screen
+    _live_screen.log_clear()
+    return {"ok": True}
+
+
 @app.get("/api/screen/last")
 async def screen_last(request: Request):
     import screen as _scr
     if not _is_owner(request):
         return JSONResponse({"error": "owner only"}, status_code=403)
+    try:   # Live screen on: the newest live frame from memory (nothing is written to disk)
+        import live_screen as _live_screen
+        if _live_screen.enabled():
+            jpg = await asyncio.to_thread(_live_screen.latest_jpeg)
+            if not jpg:
+                return JSONResponse({"error": "no live frame"}, status_code=404)
+            from fastapi.responses import Response
+            return Response(content=jpg, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"live frame: {e}")
     if not _scr.LAST_PATH.exists():
         return JSONResponse({"error": "no capture yet"}, status_code=404)
     from fastapi.responses import FileResponse
@@ -561,7 +636,9 @@ async def voices_import(request: Request, label: str = "", filename: str = "", t
         res = await asyncio.to_thread(VI.import_voice, data, filename, label, transcript, set(voice_names()))
     except VI.VoiceImportError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
-    app.state.SpeechPipelineManager.refresh_registry()
+    ok, _, err = await _actions(app).run("pipeline", app.state.SpeechPipelineManager.refresh_registry)
+    if not ok:
+        return JSONResponse({"error": err}, status_code=500)
     return {**res, "voices": voice_names()}
 
 
@@ -579,8 +656,15 @@ async def agents_create(request: Request):
     if err:
         return JSONResponse({"error": err}, status_code=400)
     rec = await asyncio.to_thread(A.save_agent, body)
-    app.state.SpeechPipelineManager.register_agent(rec, body["prompt"])
-    return {"agent": rec, **app.state.SpeechPipelineManager.personas_info()}
+    mgr = app.state.SpeechPipelineManager
+
+    def register():
+        mgr.register_agent(rec, body["prompt"])
+        return mgr.personas_info()
+    ok, info, err = await _actions(app).run("pipeline", register)
+    if not ok:
+        return JSONResponse({"error": err}, status_code=500)
+    return {"agent": rec, **info}
 
 
 @app.post("/api/agents/preview")
@@ -599,19 +683,303 @@ async def agents_delete(aid: str, request: Request):
     if not _is_owner(request):
         return JSONResponse({"error": "owner only"}, status_code=403)
     mgr = app.state.SpeechPipelineManager
-    if not mgr.remove_agent(aid):
+    ok, removed, err = await _actions(app).run("pipeline", lambda: mgr.remove_agent(aid))
+    if not ok:
+        return JSONResponse({"error": err}, status_code=500)
+    if not removed:
         return JSONResponse({"error": "Can't delete a built-in or the active agent."}, status_code=400)
-    if getattr(mgr, "hgmem", None) is not None:
-        mgr.hgmem.drop_agent(aid)
     await asyncio.to_thread(A.delete_agent, aid)
     return mgr.personas_info()
 
 
 # --- Owner controls (owner_controls.py): mute, quiet mode, talkativeness, muted speakers ---
-def _owner_status() -> dict:
+def _setup_call_boundary(app) -> None:
+    """Register the server-owned call-end resets (the diarizer's voices, the owner adoptions, the recorder's name map)
+    and end a call a stopped server left open (docs/designs/experience_memory.md, D2, S4)."""
+    import call_boundary
+
+    def forget_voices():
+        bridge = getattr(app.state, "CallBridge", None)
+        d = getattr(bridge, "diarizer", None) if bridge is not None else getattr(app.state, "Diarizer", None)
+        if d is not None:
+            with _DIARIZER_LOCK:
+                d.forget_all()
+
+    def end_adoptions():
+        a = getattr(app.state, "OwnerAdopter", None)
+        if a is not None:
+            a.end_call()
+
+    call_boundary.register("diarize.Diarizer.forget_all", forget_voices, order=11)
+    call_boundary.register("owner_voice.Adopter.end_call", end_adoptions, order=12)
+    call_boundary.register("server.clear_rec_names", clear_rec_names, order=10)
+    call_boundary.BOUNDARY.set_owner_name_source(
+        lambda: (app.state.OwnerAdopter.stored_name() if getattr(app.state, "OwnerAdopter", None) else None))
+    for mod, fn in (("lore", "strip_legacy_names"), ("teach", "strip_legacy_names"),
+                    ("self_tools", "scrub_existing_predictions")):
+        try:   # one-time: names out of entries stored before the experience memory (design D8)
+            n = getattr(__import__(mod), fn)()
+            if n:
+                logger.info("%s.%s: %d entries cleaned", mod, fn, n)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("%s.%s failed: %s", mod, fn, e)
+    try:
+        call_boundary.BOUNDARY.startup()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("call boundary startup failed: %s", e)
+    _setup_memory_runner(app)
+
+
+def _llm_mode(app) -> dict:
+    """What the pass talks to (D3): {"mode": "remote"|"local", "cloud": bool, "args": [...]}"""
+    llm = getattr(getattr(app.state, "SpeechPipelineManager", None), "llm", None)
+    remote = getattr(llm, "remote", None)
+    if remote is not None:
+        cfg = getattr(remote, "cfg", {}) or {}
+        args = ["--mode", "remote"]
+        if cfg.get("url") and cfg.get("model"):          # the model the live agent uses (D3); the key stays in its file
+            args += ["--url", str(cfg["url"]), "--model", str(cfg["model"])]
+        return {"mode": "remote", "cloud": bool(cfg.get("cloud")), "args": args}
+    url = getattr(llm, "effective_ollama_url", None) or "http://127.0.0.1:11434"
+    model = getattr(llm, "model", "") or ""
+    return {"mode": "local", "cloud": False,
+            "args": ["--mode", "local", "--local-url", str(url), "--local-model", str(model), "--ctx", "4096"]}
+
+
+def _setup_memory_runner(app) -> None:
+    """The post-call pass between calls (D3): started by the lifespan ticker, killed on speech activity."""
+    try:
+        import call_boundary
+        import memory_writer
+        if memory_writer.kill_leftover_run():
+            logger.info("a memory pass left from the last quit was stopped")
+
+        def done(code):        # any exit: a failed or killed run may still have written some calls (D3)
+            mgr = getattr(app.state, "SpeechPipelineManager", None)
+            if mgr is not None:
+                mgr.memory_reloaded()
+        runner = memory_writer.Runner(args_fn=lambda: _llm_mode(app)["args"],
+                                      cloud_fn=lambda: _llm_mode(app)["cloud"], on_done=done)
+        call_boundary.BOUNDARY.on_activity(runner.on_activity)
+        app.state.MemoryRunner = runner
+    except Exception as e:  # noqa: BLE001
+        logger.warning("memory pass runner not set up: %s", e)
+        app.state.MemoryRunner = None
+
+
+def start_pass_at_quit(app) -> bool:
+    """`start_pass` for POST /api/call/end (S3): pending files to do, not paused, the model is not on this PC, cloud
+    use allowed or not needed, and the name tagger present."""
+    try:
+        import memory_writer
+        m = _llm_mode(app)
+        if m["mode"] == "local":
+            return False
+        return memory_writer.may_run(m["cloud"]) is None
+    except Exception:  # noqa: BLE001
+        return False
+
+
+async def _call_ticker(app) -> None:
+    """Heartbeat for current.json and the 30-minute call end, in browser and bridge mode alike."""
+    import call_boundary
+    while True:
+        try:
+            await asyncio.sleep(5.0)
+            await asyncio.to_thread(call_boundary.BOUNDARY.tick)
+            runner = getattr(app.state, "MemoryRunner", None)
+            if runner is not None:
+                b = call_boundary.BOUNDARY
+                await asyncio.to_thread(runner.tick, b.in_progress_here(), b.last_activity)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            logger.warning("call ticker failed: %s", e)
+
+
+def _setup_owner_voice(a) -> None:
+    """Owner voice recognition (owner_voice.py, docs/designs/owner_voice.md): call-bridge mode only, since every
+    measurement came from the Discord stream. Anything wrong leaves recognition off and Atlas as before."""
+    a.state.OwnerAdopter = None
+    mgr = getattr(a.state, "SpeechPipelineManager", None)
+    try:
+        if mgr is not None:
+            mgr.people.owner = None
+        bridge = getattr(a.state, "CallBridge", None)
+        dz = getattr(bridge, "diarizer", None) if bridge is not None else None
+        if dz is None or mgr is None:
+            return
+        import owner_voice
+        store = owner_voice.Store(owner_voice.PATH, owner_voice.EMBEDDER,
+                                  uses_center=getattr(dz, "center", None) is not None)
+        if store.load():
+            logger.info(f"👤 owner voice loaded ({len(store.samples)} sample(s))")
+        adopter = owner_voice.Adopter(store)
+        a.state.OwnerAdopter = adopter
+        mgr.people.owner = adopter
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"owner voice recognition off: {e}")
+        a.state.OwnerAdopter = None
+        if mgr is not None:
+            mgr.people.owner = None
+
+
+def _owner_event(kind: str, **fields) -> None:
+    """Owner adoptions, refusals, merges and "Forget my voice" go to the call's pending file (design D2, S1)."""
+    try:
+        import call_boundary
+        call_boundary.owner_event(kind, **fields)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("pending owner event skipped: %s", e)
+
+
+def _store_said_fact(mgr, adopter, label, item) -> None:
+    """Outcomes 1, 2 and 5 of "remember that" (D7): checks without the tagger; a confirmed `said` fact when the turn
+    is a qualifying owner line, else "to confirm"; nothing when a check fails. Written through the writer thread."""
+    import call_boundary
+    import experience_memory
+    from speech_pipeline_manager import said_fact
+    fact, quote, problem = said_fact(item["clause"], adopter)
+    if problem:
+        logger.info("remember-that not kept (%s)", problem)
+        return
+    fid = experience_memory.new_fact_id()
+    ids = mgr.said_facts.setdefault(label, [])
+    ids.append(fid)
+    call = call_boundary.BOUNDARY.call_id
+
+    def store():
+        rec = experience_memory.add_owner_fact(fact, quote, "said", bool(item["qualifying"]), call=call,
+                                               src_t=item["t"], tagger_checked=False, fid=fid)
+        if rec is not None and rec["id"] != fid and fid in ids:    # the same fact was already kept: a later
+            ids[ids.index(fid)] = rec["id"]                       # "Not me" acts on the record that exists
+    call_boundary.WRITER.submit(store)
+    logger.info("remember-that kept for the owner (%s)", "confirmed" if item["qualifying"] else "to confirm")
+
+
+def _release_held_facts(mgr, adopter, label) -> None:
+    """A label was adopted as the owner: its held "remember that" turns are handled now (D7 outcome 3)."""
+    for item in (getattr(mgr, "held_facts", {}) or {}).pop(label, []):
+        try:
+            _store_said_fact(mgr, adopter, label, item)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("held remember-that failed: %s", e)
+
+
+def _said_facts_to_confirm(mgr, label) -> None:
+    """A later "Not me": the facts said under that label this call go back to "to confirm" (D7)."""
+    ids = (getattr(mgr, "said_facts", {}) or {}).get(label) or []
+    if ids:
+        import call_boundary
+        import experience_memory
+        call_boundary.WRITER.submit(lambda: experience_memory.to_confirm(list(ids)))
+
+
+def _merge_said_facts(mgr, adopter, old, new) -> None:
+    said = getattr(mgr, "said_facts", None)
+    if said is None:
+        return
+    moved = said.pop(old, [])
+    if moved:
+        said.setdefault(new, []).extend(moved)
+        try:
+            if new in adopter.refused:
+                _said_facts_to_confirm(mgr, new)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+_IDENTS: dict = {}
+
+
+def _agent_ident(agent: str) -> str:
+    """The agent folder's identity (agent_memory.ident), cached per agent; a deleted and re-created agent gets a new
+    one, so the pass never writes its old calls into the new folder (design D1)."""
+    if not agent:
+        return ""
+    try:
+        import agent_memory
+        v = agent_memory.ident(agent, create=False)
+    except Exception:  # noqa: BLE001
+        return _IDENTS.get(agent, "")
+    _IDENTS[agent] = v
+    return v
+
+
+def _owner_voice_action(a, field) -> JSONResponse | dict:
+    """POST /api/owner {"owner_voice": ...} (runs on a worker thread): enroll {"label", "name"}, {"not_me": label}, or
+    null to forget. Returns the owner status, or a JSONResponse with {"error"} and 400/409/500."""
+    import owner_voice
+    adopter = getattr(a.state, "OwnerAdopter", None)
+    if adopter is None:
+        return JSONResponse({"error": "Voice recognition works in Discord calls only"}, status_code=409)
+    mgr = a.state.SpeechPipelineManager
+    book = mgr.people
+    if field is None:                                        # Forget my voice
+        name, voice = adopter.store.name, adopter.store.voice
+        try:
+            adopter.store.forget()
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"owner voice not deleted: {type(e).__name__}")
+            return JSONResponse({"error": "Couldn't delete the saved voice"}, status_code=500)
+        adopter.clear()
+        book.drop_prints(name, voice, 0.70)
+        _owner_event("forget_voice")
+        logger.info("👤 owner voice forgotten")
+        return _owner_status(a)
+    if not isinstance(field, dict):
+        return JSONResponse({"error": "owner_voice must be an object or null"}, status_code=400)
+    if "not_me" in field:
+        label = book._resolve(str(field.get("not_me") or ""))
+        if not owner_voice.is_label(label):
+            return JSONResponse({"error": "unknown voice"}, status_code=400)
+        adopter.refuse(label)
+        _owner_event("refuse", label=label)
+        _said_facts_to_confirm(mgr, label)
+        logger.info(f"👤 {label} is not the owner (this session)")
+        return _owner_status(a)
+    label = book._resolve(str(field.get("label") or ""))
+    if not owner_voice.is_label(label):
+        return JSONResponse({"error": "unknown voice"}, status_code=400)
+    agents = set(getattr(book, "agent_names", set()) or set())
+    try:
+        import agent_registry as _ar
+        agents |= set(_ar.all_agent_words())
+    except Exception:  # noqa: BLE001
+        pass
+    name = owner_voice.valid_name(field.get("name"), agents)
+    if not name:
+        return JSONResponse({"error": "Use a name of up to 40 letters, not an agent's name"}, status_code=400)
+    centroid, n = adopter.sample_for(label)
+    if n < owner_voice.ENROLL_TURNS:
+        return JSONResponse({"error": f"Talk a little more first ({n} of {owner_voice.ENROLL_TURNS} lines heard)"},
+                            status_code=409)
+    if centroid is None:
+        return JSONResponse({"error": "This row mixes voices; try again later"}, status_code=409)
+    try:
+        adopter.store.enroll(name, centroid, n, adopter.session)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"owner voice not saved: {type(e).__name__}")
+        return JSONResponse({"error": "Couldn't save the voice"}, status_code=500)
+    adopter.restart_scores()
+    adopter.adopt(label)
+    book.owner_adopted(label)
+    _owner_event("adopt", label=label, how="manual")
+    _release_held_facts(mgr, adopter, label)
+    logger.info(f"👤 owner enrolled from {label} ({len(adopter.store.samples)} sample(s))")
+    return _owner_status(a)
+
+
+def _owner_status(a=None) -> dict:
     import owner_controls as _owner
+    a = a if a is not None else app
     out = _owner.snapshot()
-    mgr = getattr(app.state, "SpeechPipelineManager", None)
+    try:
+        import owner_voice
+        out["voice"] = owner_voice.voice_status(getattr(a.state, "OwnerAdopter", None))
+    except Exception:  # noqa: BLE001
+        out["voice"] = None
+    mgr = getattr(a.state, "SpeechPipelineManager", None)
     try:
         out["active"] = mgr.agent.id
         out["active_talkativeness"] = round(mgr.agent.profile.talkativeness, 2)
@@ -631,6 +999,11 @@ async def owner_set(request: Request):
         return JSONResponse({"error": "owner only"}, status_code=403)
     import owner_controls as _owner
     body = await request.json()
+    if isinstance(body, dict) and "owner_voice" in body:
+        field = body["owner_voice"]
+        ok, out, err = await _actions(request.app).run("owner_voice",
+                                                       lambda: _owner_voice_action(request.app, field))
+        return out if ok else JSONResponse({"error": err or "failed"}, status_code=500)
     mgr = getattr(app.state, "SpeechPipelineManager", None)
     if "mute" in body:
         on = body["mute"] if body["mute"] != "toggle" else not _owner.STATE["mute"]
@@ -772,20 +1145,203 @@ def _audio_devices_info(app: FastAPI) -> dict:
 
 
 def _sync_bridge_self_reference(app: FastAPI) -> None:
-    """Point the bridge diarizer's self-profile at the current active voice."""
+    """Point the bridge diarizer's self-profile at the current active voice. Called after every agent or voice switch
+    (SpeechPipelineManager.on_voice_changed), on the worker thread that ran the switch."""
     bridge = app.state.CallBridge
     if bridge is None:
         return
     from voices import voice_wav
-    voice = app.state.SpeechPipelineManager.personas_info()["current"]["voice"]
+    voice = getattr(app.state.SpeechPipelineManager.audio, "current_voice", None)
+    wav = voice_wav(voice)
+    if not wav:      # never hand the diarizer None: that would erase the agent's own voice profile
+        logger.warning(f"🖥️⚠️ no reference audio for voice {voice!r}; diarizer self-reference unchanged")
+        return
     try:
-        bridge.update_self_reference(voice_wav(voice))
+        bridge.update_self_reference(wav)
         logger.info(f"🖥️🎙️ diarizer self-reference -> {voice}")
     except Exception as e:  # noqa: BLE001
         logger.warning(f"🖥️⚠️ self-reference update failed: {e}")
 
 
-async def process_incoming_data(ws: WebSocket, app: FastAPI, incoming_chunks: asyncio.Queue, callbacks: 'TranscriptionCallbacks') -> None:
+# ---- slow dashboard actions, off the event loop (owner 11-04: an agent click froze the dashboard) ----
+# Agent switch, voice switch, clear history and audio devices are REST endpoints for the dashboard; the same /ws
+# messages stay for older pages and tools. Both run through dash_actions.ActionGroups: one action at a time per group
+# on a worker thread; a newer agent switch replaces one still waiting.
+from dash_actions import ActionFailed, REPLACED  # noqa: E402
+
+_DASH_MESSAGES = {"set_persona", "set_voice", "clear_history", "list_devices", "set_audio_devices"}
+_OWNER_MESSAGES = {"set_persona", "set_voice", "clear_history", "set_audio_devices"}
+_WS_TASKS: set = set()
+
+
+def _actions(app: FastAPI):
+    """The app's ActionGroups, created on first use on the running event loop."""
+    acts = getattr(app.state, "dash_actions", None)
+    if acts is None:
+        from dash_actions import ActionGroups
+        acts = app.state.dash_actions = ActionGroups()
+    return acts
+
+
+def _current(spm) -> dict:
+    return {"persona": spm.current_persona, "voice": getattr(spm.audio, "current_voice", None)}
+
+
+def _hub(app: FastAPI):
+    h = getattr(app.state, "headless", None)
+    return h["hub"] if h else None
+
+
+def _switch_work(spm, kind: str, name: str):
+    """The work of an agent or voice switch (runs on a worker thread). Returns the agent list for the other dashboards,
+    or None when the agent was already current (nothing changed)."""
+    def work():
+        if kind == "agent":
+            if name == spm.current_persona:
+                return None
+            ok = spm.set_persona(name)
+        else:
+            ok = spm.set_voice(name)
+        logger.info(f"🖥️🎭 {kind} switch '{name}' -> {'ok' if ok else 'failed'}")
+        if not ok:
+            raise ActionFailed(f"couldn't switch to {name}" if kind == "agent" else f"couldn't switch to voice {name}")
+        return spm.personas_info()
+    return work
+
+
+def _reroute_work(app: FastAPI, inp, out):
+    def work():
+        bridge = app.state.CallBridge
+        if bridge is None:
+            logger.warning("🖥️⚠️ audio device change ignored: no CallBridge (browser mode)")
+        else:
+            bridge.reconfigure(input_device=inp, output_device=out)
+        return _audio_devices_info(app)
+    return work
+
+
+async def _json_body(request: Request) -> dict:
+    try:
+        d = await request.json()
+    except Exception:  # noqa: BLE001
+        return {}
+    return d if isinstance(d, dict) else {}
+
+
+def _refuse() -> JSONResponse:
+    return JSONResponse({"ok": False, "error": "owner only"}, status_code=403)
+
+
+async def _switch_endpoint(request: Request, kind: str, field: str):
+    if not _is_owner(request):
+        return _refuse()
+    name = str((await _json_body(request)).get(field) or "").strip()
+    if kind == "agent":
+        name = name.lower()
+    if not name:
+        return JSONResponse({"ok": False, "error": f"{field} required"}, status_code=400)
+    a = request.app
+    spm = a.state.SpeechPipelineManager
+    ok, info, err = await _actions(a).run("pipeline", _switch_work(spm, kind, name), replaceable=kind == "agent")
+    cur = _current(spm)
+    if not ok:
+        return JSONResponse({"ok": False, "error": err, "current": cur}, status_code=409 if err == REPLACED else 500)
+    hub = _hub(a)
+    if hub is not None and isinstance(info, dict):
+        hub.put_nowait({"type": "personas", **info})      # the other dashboards
+    return {"ok": True, "current": cur}
+
+
+@app.post("/api/active_agent")
+async def api_active_agent(request: Request):
+    return await _switch_endpoint(request, "agent", "persona")
+
+
+@app.post("/api/active_voice")
+async def api_active_voice(request: Request):
+    return await _switch_endpoint(request, "voice", "voice")
+
+
+@app.post("/api/call/end")
+async def api_call_end(request: Request):
+    """End the call in progress (the desktop app calls this before it stops the server). Runs in its own action
+    group so it never waits behind an agent switch; the resets continue after the answer (design D2, S3)."""
+    if not _is_owner(request):
+        return _refuse()
+    import call_boundary
+    ok, res, err = await _actions(request.app).run("call", lambda: call_boundary.BOUNDARY.end("api"))
+    if not ok:
+        return JSONResponse({"ended": False, "start_pass": False, "error": err}, status_code=500)
+    await asyncio.to_thread(call_boundary.WRITER.flush, 2.0)     # the end record is on disk before the answer
+    start = await asyncio.to_thread(start_pass_at_quit, request.app)
+    out = {"ended": bool(res.get("ended")), "start_pass": bool(start)}
+    if start:
+        out["pass_args"] = _llm_mode(request.app)["args"]
+    return out
+
+
+@app.post("/api/clear_history")
+async def api_clear_history(request: Request):
+    if not _is_owner(request):
+        return _refuse()
+    ok, _, err = await _actions(request.app).run("pipeline", request.app.state.SpeechPipelineManager.reset)
+    return {"ok": True} if ok else JSONResponse({"ok": False, "error": err}, status_code=500)
+
+
+@app.get("/api/audio_devices")
+async def api_audio_devices(request: Request):
+    a = request.app
+    ok, info, err = await _actions(a).run("devices", lambda: _audio_devices_info(a))
+    return {"ok": True, **info} if ok else JSONResponse({"ok": False, "error": err}, status_code=500)
+
+
+@app.post("/api/audio_devices")
+async def api_set_audio_devices(request: Request):
+    if not _is_owner(request):
+        return _refuse()
+    body = await _json_body(request)
+    a = request.app
+    ok, info, err = await _actions(a).run("devices", _reroute_work(a, body.get("input"), body.get("output")))
+    return {"ok": True, **info} if ok else JSONResponse({"ok": False, "error": err}, status_code=500)
+
+
+def _ws_action(app: FastAPI, msg_type: str, data: dict, reply_queue: asyncio.Queue) -> None:
+    """The /ws form of the same actions: run off the loop and reply as before, on the requester's queue; a successful
+    switch goes on the hub instead in bridge mode, so every dashboard sees it."""
+    spm = app.state.SpeechPipelineManager
+
+    async def go():
+        acts = _actions(app)
+        if msg_type in ("set_persona", "set_voice"):
+            kind = "agent" if msg_type == "set_persona" else "voice"
+            name = str(data.get("persona" if kind == "agent" else "voice") or "").strip()
+            name = name.lower() if kind == "agent" else name
+            ok, info, err = await acts.run("pipeline", _switch_work(spm, kind, name), replaceable=kind == "agent")
+            if not isinstance(info, dict):
+                info = await asyncio.to_thread(spm.personas_info)
+            msg = {"type": "personas", "kind": kind, "request": name, **info}
+            if err:
+                msg["error"] = err
+            hub = _hub(app)
+            (hub if ok and hub is not None else reply_queue).put_nowait(msg)
+        elif msg_type == "clear_history":
+            ok, _, err = await acts.run("pipeline", spm.reset)
+            if not ok:
+                reply_queue.put_nowait({"type": "action_error", "action": msg_type, "error": err})
+        elif msg_type == "list_devices":
+            ok, info, err = await acts.run("devices", lambda: _audio_devices_info(app))
+            reply_queue.put_nowait(info if ok else {"type": "action_error", "action": msg_type, "error": err})
+        elif msg_type == "set_audio_devices":
+            ok, info, err = await acts.run("devices", _reroute_work(app, data.get("input"), data.get("output")))
+            reply_queue.put_nowait(info if ok else {"type": "action_error", "action": msg_type, "error": err})
+
+    task = asyncio.get_running_loop().create_task(go())
+    _WS_TASKS.add(task)
+    task.add_done_callback(_WS_TASKS.discard)
+
+
+async def process_incoming_data(ws: WebSocket, app: FastAPI, incoming_chunks: asyncio.Queue, callbacks: 'TranscriptionCallbacks',
+                                reply_queue: asyncio.Queue | None = None) -> None:
     """
     Receives messages via WebSocket, processes audio and text messages.
 
@@ -863,9 +1419,11 @@ async def process_incoming_data(ws: WebSocket, app: FastAPI, incoming_chunks: as
                     # Update connection-specific state via callbacks
                     callbacks.tts_client_playing = False
                 # Add to the handleJSONMessage function in server.py
-                elif msg_type == "clear_history":
-                    logger.info("🖥️ℹ️ Received clear_history from client.")
-                    app.state.SpeechPipelineManager.reset()
+                elif msg_type in _DASH_MESSAGES:
+                    if msg_type in _OWNER_MESSAGES and not _is_owner(ws):
+                        await ws.send_json({"type": "action_error", "action": msg_type, "error": "owner only"})
+                    else:
+                        _ws_action(app, msg_type, data, reply_queue or callbacks.message_queue)
                 elif msg_type == "set_speed":
                     speed_value = data.get("speed", 0)
                     speed_factor = speed_value / 100.0  # Convert 0-100 to 0.0-1.0
@@ -874,42 +1432,11 @@ async def process_incoming_data(ws: WebSocket, app: FastAPI, incoming_chunks: as
                     if turn_detection:
                         turn_detection.update_settings(speed_factor)
                         logger.info(f"🖥️⚙️ Updated turn detection settings to factor: {speed_factor:.2f}")
-                elif msg_type == "set_persona":
-                    persona = data.get("persona", "")
-                    ok = app.state.SpeechPipelineManager.set_persona(persona)
-                    logger.info(f"🖥️🎭 Persona switch request '{persona}' -> {'ok' if ok else 'unknown'}")
-                    _sync_bridge_self_reference(app)
-                    callbacks.message_queue.put_nowait({
+                elif msg_type == "list_personas":     # to the requester only (in bridge mode the hub reaches everyone)
+                    (reply_queue or callbacks.message_queue).put_nowait({
                         "type": "personas",
                         **app.state.SpeechPipelineManager.personas_info(),
                     })
-                elif msg_type == "set_voice":
-                    voice = data.get("voice", "")
-                    ok = app.state.SpeechPipelineManager.set_voice(voice)
-                    logger.info(f"🖥️🔊 Voice switch request '{voice}' -> {'ok' if ok else 'failed'}")
-                    _sync_bridge_self_reference(app)
-                    callbacks.message_queue.put_nowait({
-                        "type": "personas",
-                        **app.state.SpeechPipelineManager.personas_info(),
-                    })
-                elif msg_type == "list_personas":
-                    callbacks.message_queue.put_nowait({
-                        "type": "personas",
-                        **app.state.SpeechPipelineManager.personas_info(),
-                    })
-                elif msg_type == "list_devices":
-                    callbacks.message_queue.put_nowait(_audio_devices_info(app))
-                elif msg_type == "set_audio_devices":
-                    inp, out = data.get("input"), data.get("output")
-                    bridge = app.state.CallBridge
-                    if bridge is not None:
-                        try:
-                            bridge.reconfigure(input_device=inp, output_device=out)
-                        except Exception as e:  # noqa: BLE001
-                            logger.error(f"🖥️⚠️ audio reconfigure failed: {e}")
-                    else:
-                        logger.warning("🖥️⚠️ set_audio_devices ignored: no CallBridge (browser mode)")
-                    callbacks.message_queue.put_nowait(_audio_devices_info(app))
 
 
     except asyncio.CancelledError:
@@ -969,6 +1496,9 @@ async def _reset_interrupt_flag_async(app: FastAPI, callbacks: 'TranscriptionCal
         # Reset connection-specific interruption time via callbacks
         callbacks.interruption_time = 0
         logger.info(Colors.apply("🖥️🎙️ interruption flag reset after TTS chunk (async)").cyan)
+
+IDLE_POLL_S = 0.005
+
 
 async def send_tts_chunks(app: FastAPI, message_queue: asyncio.Queue, callbacks: 'TranscriptionCallbacks') -> None:
     """
@@ -1040,15 +1570,17 @@ async def send_tts_chunks(app: FastAPI, message_queue: asyncio.Queue, callbacks:
                     )
                     prev_status = curr_status
 
-            # Use connection-specific state via callbacks
+            # Use connection-specific state via callbacks. Nothing to send: check every 5 ms, not every 1 ms (a
+            # thousand wakeups a second on the event loop, each taking the GIL, between replies; 11-04). At most 5 ms
+            # between the turn's release and its first chunk going out, which usually comes hundreds of ms later.
             if not callbacks.tts_to_client:
-                await asyncio.sleep(0.001)
+                await asyncio.sleep(IDLE_POLL_S)
                 log_status()
                 continue
 
             _g = app.state.SpeechPipelineManager.running_generation
             if not _g:
-                await asyncio.sleep(0.001)
+                await asyncio.sleep(IDLE_POLL_S)
                 log_status()
                 continue
 
@@ -1182,6 +1714,11 @@ def reply_in_flight(gen, bridge=None) -> bool:
         return False
     return False
 
+# One diarizer serves the app; calls come from the STT callbacks and (think while listening) the
+# thinker's label lookup, so every diarizer call takes this lock.
+_DIARIZER_LOCK = threading.Lock()
+
+
 class TranscriptionCallbacks:
     """
     Manages state and callbacks for a single WebSocket connection's transcription lifecycle.
@@ -1231,6 +1768,17 @@ class TranscriptionCallbacks:
         self.abort_request_event = threading.Event()
         self.abort_worker_thread = threading.Thread(target=self._abort_worker, name="AbortWorker", daemon=True)
         self.abort_worker_thread.start()
+        try:   # think while listening: no thinking while the agent's audio plays through the bridge
+            self.app.state.SpeechPipelineManager.think_busy_fn = self._agent_playing
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _agent_playing(self) -> bool:
+        bridge = getattr(self.app.state, "CallBridge", None)
+        try:
+            return bool(bridge is not None and bridge.is_speaking())
+        except Exception:  # noqa: BLE001
+            return False
 
 
     def reset_state(self):
@@ -1267,24 +1815,39 @@ class TranscriptionCallbacks:
             if was_set:
                 self.abort_request_event.clear()
                 # Only trigger abort check if the text actually changed
-                if self.last_abort_text != self.abort_text:
-                    self.last_abort_text = self.abort_text
-                    logger.debug(f"🖥️🧠 Abort check triggered by partial: '{self.abort_text}'")
+                text = self.abort_text          # read once: on_partial may replace it meanwhile
+                if self.last_abort_text != text:
+                    self.last_abort_text = text
+                    if not re.search(r"\w", text or ""):
+                        # A blank partial (a recognizer restarting on a new stretch of audio, e.g.
+                        # Moonshine re-decoding a noise-only buffer) carries no words: it is not new
+                        # speech and must not abort the reply (live 11-02: it cut the agent off mid-turn).
+                        continue
+                    logger.debug(f"🖥️🧠 Abort check triggered by partial: '{text}'")
                     mgr = self.app.state.SpeechPipelineManager
                     spk = getattr(self, "live_speaker", None)
                     act = getattr(mgr, "threads", None) and mgr.threads.active
-                    if act is not None and spk and spk != act.speaker and self.abort_text:
+                    if act is not None and spk and spk != act.speaker and text:
                         try:
                             if not mgr.threads.should_preempt(
-                                    mgr.threads.note(f"[{spk}] {self.abort_text}", mgr.floor.active_partner())):
+                                    mgr.threads.note(f"[{spk}] {text}", mgr.floor.active_partner())):
                                 continue
                         except Exception:  # noqa: BLE001
                             pass
-                    if self._backchannel_over_reply(mgr, self.abort_text):
+                    if self._backchannel_over_reply(mgr, text):
                         continue
-                    if self._reaction_over_named_draft(mgr, self.abort_text):
+                    if self._reaction_over_named_draft(mgr, text):
                         continue
-                    mgr.check_abort(self.abort_text, False, "on_partial")
+                    # The line kept going past the draft this cancels. If the turn ends before another
+                    # draft starts, answer it from the final transcript (_answer_held_fragment, gated).
+                    # Live 11-03: "All right." was drafted, cancelled by "...what do you got?", and
+                    # the question was never answered. Marked BEFORE the abort: the abort runs here,
+                    # synchronously (~0.5 s while the LLM stops), and the turn can end meanwhile (live
+                    # 11-04: "Did you feel that with this woman?" committed mid-abort, never answered).
+                    prev_held = getattr(self, "held_fragment", "")     # unset until the first held line
+                    self.held_fragment = text
+                    if not mgr.check_abort(text, False, "on_partial") and self.held_fragment == text:
+                        self.held_fragment = prev_held     # nothing was cancelled
 
     @staticmethod
     def _more_audio_coming(mgr) -> bool:
@@ -1411,17 +1974,25 @@ class TranscriptionCallbacks:
         self.final_assistant_answer_sent = False # New user speech invalidates previous final answer sending state
         self.final_transcription = "" # Clear final transcription as this is partial
         self.partial_transcription = txt
+        if any(ch.isalnum() for ch in txt or ""):
+            try:   # speech activity stops a running memory pass at once (docs/designs/experience_memory.md, D3)
+                import call_boundary
+                call_boundary.activity("partial")
+            except Exception:  # noqa: BLE001
+                pass
         self.message_queue.put_nowait({"type": "partial_user_request", "content": txt})
         self.abort_text = txt # Update text used for abort check
         self.abort_request_event.set() # Signal the abort worker
         self._check_barge_in(txt)
-        # Memory recall prefetch: embed + search while they're still talking, so the
-        # turn's recall is ready (~0 ms) when the sentence lands. Non-blocking.
-        try:
+        try:   # Live screen: judge a question to the agent while its last words come in (inert unless it's on)
+            self.app.state.SpeechPipelineManager.prefetch_screen_question(txt)
+        except Exception:  # noqa: BLE001
+            pass
+        try:   # think while listening: the thinker sees the partial (inert unless the plugin is on)
             _m = self.app.state.SpeechPipelineManager
-            if getattr(_m, "hgmem", None) is not None:
-                _m.hgmem.prefetch(getattr(_m, "current_persona", ""), txt)
-        except Exception:  # noqa: BLE001 - prefetch must never touch the turn
+            if getattr(_m, "thinker", None) is not None:
+                _m.thinker.hear(txt, self._live_speaker)
+        except Exception:  # noqa: BLE001
             pass
 
     def safe_abort_running_syntheses(self, reason: str):
@@ -1506,7 +2077,7 @@ class TranscriptionCallbacks:
             return
         self.held_fragment = ""
         bridge = getattr(self.app.state, "CallBridge", None)
-        if bridge is not None and bridge.is_speaking():
+        if bridge is not None and bridge.is_speaking() and not _only_filler_playing(mgr):
             yes, why = self._yield_decision(txt)
             if not yes:
                 logger.info(f"🖥️🗣️ keep talking ({why}); not starting a turn for '{txt[:50]}'")
@@ -1597,7 +2168,8 @@ class TranscriptionCallbacks:
                 return None
             aud = self._agent_audible(audio)
             kw = {} if aud is None else {"agent_audible": aud}
-            return diarizer.identify(audio, 16000, **kw)
+            with _DIARIZER_LOCK:
+                return diarizer.identify(audio, 16000, **kw)
         except Exception as e:  # noqa: BLE001 - labeling must never block a turn
             logger.debug(f"live speaker id failed: {e}")
             return None
@@ -1630,14 +2202,21 @@ class TranscriptionCallbacks:
         ov = self._agent_audible(audio)
         if ov is not None:
             rec["agent_audible"] = ov
+        self._turn_meta = {"dur": rec.get("dur_s"), "audible": ov}
         # Dev builds only: the turn's voiceprint, so diarization can be replayed
-        # and tuned on real calls (biometric -> never in public recordings).
+        # and tuned on real calls (biometric -> never in public recordings). The owner's turns only (owner 11-04:
+        # "no permanent voiceprints" for friends): a label adopted as the owner by owner_voice.
         try:
             import user_settings as _us
-            if not _us.is_public() and os.environ.get("ATLAS_LOG_VOICEPRINTS", "1") != "0":
+            adopter = getattr(self.app.state, "OwnerAdopter", None)
+            owners_turn = adopter is not None and bool(speaker) and adopter.is_adopted(speaker)
+            if (owners_turn and not _us.is_public()
+                    and os.environ.get("ATLAS_LOG_VOICEPRINTS", "1") != "0"):
                 bridge = getattr(self.app.state, "CallBridge", None)
                 dz = getattr(self.app.state, "Diarizer", None) or getattr(bridge, "diarizer", None)
-                vp = getattr(dz, "last_embedding", None)
+                vp = getattr(self, "_turn_vp", None)
+                if vp is None:
+                    vp = getattr(dz, "last_embedding", None)
                 if vp is not None:
                     rec["vp"] = [round(float(x), 4) for x in vp]
         except Exception:  # noqa: BLE001
@@ -1646,6 +2225,7 @@ class TranscriptionCallbacks:
 
     def _tag_speaker(self, audio) -> str | None:
         """Diarize one turn using the app-level Diarizer (browser or bridge)."""
+        self._turn_vp = None
         diarizer = getattr(self.app.state, "Diarizer", None)
         if diarizer is None:
             bridge = getattr(self.app.state, "CallBridge", None)
@@ -1657,13 +2237,23 @@ class TranscriptionCallbacks:
             # audio arrives as a float32 mono array at 16 kHz (see transcribe.py)
             aud = self._agent_audible(audio)
             kw = {} if aud is None else {"agent_audible": aud}
-            spk = diarizer.process(audio, 16000, **kw).speaker
+            with _DIARIZER_LOCK:
+                spk = diarizer.process(audio, 16000, **kw).speaker
+                vp = getattr(diarizer, "last_embedding", None)
+                # this turn's voiceprint, for owner recognition and the dev-build record (read under the lock: the
+                # next turn's process() replaces last_embedding)
+                self._turn_vp = vp.copy() if vp is not None else None
             try:   # fragments folded into a person keep any name learned for them
                 merges = diarizer.drain_merges() if hasattr(diarizer, "drain_merges") else []
                 if merges:
                     book = self.app.state.SpeechPipelineManager.people
+                    adopter = getattr(self.app.state, "OwnerAdopter", None)
                     for old, new in merges:
                         book.merge(old, new)
+                        if adopter is not None:
+                            adopter.merge(old, new)
+                        _owner_event("merge", old=old, new=new)
+                        _merge_said_facts(self.app.state.SpeechPipelineManager, adopter, old, new)
                         logger.info(f"🖥️👥 {old} folded into {new}")
             except Exception as e:  # noqa: BLE001
                 logger.debug(f"merge carry-over skipped: {e}")
@@ -1698,6 +2288,12 @@ class TranscriptionCallbacks:
         """
         logger.info(Colors.apply('🖥️🏁 =================== USER TURN END ===================').light_gray)
         self.user_finished_turn = True
+        try:   # think while listening: this utterance is committed; the next partial starts a new one
+            _tm = self.app.state.SpeechPipelineManager
+            if getattr(_tm, "thinker", None) is not None:
+                _tm.thinker.end()
+        except Exception:  # noqa: BLE001
+            pass
         self.user_history_committed = False
         self.user_interrupted = False # Reset connection-specific flag (user finished, not interrupted)
         # Access global manager state
@@ -1706,6 +2302,11 @@ class TranscriptionCallbacks:
         gen = self.app.state.SpeechPipelineManager.running_generation
         if gen is not None and self._drop_stale_draft(gen):
             gen = None
+        elif gen is not None and getattr(gen, "abortion_started", False) and not getattr(self, "held_fragment", ""):
+            # The turn ended while its draft was being cancelled: nothing else will answer it, so the final
+            # transcript is (gated, in _answer_held_fragment). A turn is never dropped.
+            self.held_fragment = self.final_transcription or self.partial_transcription or ""
+        __import__("turn_trace").turn_end(getattr(gen, "id", None))
         if gen is not None and self.app.state.SpeechPipelineManager.is_valid_gen():
             logger.info(f"{Colors.apply('🖥️🔊 TTS ALLOWED (before final)').blue}")
             gen.tts_quick_allowed_event.set()
@@ -1738,12 +2339,20 @@ class TranscriptionCallbacks:
             # Pup, can you hear me alright?" 10-31). Commit the final text when it
             # lands (on_final) and answer it from there.
             self._deferred_turn = (audio, speaker, time.time())
+            self._deferred_vp = getattr(self, "_turn_vp", None)
             logger.info("🖥️⏳ turn ended before its text; committing it when the final transcript lands")
             return
         self._commit_turn(audio, speaker, user_request_content)
 
     def _commit_turn(self, audio, speaker, user_request_content: str) -> None:
         """Send the finished user turn to the UI and commit it to history and the room state."""
+        if speaker != "self":   # a human turn starts or continues the call (docs/designs/experience_memory.md, D2);
+            try:                # the agent's own echoed voice does not
+                import call_boundary
+                call_boundary.BOUNDARY.turn()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("call boundary turn failed: %s", e)
+        self._observe_owner(speaker)
         self.message_queue.put_nowait({
             "type": "final_user_request",
             "content": user_request_content,
@@ -1786,17 +2395,14 @@ class TranscriptionCallbacks:
                 ("dynamics", lambda: mgr.dynamics.on_user_turn(user_request_content, speaker_id=speaker or "user")),
                 ("floor", lambda: mgr.floor.on_user_turn(speaker, user_request_content)),
                 ("convo_log", lambda: mgr.convo.add_user(speaker, user_request_content)),
-                ("hypergraph", lambda: getattr(mgr, "hgmem", None) and mgr.hgmem.observe_user(
-                    mgr.current_persona, (mgr.people.name_of(speaker) or ""),
-                    user_request_content)),
                 ("name_learning", lambda: mgr.people.learn(speaker, user_request_content)),
                 ("name_record", lambda: _rec_name(speaker, mgr)),
-                ("remember", lambda: mgr.remember(user_request_content)),
                 ("room_vote", lambda: _passive_vote(speaker, user_request_content, mgr)),
-                ("voice_mail", lambda: _mail_heard(speaker, mgr)),
                 ("fact_check", lambda: _factcheck_heard(speaker, user_request_content, mgr)),
                 ("translate", lambda: _translate_heard(speaker, user_request_content, mgr)),
+                ("live_screen", lambda: _live_screen_heard(speaker, user_request_content, mgr)),
                 ("pacing", lambda: self._pace_turn(speaker, user_request_content, audio, mgr)),
+                ("memory_line", lambda: self._memory_line(speaker, user_request_content, mgr)),
             )
             for name, step in steps:
                 try:
@@ -1810,6 +2416,74 @@ class TranscriptionCallbacks:
                 logger.exception("held-fragment fallback failed")
             self._draft_spk, self._draft_t = "<none>", 0.0  # next turn drafts immediately
         self.user_history_committed = True
+
+    def _memory_line(self, speaker, text, mgr) -> None:
+        """The committed turn goes to the call's pending file (docs/designs/experience_memory.md, D2, S1). A turn the
+        diarizer couldn't place yet (no label) still triggers off the record (D7: anyone can) and is written without a
+        label (the pass shows it as "someone", never as one of the call's people)."""
+        if speaker == "self":
+            return
+        import call_boundary
+        adopter = getattr(self.app.state, "OwnerAdopter", None)
+        meta = getattr(self, "_turn_meta", None) or {}
+        self._turn_meta = None
+        agent = getattr(mgr, "current_persona", "") or ""
+        owner = bool(speaker and adopter is not None and adopter.is_adopted(speaker))
+        import memory_redact as _MR
+        agents = tuple(getattr(getattr(mgr, "people", None), "agent_names", ()) or ())
+        kind = _MR.off_record_kind(text, agents)
+        if kind:   # off the record (docs/designs/experience_memory.md, D7)
+            call_boundary.apply_off_record(kind)
+        marked = kind in ("span", "back") or call_boundary.OFF.is_open()
+        if not marked and speaker:
+            try:
+                self._remember_that(speaker, text, meta, mgr, adopter)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("remember that failed: %s", e)
+        if owner:
+            try:
+                mgr.owner_spoke()
+            except Exception as e:  # noqa: BLE001
+                logger.debug("owner presence not noted: %s", e)
+        call_boundary.WRITER.turn(
+            label=speaker or None, agent=agent, ident=_agent_ident(agent),
+            owner=owner,
+            score=(adopter.last_score(speaker) if adopter is not None and speaker else None),
+            dur=meta.get("dur"), audible=meta.get("audible"), text=text, write=not marked)
+
+    def _remember_that(self, speaker, text, meta, mgr, adopter) -> None:
+        """'Remember that ...' at commit (D7): outcomes 1 to 5. The cue was already chosen from the draft."""
+        import memory_redact as _MR
+        agents = tuple(getattr(getattr(mgr, "people", None), "agent_names", ()) or ())
+        clause = _MR.remember_clause(text, agents)
+        if not clause or adopter is None:
+            return                                         # not a request, or browser mode (outcome 4)
+        import owner_voice as _ov
+        score = adopter.last_score(speaker)
+        dur, audible = meta.get("dur"), meta.get("audible")
+        qualifying = bool(dur is not None and dur >= _ov.QUALIFY_MIN_S and audible is False
+                          and score is not None and score >= _ov.TURN_SIM)
+        item = {"clause": clause, "t": time.time(), "qualifying": qualifying}
+        if adopter.is_adopted(speaker):
+            _store_said_fact(mgr, adopter, speaker, item)
+        elif not adopter.labels() and adopter.has_voice():
+            mgr.held_facts.setdefault(speaker, []).append(item)        # outcome 3: wait for the label's adoption
+            logger.info("remember-that held until %s is recognized", speaker)
+
+    def _observe_owner(self, speaker) -> None:
+        """Owner voice recognition (owner_voice.py): every committed, labeled turn, after both echo checks and before
+        its dashboard line, so the adopting turn already shows the owner's name. Never blocks a turn."""
+        try:
+            adopter = getattr(self.app.state, "OwnerAdopter", None)
+            if adopter is None or not speaker or speaker == "self":
+                return
+            if adopter.observe(speaker, getattr(self, "_turn_vp", None)):
+                logger.info(f"👤 {speaker} recognized as the owner by voice")
+                self.app.state.SpeechPipelineManager.people.owner_adopted(speaker)
+                _owner_event("adopt", label=speaker, how="auto")
+                _release_held_facts(self.app.state.SpeechPipelineManager, adopter, speaker)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"owner voice check skipped: {e}")
 
     def _drop_stale_draft(self, gen) -> bool:
         """The reply was drafted from an early fragment of a turn that kept going:
@@ -1891,6 +2565,12 @@ class TranscriptionCallbacks:
             txt: The final transcription text.
         """
         logger.info(f"\n{Colors.apply('🖥️✅ FINAL USER REQUEST (STT Callback): ').green}{txt}")
+        try:   # think while listening: the utterance is over
+            _tm = self.app.state.SpeechPipelineManager
+            if getattr(_tm, "thinker", None) is not None:
+                _tm.thinker.end()
+        except Exception:  # noqa: BLE001
+            pass
         if not self.final_transcription: # Store it if not already set by on_before_final logic
              self.final_transcription = txt
         deferred, self._deferred_turn = getattr(self, "_deferred_turn", None), None
@@ -1907,6 +2587,7 @@ class TranscriptionCallbacks:
         logger.info(f"🖥️⏳ committing the final transcript of a turn that ended early: '{text[-60:]}'")
         if speaker != "self":
             self.held_fragment = text   # no draft exists for it: answer from the final (gated)
+        self._turn_vp = getattr(self, "_deferred_vp", None)
         self._commit_turn(audio, speaker, text)
 
     def abort_generations(self, reason: str):
@@ -1934,6 +2615,11 @@ class TranscriptionCallbacks:
         # logger.debug(f"🖥️🎙️ Silence active: {silence_active}") # Optional: Can be noisy
         self.silence_active = silence_active
         self.last_voice_at = time.time()
+        try:   # Live screen: no watcher look between the end of speech and the reply
+            import live_screen as _live_screen
+            _live_screen.on_silence(silence_active)
+        except Exception:  # noqa: BLE001
+            pass
 
     def on_partial_assistant_text(self, txt: str):
         """
@@ -1946,6 +2632,11 @@ class TranscriptionCallbacks:
             txt: The partial assistant text.
         """
         logger.info(f"{Colors.apply('🖥️💬 PARTIAL ASSISTANT ANSWER: ').green}{txt}")
+        try:   # Live screen: the reply has started, watcher looks may run again
+            import live_screen as _live_screen
+            _live_screen.on_reply_text()
+        except Exception:  # noqa: BLE001
+            pass
         # Use connection-specific user_interrupted flag
         if not self.user_interrupted:
             self.assistant_answer = txt
@@ -2124,17 +2815,16 @@ class TranscriptionCallbacks:
                     history_answer = f"[SPEAK to={target or 'user'}] {safe_answer}"
                     app.state.SpeechPipelineManager.convo.add_agent(target, safe_answer)
                     try:
-                        _m = app.state.SpeechPipelineManager
-                        if getattr(_m, "hgmem", None) is not None:
-                            _m.hgmem.observe_reply(_m.current_persona, safe_answer)
-                    except Exception as e:  # noqa: BLE001
-                        logger.debug(f"hypergraph reply hook failed: {e}")
-                    try:
                         app.state.SpeechPipelineManager.people.note_agent_reply(target, safe_answer)
                     except Exception as e:  # noqa: BLE001
                         logger.warning("name-ask tracking failed: %s", e)
                     self.app.state.SpeechPipelineManager.history.append({"role": "assistant", "content": history_answer})
                     app.state.SpeechPipelineManager.trim_history()
+                    try:   # the spoken reply: pending file, and its memory snippets count as used (design D2, D4)
+                        _spm = app.state.SpeechPipelineManager
+                        _spm.reply_spoken(generation, safe_answer)
+                    except Exception as e:  # noqa: BLE001
+                        logger.debug("spoken reply bookkeeping failed: %s", e)
                     try:
                         voiced = heard if heard is not None else ("" if forced else cleaned_answer)
                         told = app.state.SpeechPipelineManager.board().spoke(getattr(generation, "id", None), voiced)
@@ -2287,6 +2977,19 @@ def start_glance(mgr, callbacks, bridge, now: float):
     return True
 
 
+def _only_filler_playing(mgr) -> bool:
+    """The audio out is just a "give me a sec" clip, no reply started yet: someone finishing their
+    question is not talking over her (live 11-02: "Can you search for the VPN apps on the system?"
+    landed during the clip, was dropped as "finishing her line", and never got an answer)."""
+    try:
+        if time.monotonic() >= float(getattr(mgr, "filler_until", 0.0) or 0.0):
+            return False
+        gen = getattr(mgr, "running_generation", None)
+        return not (gen is not None and getattr(gen, "quick_answer", ""))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def start_delivery(mgr, callbacks) -> Optional[int]:
     """Launch the cue generation for the oldest untold result (None if nothing)."""
     t = mgr.board().deliverable()
@@ -2330,6 +3033,13 @@ def _factcheck_heard(speaker, text: str, mgr) -> None:
                       daily=int(s.get("daily") or factcheck.DEFAULT_DAILY), background=bg)
 
 
+def _live_screen_heard(speaker, text: str, mgr) -> None:
+    """Live screen: every committed line someone says (never the agent's own) is checked for "forget what you
+    saw" before any reply decision (live_screen.hear)."""
+    import live_screen as _live_screen
+    _live_screen.hear(text, (mgr.people.name_of(speaker) if speaker else "") or "")
+
+
 def _translate_heard(speaker, text: str, mgr) -> None:
     """Live translate plugin: remember each line with its detected language; in captions
     mode, translate foreign lines in the background (shown in the plugin, never spoken)."""
@@ -2348,68 +3058,32 @@ def _translate_heard(speaker, text: str, mgr) -> None:
                           languages.primary(), daily=int(s.get("daily") or translate.CAPTION_DAILY))
 
 
-def _mail_heard(speaker, mgr) -> None:
-    """Voice mail plugin: note that a recognised person just spoke."""
-    import voice_mail
-    import plugins as _plugins
-    if not _plugins.is_enabled("voice_mail") or not speaker or speaker == "self":
-        return
-    voice_mail.heard(mgr.people.name_of(speaker), speaker)
-
-
-def start_mail(mgr, callbacks, bridge, now: float) -> Optional[int]:
-    """Pass on a voice-addressed message once its recipient has spoken and the room pauses."""
-    try:
-        import voice_mail
-        import plugins as _plugins
-        if not _plugins.is_enabled("voice_mail"):
-            return None
-        days = float((_plugins.settings_of("voice_mail") or {}).get("days") or voice_mail.DEFAULT_DAYS)
-        m = voice_mail.due(days)
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"📬 mail check failed: {e}")
-        return None
-    if not m or not delivery_ready(mgr, callbacks, bridge, now, TIMER_GAP_S):
-        return None
-    cue = voice_mail.claim(m["id"])
-    if not cue:
-        return None
-    callbacks.reset_state()
-    callbacks.tts_to_client = True
-    callbacks.user_finished_turn = True
-    callbacks.user_history_committed = True
-    logger.info(f"🖥️📬 message #{m['id']} for {m['to']} ({m['text'][:50]!r}); delivering")
-    mgr.prepare_generation(cue)
-    return m["id"]
-
-
-def start_bet(mgr, callbacks, bridge, now: float) -> Optional[int]:
-    """Bring up a logged bet once it can be settled (Bet tracker plugin)."""
-    try:
-        import bets
-        import plugins as _plugins
-        if not _plugins.is_enabled("bets"):
-            return None
-        b = bets.due()
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"🎰 bet check failed: {e}")
-        return None
-    if not b or not delivery_ready(mgr, callbacks, bridge, now, TIMER_GAP_S):
-        return None
-    cue = bets.claim(b["id"])
-    if not cue:
-        return None
-    callbacks.reset_state()
-    callbacks.tts_to_client = True
-    callbacks.user_finished_turn = True
-    callbacks.user_history_committed = True
-    logger.info(f"🖥️🎰 bet #{b['id']} is due ({b['claim'][:50]!r}); bringing it up")
-    mgr.prepare_generation(cue)
-    return b["id"]
-
-
 TIMER_GAP_S = float(os.environ.get("ATLAS_TIMER_GAP_S", "1.0"))
 TIMER_OVERDUE_GAP_S = 0.5    # once a reminder is 20 s late, any short pause will do
+
+
+def start_tip(mgr, callbacks, bridge, now: float) -> bool:
+    """Live screen tips (live_screen/tips.py): a prepared tip, at a real gap in the talk, said as a cue turn."""
+    try:
+        import live_screen as _live_screen
+        from live_screen import tips as _tips
+        if not _live_screen.enabled() or not _tips.ready(now):
+            return False
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"tip check failed: {e}")
+        return False
+    if not delivery_ready(mgr, callbacks, bridge, now):
+        return False
+    cue = _live_screen.start_tip_cue(now)
+    if not cue:
+        return False
+    callbacks.reset_state()
+    callbacks.tts_to_client = True
+    callbacks.user_finished_turn = True
+    callbacks.user_history_committed = True   # no user line: a HOLD retires cleanly
+    logger.info(f"🖥️💡 speaking a tip: {cue[:90]!r}")
+    mgr.prepare_generation(cue)
+    return True
 
 
 def start_timer(mgr, callbacks, bridge, now: float) -> Optional[int]:
@@ -2449,21 +3123,24 @@ async def _task_delivery(app: FastAPI, callbacks) -> None:
         logger.warning(f"🖥️🎙️ monologue wait hook: {e}")
     while True:
         await asyncio.sleep(0.5)
+        try:   # Live screen: start/stop the capture process to match the switches (off the audio loop)
+            import live_screen as _live_screen
+            await asyncio.to_thread(_live_screen.reconcile)
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"live screen reconcile: {e}")
         try:
             mgr = app.state.SpeechPipelineManager
             bridge = getattr(app.state, "CallBridge", None)
             now = time.time()
             if start_timer(mgr, callbacks, bridge, now) is not None:
                 continue
-            if start_mail(mgr, callbacks, bridge, now) is not None:
-                continue
-            if start_bet(mgr, callbacks, bridge, now) is not None:
-                continue
             if start_monologue_tail(mgr, callbacks, bridge, now) is not None:
                 continue
             if delivery_ready(mgr, callbacks, bridge, now, RESUME_GAP_S) and start_resume(mgr, callbacks):
                 continue
             if start_glance(mgr, callbacks, bridge, now):
+                continue
+            if start_tip(mgr, callbacks, bridge, now):
                 continue
             if delivery_ready(mgr, callbacks, bridge, now):
                 start_delivery(mgr, callbacks)
@@ -2495,7 +3172,7 @@ async def _ui_subscriber(ws: WebSocket, app: FastAPI) -> None:
                   "speed": getattr(app.state, "turn_speed", 0)})
     h["subscribers"].add(q)
     tasks = [
-        asyncio.create_task(process_incoming_data(ws, app, asyncio.Queue(), h["callbacks"])),
+        asyncio.create_task(process_incoming_data(ws, app, asyncio.Queue(), h["callbacks"], reply_queue=q)),
         asyncio.create_task(send_text_messages(ws, q, quiet=True)),
     ]
     try:

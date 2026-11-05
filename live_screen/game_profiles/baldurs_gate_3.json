@@ -1,0 +1,12 @@
+{
+ "name": "Baldur's Gate 3",
+ "processes": [
+  "bg3.exe",
+  "bg3_dx11.exe"
+ ],
+ "titles": [
+  "Baldur's Gate 3"
+ ],
+ "competitive": false,
+ "spoilers": "light"
+}
