@@ -4,7 +4,6 @@
   <a href="https://github.com/Relic-Studios/atlas/releases/latest"><b>Download for Windows</b></a> ·
   <a href="#linux">Linux</a> ·
   <a href="#requirements">Requirements</a> ·
-  <a href="https://relic-studios.github.io/atlas/">Website</a> ·
   <a href="CHANGELOG.md">Changelog</a> ·
   <a href="SAFETY.md">Safety</a> ·
   <a href="https://discord.gg/dWvcu3yG6s">Community Discord</a>
@@ -21,9 +20,9 @@ Everything runs on your PC. No account, no bundled API keys.
 > **Early beta (v0.6).** It works well in the situations we test and has edges we haven't tested yet.
 > Read [SAFETY.md](SAFETY.md) for exactly what an agent can do, what's tested, and what isn't.
 
-<p align="center"><a href="https://relic-studios.github.io/atlas/#demo"><img src="docs/images/demo.jpg" width="100%" alt="ATLAS 0.6 demo: Thomas in a late-night call with Sam and Riley. Click to watch."></a></p>
+https://github.com/user-attachments/assets/b81f048c-592d-4777-8179-2192d1614af1
 
-<p align="center"><sub>Unedited two-minute run of ATLAS 0.6 (click to watch on the website). Sam and Riley are synthetic voices reading a script,
+<p align="center"><sub>Unedited two-minute run of ATLAS 0.6. Sam and Riley are synthetic voices reading a script,
 and Thomas's words were written ahead of time. Hearing them, telling them apart, when he answers or stays quiet,
 the coin flip and prediction tools, and his voice are live.</sub></p>
 
