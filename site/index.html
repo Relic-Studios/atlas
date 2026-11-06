@@ -63,7 +63,7 @@ footer{padding:40px 0;color:var(--mute);font-size:14px;border-top:1px solid var(
 <header class="hero">
 <picture><source srcset="img/hero.webp" type="image/webp"><img src="img/hero.jpg" alt="Loudness of four voices over a real one-minute conversation, the agent in teal" fetchpriority="high"></picture>
 <div class="wrap">
-<div class="kicker">Open source · local-first · early beta v0.2.4</div>
+<div class="kicker">Open source · local-first · early beta v0.6</div>
 <h1>Voice agents for group conversation, running on your own PC.</h1>
 <p class="lede">Give it a voice from a short clip and a personality in plain words. It hears everyone, learns their names, answers when someone talks to it, and stays out of the way when they don't.</p>
 <div class="cta"><a class="btn primary" href="https://github.com/Relic-Studios/atlas/releases/latest">Download for Windows</a><a class="btn" href="https://github.com/Relic-Studios/atlas#install">Linux install</a></div>
@@ -86,22 +86,22 @@ footer{padding:40px 0;color:var(--mute);font-size:14px;border-top:1px solid var(
 <div class="step"><h3>Set up</h3><p>The first-run wizard checks your GPU, installs or finds Ollama, picks a model that fits, or connects your own cloud provider.</p></div>
 <div class="step"><h3>Make an agent</h3><p>Import a voice clip you have the rights to, describe a personality, let ATLAS draft the rest, edit and save.</p></div>
 <div class="step"><h3>Start a conversation</h3><p>Route your room or call audio in and the agent's voice out. Mute, quiet mode and a talkativeness slider are one click away.</p></div>
-<div class="step"><h3>Review</h3><p>After the call: who it talked to, when it held back, what it said. Approve what it should remember. Clear anything you don't want kept.</p></div>
+<div class="step"><h3>Review</h3><p>After the call: who it talked to, when it held back, what it said. See what each agent remembered and delete anything you don't want kept.</p></div>
 </div></div></section>
 
 
 
-<section id="memory"><div class="wrap split rev">
-<div><div class="kicker">Memory</div><h2>Remembers what matters. Forgets on request.</h2>
-<p>Each agent has its own long-term memory: a graph of what was said that strengthens links it uses and lets the rest fade. Relevant memories come back on their own. The search starts while people are still talking, so it adds almost no delay.</p>
-<div class="grid3" style="grid-template-columns:1fr 1fr">
-<div class="card"><h3>Private by default</h3><p>Phone numbers, emails, addresses and keys are never stored.</p></div>
-<div class="card"><h3>Separate per agent</h3><p>Agents never see each other's memories.</p></div>
-<div class="card"><h3>You approve</h3><p>Review what it proposes to remember after each call.</p></div>
-<div class="card"><h3>Clear anytime</h3><p>Last hour, 12 hours, day, week or everything, per agent.</p></div>
-</div></div>
-<picture><source srcset="img/memory.webp" type="image/webp"><img src="img/memory.jpg" alt="The shape of a real agent memory: rings are topics, dots are moments, teal are the most linked" loading="lazy"></picture>
-</div></section>
+<section id="memory"><div class="wrap">
+<div class="kicker">Memory</div><h2>Remembers the calls, not the people.</h2>
+<p class="lede">Each agent remembers the calls it was in: what you talked about, what was funny, how it went. Memories are made after a call ends, by a low-priority pass on your PC, so they never slow a reply down. Until you turn on Use memories, agents only use what you ask them to remember.</p>
+<div class="grid3">
+<div class="card"><h3>No one else's details</h3><p>Names of the people in the call are taken out before anything is stored. Agents keep no facts about anyone but you, and no one's voice, from one call to the next.</p></div>
+<div class="card"><h3>Knows your voice</h3><p>Press "This is me" once and every agent recognizes you. Facts about you come only from things you said yourself.</p></div>
+<div class="card"><h3>Just say it</h3><p>"Remember that…" saves something on the spot, "forget that" removes it, and "off the record" keeps a stretch of the call out.</p></div>
+<div class="card"><h3>Private by default</h3><p>Phone numbers, emails, addresses and keys are never stored. With a cloud model, memories are only made if you allow it.</p></div>
+<div class="card"><h3>Separate per agent</h3><p>Each agent keeps its own memories. Only the facts about you are shared between agents.</p></div>
+<div class="card"><h3>See and delete</h3><p>Right-click an agent to see what it keeps. Delete one memory, or the last hour, 12 hours, day, week or everything.</p></div>
+</div></div></section>
 
 <section id="privacy"><div class="wrap split">
 <div><div class="kicker">Local-first</div><h2>Your PC, your models, your keys.</h2>
@@ -116,7 +116,7 @@ footer{padding:40px 0;color:var(--mute);font-size:14px;border-top:1px solid var(
 <section id="requirements"><div class="wrap split rev">
 <div><div class="kicker">Requirements</div><h2>Honest about what it needs.</h2>
 <table>
-<tr><td>GPU</td><td>NVIDIA, required. The voice engine is CUDA-only.</td></tr>
+<tr><td>GPU</td><td>NVIDIA GeForce RTX 20-series or newer, required. The voice engine is CUDA-only; GTX 10-series cards aren't supported.</td></tr>
 <tr><td>Fully local</td><td>12 GB VRAM minimum (8B model), 16 GB+ recommended (14B).</td></tr>
 <tr><td>With a cloud model</td><td>About 8 GB VRAM for speech and voice.</td></tr>
 <tr><td>OS</td><td>Windows 10/11 or Ubuntu 22.04+. No macOS yet.</td></tr>
