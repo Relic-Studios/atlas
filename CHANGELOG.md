@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.6.2 — first agent and name fixes
+
+Updating from 0.6.1 is quick: PyTorch is already 2.10.0, so nothing big is downloaded. ATLAS still needs a GeForce RTX 20-series or newer GPU (see 0.6.1).
 
 **Fixes**
 - The first agent you make in a fresh install now takes over right away, with its own voice and name. Before a restart it kept the starter voice and could ignore its own name ("Hey Thomas" taken as talking to someone else). The setup wizard restarts ATLAS, so this mostly affected agents made from the dashboard.
