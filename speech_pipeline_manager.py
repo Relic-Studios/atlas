@@ -3288,7 +3288,17 @@ class SpeechPipelineManager:
         except Exception:  # noqa: BLE001
             pass
         if self.current_persona not in PERSONAS:
-            self.current_persona = DEFAULT_PERSONA
+            # The current agent is gone: in a fresh install, the setup placeholder once the first agent exists.
+            # Really switch (prompt, the agent's names, its voice). Only renaming current_persona left the placeholder's
+            # names and the starter voice in place, and the next switch to that agent was skipped as "already current"
+            # (demo 11-06: "Hey Max" held as addressed to someone else, the reply in the starter voice).
+            gone = self.current_persona
+            try:
+                if not self.set_persona(DEFAULT_PERSONA):
+                    self.current_persona = DEFAULT_PERSONA
+            except Exception as e:  # noqa: BLE001
+                logger.warning("switch to %s after %s left failed: %s", DEFAULT_PERSONA, gone, e)
+                self.current_persona = DEFAULT_PERSONA
 
     def register_agent(self, rec: dict, prompt: str) -> None:
         """Make a freshly created agent selectable without a restart."""

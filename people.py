@@ -453,7 +453,15 @@ class NameBook:
                 if name and name.lower() not in self.agent_names:
                     return self._assign(p, name, "intro")
             # only in a greeting turn, so 'what are we playing? it's Minecraft.' never names anyone
-            m = _CLAUSE_INTRO.search(body) if re.match(r"^\W*(?:hey|hi|hello|yo|sup)\b", body, re.I) else None
+            greeting = re.match(r"^\W*(?:hey|hi|hello|yo|sup)\b", body, re.I)
+            m = _CLAUSE_INTRO.search(body) if greeting else None
+            if m is None and greeting:
+                # "Hey Max, it's Sam. You still up?" (demo 11-06): greeting the agent BY NAME, then "it's <Name>"
+                # ending that first sentence. Without the agent's name ("Hey, it's Minecraft. Let's play.") no.
+                first_sentence = re.split(r"(?<=[.!?])\s+", body)[0]
+                g = re.match(r"^\W*(?:hey|hi|hello|yo|sup)\W+([A-Za-z]+)\W", first_sentence, re.I)
+                if g and g[1].lower() in self.agent_names:
+                    m = _CLAUSE_INTRO.search(first_sentence)
             name = _clean_name(m[1], need_cap=True) if m else None
             if name and name.lower() not in self.agent_names:
                 return self._assign(p, name, "intro")

@@ -21,10 +21,11 @@ Everything runs on your PC. No account, no bundled API keys.
 > **Early beta (v0.6).** It works well in the situations we test and has edges we haven't tested yet.
 > Read [SAFETY.md](SAFETY.md) for exactly what an agent can do, what's tested, and what isn't.
 
-https://github.com/user-attachments/assets/73d76d07-9bcf-4e2a-a101-3ac32d15ae8e
+<p align="center"><a href="https://relic-studios.github.io/atlas/#demo"><img src="docs/images/demo.jpg" width="100%" alt="ATLAS 0.6 demo: Thomas in a late-night call with Sam and Riley. Click to watch."></a></p>
 
-<p align="center"><sub>Unedited run on a local 14B model. Human lines are scripted text-to-speech; every agent reply and every silence is live.
-Also on the <a href="https://relic-studios.github.io/atlas/#demo">website</a>.</sub></p>
+<p align="center"><sub>Unedited two-minute run of ATLAS 0.6 (click to watch on the website). Sam and Riley are synthetic voices reading a script,
+and Thomas's words were written ahead of time. Hearing them, telling them apart, when he answers or stays quiet,
+the coin flip and prediction tools, and his voice are live.</sub></p>
 
 <p align="center">
   <img src="docs/images/voices.jpg" width="100%" alt="Four voices over a real one-minute conversation, the agent in teal">

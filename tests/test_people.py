@@ -151,6 +151,24 @@ class ClosingClauseIntroTest(__import__("unittest").TestCase):
             self.assertEqual(nb.learn("S%d" % (i + 1), t), want, t)
 
 
+class GreetAgentThenItsNameTest(__import__("unittest").TestCase):
+    """Demo 11-06: 'Hey Max, it's Sam. You still up?' left Sam as Guest 1 (the intro wasn't the line's end)."""
+    def check(self, text, want):
+        from people import NameBook
+        nb = NameBook(agent_names=("max",), store=None)
+        self.assertEqual(nb.learn("S1", text), want, text)
+
+    def test_cases(self):
+        self.check("Hey Max, it's Sam. You still up?", "Sam")
+        self.check("Hi Max, it's Dana. Got a minute?", "Dana")
+        self.check("Hey, it's Minecraft. Let's play.", None)          # the agent isn't greeted by name
+        self.check("Hey Sam, it's Riley. You up?", None)               # greets someone else
+        self.check("Hey Max, it's raining. You up?", None)
+        self.check("Hey Max, it's late. You up?", None)
+        self.check("Hey Max, it's Tuesday. Ready?", None)
+        self.check("Hey Max, it's Minecraft night. You in?", None)
+
+
 class GreetingSentenceThenIntroTest(__import__("unittest").TestCase):
     """Demo take 5 (10-05): 'Hi, Wren. I'm Riley. We're ...' left Riley as Guest 2."""
     def check(self, text, want):

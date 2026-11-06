@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+**Fixes**
+- The first agent you make in a fresh install now takes over right away, with its own voice and name. Before a restart it kept the starter voice and could ignore its own name ("Hey Thomas" taken as talking to someone else). The setup wizard restarts ATLAS, so this mostly affected agents made from the dashboard.
+- "Hey Thomas, it's Sam. You still up?" now teaches the agent your name. An "it's Sam" introduction used to count only at the end of the line. It now also counts at the end of a greeting that names the agent, so "Hey, it's Minecraft. Let's play." still doesn't name anyone.
+
+**Website and README**
+- New two-minute demo with an agent called Thomas, including tool use (a real coin flip and a logged prediction).
+
 ## 0.6.1 — PyTorch 2.10
 
 **Breaking: GeForce GTX 10-series (Pascal) GPUs are no longer supported.** PyTorch 2.10's CUDA build dropped them, so ATLAS now needs a GeForce RTX 20-series or newer NVIDIA GPU. On a GTX 10-series card, don't install this update.

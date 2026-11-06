@@ -10,6 +10,10 @@ Needs the GPU (Whisper + TTS): never run while a real call is live.
 Public marketing footage (no dev agents on screen, original public-domain-voiced agent):
   python tools/demo/run_demo.py --src ../../atlas --model qwen3:14b
       --agent tools/demo/agents/wren.json --scene <rendered wren scene dir>
+
+--model keeps the whole run on this PC: private/ (the remote LLM config and mode) is not
+copied, the remote config path points nowhere, and the run stops if the backend reports
+anything but that local Ollama model.
 """
 import argparse
 import asyncio
@@ -29,10 +33,11 @@ EXCLUDE = {".git", "recordings", "logs", "corpus", "training", "_bak", "dist", "
 ELECTRON = ROOT / "desktop" / "node_modules" / "electron" / "dist" / "electron.exe"
 
 
-def copy_tree(dst: Path, src: Path = ROOT):
+def copy_tree(dst: Path, src: Path = ROOT, extra=()):
     if dst.exists():
         shutil.rmtree(dst)
-    shutil.copytree(src, dst, ignore=lambda d, names: [n for n in names if n in EXCLUDE
+    skip = EXCLUDE | set(extra)
+    shutil.copytree(src, dst, ignore=lambda d, names: [n for n in names if n in skip
                                                        or n.endswith((".log", ".out"))])
 
 
@@ -83,7 +88,13 @@ def create_agent(port, spec_path: Path) -> str:
                         f"&transcript={quote(tr)}", raw=wav.read_bytes())
     if st != 200 or not r.get("key"):
         raise SystemExit(f"voice import failed: {st} {r}")
-    st, r = _post(port, "/api/agents", {"name": spec["name"], "voice": r["key"], "fields": spec["fields"]})
+    body = {"name": spec["name"], "voice": r["key"], "fields": spec.get("fields") or {}}
+    if spec.get("prompt_file"):            # a full system prompt, used verbatim (like a heart.md "Prompt")
+        body["prompt"] = (spec_path.parent / spec["prompt_file"]).read_text(encoding="utf-8")
+    for k in ("talkativeness", "role", "accent", "interests"):     # what agents.save_agent keeps
+        if k in spec:
+            body[k] = spec[k]
+    st, r = _post(port, "/api/agents", body)
     if st != 200:
         raise SystemExit(f"agent create failed: {st} {r}")
     return (r.get("agent") or {}).get("id") or spec["name"].lower()
@@ -101,6 +112,9 @@ def main():
     ap.add_argument("--port", type=int, default=8012)
     ap.add_argument("--src", help="tree to run, e.g. the public repo (default: this dev tree)")
     ap.add_argument("--model", help="local Ollama model; writes a finished-setup user/settings.json")
+    ap.add_argument("--scripted", action="store_true",
+                    help="no language model: tools/demo/script_llm.py answers from the scene's 'reply' fields")
+    ap.add_argument("--llm_port", type=int, default=11500, help="port for --scripted")
     ap.add_argument("--out")
     ap.add_argument("--caption", default="")
     ap.add_argument("--warm_s", type=float, default=20.0, help="settle time after boot")
@@ -108,23 +122,39 @@ def main():
     if not (a.persona or a.agent):
         ap.error("give --persona or --agent")
     tag = a.persona or Path(a.agent).stem
+    scene_json = (Path(a.scene) if a.scene.endswith(".json") else Path(a.scene, "scene.json")).resolve()
+    llm_url = "http://127.0.0.1:11434"
+    if a.scripted:
+        a.model = a.model or "scripted"
+        llm_url = f"http://127.0.0.1:{a.llm_port}"
 
     stamp = time.strftime("%Y%m%d_%H%M%S")
     out = Path(a.out or ROOT / "logs" / "demo" / f"{tag}_{stamp}").resolve()
     out.mkdir(parents=True, exist_ok=True)
     run = Path(os.environ.get("LOCALAPPDATA", "/tmp")) / "Temp" / "atlas_demo_run"
     print("copying tree ->", run, flush=True)
-    copy_tree(run, Path(a.src).resolve() if a.src else ROOT)
+    copy_tree(run, Path(a.src).resolve() if a.src else ROOT, extra=("private",) if a.model else ())
     if a.model:
         (run / "user").mkdir(exist_ok=True)
         (run / "user" / "settings.json").write_text(json.dumps({"setup_complete": True, "llm": {
-            "mode": "local", "local": {"url": "http://127.0.0.1:11434", "model": a.model}},
+            "mode": "local", "local": {"url": llm_url, "model": a.model}},
             "audio": {"input": None, "output": None}}), encoding="utf-8")
+    stub = None
+    if a.scripted:
+        stub = subprocess.Popen([sys.executable, str(ROOT / "tools" / "demo" / "script_llm.py"), "--scene", str(scene_json),
+                                 "--port", str(a.llm_port), "--model", a.model, "--log", str(out / "llm.jsonl")],
+                                stdout=open(out / "script_llm.log", "w"), stderr=subprocess.STDOUT)
+        if not wait_http(llm_url + "/", timeout=20):
+            kill_tree(stub.pid)
+            raise SystemExit("scripted model did not start; see script_llm.log")
 
     env = dict(os.environ, PYTHONPATH="", PYTHONIOENCODING="utf-8", ATLAS_PORT=str(a.port),
-               ATLAS_HOST="127.0.0.1", ATLAS_DEMO_SCENE=str((Path(a.scene) if a.scene.endswith(".json") else Path(a.scene, "scene.json")).resolve()),
+               ATLAS_HOST="127.0.0.1", ATLAS_DEMO_SCENE=str(scene_json),
                ATLAS_DEMO_OUT=str(out), ATLAS_MEMORY_DIR=str(run / "agent_state" / "memory"),
                ATLAS_RECORD="0")
+    if a.model:   # nothing remote: no config to load, and remote mode is never requested
+        env["ATLAS_REMOTE_LLM_CONFIG"] = str(run / "private" / "no_remote.json")
+        env.pop("ATLAS_LLM", None)
     log = open(out / "server.log", "w", encoding="utf-8")
     srv = subprocess.Popen([sys.executable, "-u", "server.py"], cwd=run, env=env,
                            stdout=log, stderr=subprocess.STDOUT)
@@ -133,6 +163,12 @@ def main():
         print("booting backend on", a.port, flush=True)
         if not wait_http(f"http://127.0.0.1:{a.port}/"):
             raise SystemExit("backend did not come up; see " + str(out / "server.log"))
+        if a.model:
+            with urllib.request.urlopen(f"http://127.0.0.1:{a.port}/api/llm_backend", timeout=10) as r:
+                be = json.loads(r.read())
+            print("llm:", be.get("mode"), be.get("local_model"), flush=True)
+            if be.get("mode") != "local" or be.get("local_model") != a.model:
+                raise SystemExit(f"refusing: the backend is not the local {a.model}: {be}")
         persona = a.persona or create_agent(a.port, Path(a.agent).resolve())
         msg = asyncio.run(set_persona(a.port, persona))
         print("persona:", (msg or {}).get("current"), flush=True)
@@ -159,6 +195,8 @@ def main():
         if cap and cap.poll() is None:
             kill_tree(cap.pid)
         kill_tree(srv.pid)
+        if stub:
+            kill_tree(stub.pid)
         log.close()
     mp4 = out / f"atlas_demo_{tag}.mp4"
     subprocess.run([sys.executable, str(ROOT / "tools" / "demo" / "assemble.py"), str(out),
