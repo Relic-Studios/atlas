@@ -34,8 +34,21 @@ ENGINE_SILENCES = {
     "coqui":   Silence(comma=0.3, sentence=0.6, default=0.3),
     "kokoro":  Silence(comma=0.3, sentence=0.6, default=0.3),
     "orpheus": Silence(comma=0.3, sentence=0.6, default=0.3),
-    "qwen":    Silence(comma=0.25, sentence=0.4, default=0.3),
+    # Qwen leaves ~0.2 s of its own silence after a sentence (measured 11-06, work/tts_flow/silence_probe.py), so
+    # 0.15 s more gives ~0.4 s between sentences, a natural conversational pause (0.4 made it ~0.65 s, halting).
+    # Comma silence only follows a piece that ends at a comma (a first sentence too long to wait for).
+    "qwen":    Silence(comma=0.1, sentence=0.15, default=0.15),
 }
+# Every play()/play_async() voices whole sentences. RealtimeTTS' play_async() defaults
+# fast_sentence_fragment_allsentences=True (play() defaults False): each sentence's part before its first comma
+# was then voiced as its own utterance, with a sentence-final fall and the comma silence ("Good night, |0.5 s| you
+# two.", demo 11-06). Inside one sentence the voice pauses at commas by itself (~0.1-0.2 s).
+PLAY_FLOW = dict(
+    fast_sentence_fragment=False,
+    fast_sentence_fragment_allsentences=False,
+    fast_sentence_fragment_allsentences_multiple=False,
+    force_first_fragment_after_words=999999,
+)
 # Stream chunk sizes influence latency vs. throughput trade-offs
 QUICK_ANSWER_STREAM_CHUNK_SIZE = 8
 FINAL_ANSWER_STREAM_CHUNK_SIZE = 30
@@ -265,11 +278,10 @@ class AudioProcessor:
         play_kwargs = dict(
             log_synthesized_text=False, # Don't log prewarm text
             muted=True,
-            fast_sentence_fragment=False,
             comma_silence_duration=self.silence.comma,
             sentence_silence_duration=self.silence.sentence,
             default_silence_duration=self.silence.default,
-            force_first_fragment_after_words=999999, # Effectively disable this
+            **PLAY_FLOW,
         )
         self.stream.play(**play_kwargs) # Synchronous play for prewarm
         # Wait for prewarm to finish (indicated by on_audio_stream_stop)
@@ -292,11 +304,10 @@ class AudioProcessor:
             on_audio_chunk=on_audio_chunk_ttfa,
             log_synthesized_text=False, # Don't log test sentence
             muted=True,
-            fast_sentence_fragment=False,
             comma_silence_duration=self.silence.comma,
             sentence_silence_duration=self.silence.sentence,
             default_silence_duration=self.silence.default,
-            force_first_fragment_after_words=999999,
+            **PLAY_FLOW,
         )
         self.stream.play_async(**play_kwargs_ttfa)
 
@@ -584,11 +595,10 @@ class AudioProcessor:
             log_synthesized_text=True, # Log the text being synthesized
             on_audio_chunk=on_audio_chunk,
             muted=True, # We handle audio via the queue
-            fast_sentence_fragment=False, # Standard processing
             comma_silence_duration=self.silence.comma,
             sentence_silence_duration=self.silence.sentence,
             default_silence_duration=self.silence.default,
-            force_first_fragment_after_words=999999, # Don't force early fragments
+            **PLAY_FLOW,  # whole sentences, never a comma fragment
         )
 
         logger.info(f"👄▶️ {generation_string} Quick Starting synthesis. Text: {text[:50]}...")
@@ -769,11 +779,10 @@ class AudioProcessor:
             log_synthesized_text=True, # Log text from generator
             on_audio_chunk=on_audio_chunk,
             muted=True,
-            fast_sentence_fragment=False,
             comma_silence_duration=self.silence.comma,
             sentence_silence_duration=self.silence.sentence,
             default_silence_duration=self.silence.default,
-            force_first_fragment_after_words=999999,
+            **PLAY_FLOW,  # whole sentences, never a comma fragment
         )
 
         # Add Orpheus specific parameters for generator streaming

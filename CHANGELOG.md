@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.3 — speech that flows
+
+Updating is quick: nothing big is downloaded. ATLAS still needs a GeForce RTX 20-series or newer GPU (see 0.6.1).
+
+**Fixes**
+- **No more breaks at commas.** Agents spoke the part of each sentence before its first comma as a separate sentence, with a falling tone and a pause after it ("Good night, … you two."). The voice library splits sentences that way by default when it runs in the background, and ATLAS didn't turn that off. Now every sentence is spoken in one go, and the voice pauses at commas the way a person does. In a recorded test, pauses at commas went from about 0.5 s to 0.14 s (median).
+- **Shorter pauses between sentences:** about 0.35 s instead of 0.65 s, so longer answers don't sound halting.
+- The first thing an agent says in a reply is now a whole sentence instead of the words up to the first comma. This can start the reply up to a few tenths of a second later; very long first sentences still start early.
+
 ## 0.6.2 — first agent and name fixes
 
 Updating from 0.6.1 is quick: PyTorch is already 2.10.0, so nothing big is downloaded. ATLAS still needs a GeForce RTX 20-series or newer GPU (see 0.6.1).
