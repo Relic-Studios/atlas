@@ -33,7 +33,10 @@ Also on the <a href="https://relic-studios.github.io/atlas/#demo">website</a>.</
 - **Runs on your PC.** Listening, the voice and (if you choose) the language model all run locally.
 - **Your voice, your agent.** Import a 10–20 second clip, describe a personality, and ATLAS drafts the agent for you to edit.
 - **Knows when to talk.** In a group conversation it answers when it's addressed and stays quiet when it isn't.
+  Short in banter, fuller when you ask it something real.
 - **Learns names.** It picks up people's names from introductions instead of calling them "Speaker 3".
+- **Knows your voice.** Press **This is me** once and every agent recognizes you in later calls.
+- **Remembers the calls, not the people.** Each agent keeps short memories of the calls it was in, and facts only about you.
 - **You stay in control.** Instant mute, quiet mode, a talkativeness slider, mute a specific speaker, and a report after each conversation.
 
 ## Install
@@ -111,18 +114,24 @@ Bugs can also go in [GitHub issues](https://github.com/Relic-Studios/atlas/issue
 
 ## Memory
 
-<img align="right" src="docs/images/memory.jpg" width="34%" alt="The shape of a real agent memory">
+Each agent remembers the calls it was in: what you talked about, what was funny, how it went.
+Memories are made after a call ends, by a low-priority pass on your PC, so they never slow a reply down.
+A memory comes up in conversation only when it clearly fits, and at most once every 10 minutes unless you ask.
 
-Each agent keeps its own long-term memory: a graph of what was said that strengthens links it
-uses and lets the rest fade. Relevant memories come back on their own; the search starts while
-people are still talking, so it adds almost no delay.
-
+- **Experiences, not people.** Names of the people in the call are taken out before anything is stored.
+  Agents keep no facts about anyone but you, and no one's voice, from one call to the next.
+- **Facts about you** come only from things you said yourself (that's what **This is me** is for).
+- **"Remember that…"** saves something on the spot, **"forget that"** removes it, and **"off the record"**
+  keeps a stretch of the call out of memory until you say you're back.
 - Phone numbers, emails, addresses and keys are never stored.
-- Agents never see each other's memories.
-- After a conversation you approve what it should remember.
-- Right-click an agent to clear the last hour, 12 hours, day, week, or everything.
+- Each agent keeps its own memories; only the facts about you are shared between agents.
+- With a cloud model, memories are only made if you tick **Allow cloud processing**, and only the
+  transcript with names taken out is sent.
+- Until you turn on **Use memories**, agents only use what you asked them to remember.
+- Right-click an agent to open its **Memory** window: see what it keeps, delete a single memory,
+  or clear the last hour, 12 hours, day, week, or everything.
 
-<br clear="right">
+The full rules are in [SAFETY.md](SAFETY.md#what-an-agent-remembers).
 
 ## Tests
 
@@ -131,7 +140,7 @@ pip install -r requirements-ci.txt
 python -m unittest discover -s tests
 ```
 
-About 340 unit tests cover turn-taking, name learning, bait and repeat guards, memory isolation and privacy, setup, and the local-only security layer. They need no GPU or models and run on every push ([tests workflow](https://github.com/Relic-Studios/atlas/actions/workflows/tests.yml)). Releases are only built when they pass.
+About 900 unit tests cover turn-taking, name learning, bait and repeat guards, memory isolation and privacy, setup, and the local-only security layer. They need no GPU or models and run on every push ([tests workflow](https://github.com/Relic-Studios/atlas/actions/workflows/tests.yml)). Releases are only built when they pass.
 
 ## License
 
