@@ -1,7 +1,7 @@
 <p align="center"><img src="docs/images/banner.png" alt="ATLAS: local voice agents for group conversation" width="100%"></p>
 
 <p align="center">
-  <a href="https://github.com/Relic-Studios/atlas/releases/tag/v0.7.0"><b>Download 0.7 beta for Windows</b></a> ·
+  <a href="https://github.com/Relic-Studios/atlas/releases/tag/v0.7.0-beta.1"><b>Download 0.7 beta for Windows</b></a> ·
   <a href="#linux">Linux</a> ·
   <a href="#requirements">Requirements</a> ·
   <a href="CHANGELOG.md">Changelog</a> ·
@@ -46,7 +46,7 @@ Only idle time after the final reply was trimmed. [Capture and audio provenance]
 ### Windows
 
 1. Download **`ATLAS-Setup-<version>.exe`** (about 140 MB) from the
-   [0.7 beta release](https://github.com/Relic-Studios/atlas/releases/tag/v0.7.0) and run it.
+   [0.7 beta release](https://github.com/Relic-Studios/atlas/releases/tag/v0.7.0-beta.1) and run it.
 2. Setup checks your graphics card first, so a PC that can't run ATLAS finds out before any download.
 3. Click through the pages (license, folder, shortcuts) and **Install**. Setup shows each step, how much is downloaded
    and the time left: about 7 GB in all (PyTorch, ATLAS's packages, and the speech and voice models), 20 to 30 minutes

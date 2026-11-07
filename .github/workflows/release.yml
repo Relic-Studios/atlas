@@ -25,6 +25,8 @@ jobs:
         run: |
           V="${{ github.event.inputs.version }}"; [ -n "$V" ] || V="${GITHUB_REF_NAME#v}"
           echo "VERSION=$V" >> "$GITHUB_ENV"
+          # Windows file versions are numeric; a beta tag retains its full release name.
+          echo "FILE_VERSION=${V%%-*}" >> "$GITHUB_ENV"
       - name: Syntax check (every .py compiles)
         run: python -m compileall -q -x "(\.venv|node_modules)" .
       - name: Unit tests (gate)
@@ -56,7 +58,7 @@ jobs:
           if ($p.ExitCode -ne 0 -or -not (Test-Path "$dir\ISCC.exe")) { throw "Inno Setup install failed (exit $($p.ExitCode))" }
           "ISCC=$dir\ISCC.exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - name: Build installer
-        run: python tools/build_installer.py --version $env:VERSION --ref $env:GITHUB_SHA --iscc $env:ISCC
+        run: python tools/build_installer.py --version $env:FILE_VERSION --ref $env:GITHUB_SHA --iscc $env:ISCC
       - name: Sign installer (Azure Artifact Signing, only if configured)
         # Skipped until the repo has these secrets: AZURE_TENANT_ID, AZURE_CLIENT_ID,
         # AZURE_CLIENT_SECRET, SIGNING_ENDPOINT, SIGNING_ACCOUNT, SIGNING_PROFILE.

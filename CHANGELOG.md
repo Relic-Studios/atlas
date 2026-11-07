@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.7.0 — beta · 2026-11-07
+## 0.7.0-beta.1 — 2026-11-07
 
 **Ready-to-use agents and provider connections**
 - Juniper and the selected natural starter voice are ready on first launch; you can create or edit agents with the currently selected model.

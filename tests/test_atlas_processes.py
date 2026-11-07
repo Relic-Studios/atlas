@@ -12,15 +12,22 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "installer" / "atlas_processes.ps1"
 WINDIR = Path(os.environ.get("WINDIR", r"C:\Windows"))
 PS = WINDIR / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
-PING = WINDIR / "System32" / "PING.EXE"
 NO_WINDOW = 0x08000000
 
 
-@unittest.skipUnless(sys.platform == "win32" and PS.exists() and PING.exists(), "Windows only")
+@unittest.skipUnless(sys.platform == "win32" and PS.exists(), "Windows only")
 class AtlasProcesses(unittest.TestCase):
     def setUp(self):
         self.dir = Path(tempfile.mkdtemp(prefix="atlas_proc_"))
         self.procs = []
+        self.external = Path(tempfile.mkdtemp(prefix="atlas_proc_external_"))
+        self.fixture = self.external / "AtlasProcessFixture.exe"
+        # A copied Windows system binary can exit early on a hosted image because its
+        # localization/support files are missing. This fixture has no network dependency.
+        source = 'public class AtlasProcessFixture { public static void Main() { System.Threading.Thread.Sleep(60000); } }'
+        command = "Add-Type -TypeDefinition '" + source + "' -OutputAssembly '" + str(self.fixture).replace("'", "''") + "' -OutputType ConsoleApplication"
+        subprocess.run([str(PS), "-NoProfile", "-Command", command], check=True,
+                       capture_output=True, text=True, timeout=60, creationflags=NO_WINDOW)
 
     def tearDown(self):
         for p in self.procs:
@@ -28,6 +35,7 @@ class AtlasProcesses(unittest.TestCase):
                 p.kill()
             p.wait(timeout=10)
         shutil.rmtree(self.dir, ignore_errors=True)
+        shutil.rmtree(self.external, ignore_errors=True)
 
     def start(self, argv):
         p = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=NO_WINDOW)
@@ -41,15 +49,15 @@ class AtlasProcesses(unittest.TestCase):
         return {int(l.split()[0]): l.split()[1] for l in r.stdout.splitlines() if l.strip()}
 
     def test_lists_then_stops_programs_from_the_folder(self):
-        exe = self.dir / "sub" / "ping.exe"
+        exe = self.dir / "sub" / "AtlasProcessFixture.exe"
         exe.parent.mkdir()
-        shutil.copy2(PING, exe)
-        inside = self.start([str(exe), "-n", "60", "127.0.0.1"])
+        shutil.copy2(self.fixture, exe)
+        inside = self.start([str(exe)])
         by_cmdline = self.start([sys.executable, "-c", "import time; time.sleep(60)", str(self.dir / "server.py")])
-        outside = self.start([str(PING), "-n", "60", "127.0.0.1"])
+        outside = self.start([str(self.fixture)])
         uninstaller = self.dir / "unins000.exe"
-        shutil.copy2(PING, uninstaller)
-        uninstalling = self.start([str(uninstaller), "-n", "60", "127.0.0.1"])
+        shutil.copy2(self.fixture, uninstaller)
+        uninstalling = self.start([str(uninstaller)])
         time.sleep(1.0)
         found = self.run_script()
         self.assertIn(inside.pid, found)
