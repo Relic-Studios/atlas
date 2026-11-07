@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.7.0-beta.1 — 2026-11-07
+## 0.7.0-beta.2 — 2026-11-07
 
 **Ready-to-use agents and provider connections**
 - Juniper and the selected natural starter voice are ready on first launch; you can create or edit agents with the currently selected model.
@@ -10,6 +10,7 @@
 - The shared desktop shell uses the Atlas logo and a dark title area. Scrollbars are hidden while wheel and keyboard scrolling remain available.
 - Installer completion artwork, selected audio output, streaming cancellation and setup progress handling have been corrected.
 - Uninstall removes only the requested ATLAS data and preserves unrelated files in a custom install folder. Setup and uninstall refuse development folders.
+- Setup and uninstall detect running ATLAS processes across short, long and mixed Windows path spellings.
 
 **Live demo:** a new 83-second local Qwen3 14B run replaces the staged 0.6 clip. All assistant replies are generated live;
 human input voices are synthetic. Conversation, follow-up, aside, real clock and interruption checks pass, with recorded audio verification.
