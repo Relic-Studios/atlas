@@ -36,6 +36,46 @@ class TranslateTests(unittest.TestCase):
         self.assertFalse(b["chat_template_kwargs"]["enable_thinking"])
         self.assertTrue(b["tools"])
 
+    def test_provider_option_is_exact_host_and_explicit_false_only(self):
+        original = R.translate_payload({'messages':[{'role':'user','content':'ordinary input'}],
+            'think':False, 'format':'json', 'options':{'top_k':20}}, 'any-model', vllm=False)
+        adapted = R.provider_request_body(original, 'https://api.deepseek.com/v1', think=False)
+        self.assertEqual(adapted, {**original, 'thinking':{'type':'disabled'}})
+        self.assertNotIn('thinking', original)
+        self.assertNotIn('chat_template_kwargs', adapted)
+        for endpoint in ('https://api.openai.com/v1', 'https://api.deepseek.com.evil.test/v1',
+                         'https://evil.test/api.deepseek.com', 'http://localhost:8001'):
+            self.assertEqual(R.provider_request_body(original, endpoint, think=False), original)
+        for think in (None, True, 0):
+            self.assertEqual(R.provider_request_body(original, 'https://api.deepseek.com', think=think), original)
+
+    def test_actual_remote_requests_share_provider_option_for_voice_creator_and_warmup(self):
+        requests = [
+            ('voice', {'think':False, 'messages':[{'role':'user','content':'ordinary voice input'}],
+                       'options':{'temperature':0.6}}, True),
+            ('creator', {'think':False, 'format':'json', 'messages':[{'role':'user','content':'character fields'}]}, False),
+            ('warmup', {'think':False, 'messages':[{'role':'user','content':'warm up'}]}, False),
+            ('tool round', {'think':False, 'messages':[
+                {'role':'assistant','tool_calls':[{'function':{'name':'lookup','arguments':{}}}]},
+                {'role':'tool','content':'lookup result'}], 'tools':[{'type':'function','function':{'name':'lookup'}}]}, True),
+        ]
+        for name, payload, stream in requests:
+            with self.subTest(request=name):
+                session = R.RemoteSession({'url':'https://api.deepseek.com', 'model':'deepseek-flash',
+                    'label':'DeepSeek', 'vllm':False, 'allow_local_fallback':False}, None)
+                session._http.post = Mock(return_value=FakeResp([]))
+                session.post('http://localhost/api/chat', json=payload, stream=stream)
+                sent = session._http.post.call_args.kwargs['json']
+                self.assertEqual(sent['thinking'], {'type':'disabled'})
+                self.assertNotIn('chat_template_kwargs', sent)
+                self.assertNotIn('top_k', sent)
+                self.assertNotIn('thinking', payload)
+                if name == 'creator':
+                    self.assertEqual(sent['response_format'], {'type':'json_object'})
+                if name == 'tool round':
+                    self.assertEqual(sent['messages'][-1]['role'], 'tool')
+                    self.assertEqual(sent['messages'][0]['tool_calls'][0]['id'], sent['messages'][1]['tool_call_id'])
+
     def test_tool_roundtrip_ids_and_image(self):
         msgs = R.translate_messages([
             {"role": "assistant", "content": "", "tool_calls": [{"function": {"name": "look_at_screen", "arguments": {"reason": "x"}}}]},
@@ -69,6 +109,17 @@ class StreamTests(unittest.TestCase):
 
 
 class FallbackTests(unittest.TestCase):
+    def test_private_provider_preserves_declared_image_support(self):
+        import tempfile
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'remote.json'
+            for vision in (True, False, None):
+                path.write_text(json.dumps({'url': 'http://chosen', 'model': 'chosen-model',
+                                            'vision': vision}), encoding='utf-8')
+                with patch.object(R, 'CONFIG_PATH', path):
+                    self.assertIs(R.load_config()['vision'], vision)
+
     def test_remote_only_blocks_generate_except_explicit_unload(self):
         local = Mock()
         rs = R.RemoteSession({"url": "http://x", "model": "m", "label": "L",

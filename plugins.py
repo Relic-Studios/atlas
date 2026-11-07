@@ -186,6 +186,22 @@ def _test_game(settings: dict) -> dict:
     return {"ok": ok, "message": out.split("\n")[0] if ok else out}
 
 
+def _test_nemotron(settings: dict) -> dict:
+    import subprocess
+    from nemotron_client import python_path
+    py = python_path()
+    if not Path(py).is_file():
+        return {"ok": False, "message": "Nemotron Python not found. Choose its Python executable in Configure."}
+    # An explicit diagnostic imports dependencies but does not download a model,
+    # start capture or launch the streaming sidecar.
+    probe = "import torch; from transformers import AutoModelForAudioFrameClassification, AutoProcessor; from packaging.version import Version; import transformers; assert Version(transformers.__version__) >= Version('5.18'), 'transformers >= 5.18 required'; assert torch.cuda.is_available(), 'CUDA GPU unavailable'; print('ready')"
+    r = subprocess.run([py, "-c", probe], capture_output=True, text=True, timeout=45,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    return {"ok": r.returncode == 0,
+            "message": ("Nemotron dependencies and CUDA are ready. The first enable loads its model."
+                        if r.returncode == 0 else "Nemotron dependencies or CUDA are unavailable. Follow the bundled plugin setup guide.")}
+
+
 BUILTIN: List[dict] = [
     {
         "id": "web_search", "name": "Web search", "icon": "search", "category": "Knowledge",
@@ -193,7 +209,7 @@ BUILTIN: List[dict] = [
         "detail": "Uses the Exa or Brave search API with your own key (no scraping from your PC). "
                   "Without a key, agents don't get a search tool. "
                   "Search results are treated as untrusted text, never as instructions.",
-        "tools": ["web_search", "read_page"], "default": True,
+        "tools": ["web_search", "read_page"], "default": False,
         "settings": [
             {"key": "provider", "label": "Provider", "type": "select", "default": "auto",
              "options": [{"value": "auto", "label": "Best available (recommended)"},
@@ -218,7 +234,7 @@ BUILTIN: List[dict] = [
                   "is kept at private/last_screen.jpg so you can see what it saw. Looks it takes on "
                   "its own are rate-limited (now and then: at most one every 90 s and 4 per 10 min; "
                   "more often: one every 30 s, 10 per 10 min).",
-        "tools": ["look_at_screen"], "default": True,
+        "tools": ["look_at_screen"], "default": False,
         "settings": [
             {"key": "monitor", "label": "Which screen", "type": "select", "default": "1",
              "options": _monitor_options},
@@ -253,7 +269,7 @@ BUILTIN: List[dict] = [
         "id": "clock", "name": "Date & time", "icon": "clock", "category": "Knowledge",
         "summary": "Know today's date and the time anywhere.",
         "detail": "The current local time is always in the agent's context; the tool adds other time zones.",
-        "tools": ["check_date_time"], "default": True,
+        "tools": ["check_date_time"], "default": False,
         "settings": [
             {"key": "timezone", "label": "Test a time zone", "type": "text", "default": "",
              "placeholder": "e.g. Asia/Tokyo (blank = local)"},
@@ -267,7 +283,7 @@ BUILTIN: List[dict] = [
                   "not an English translation. The agent replies in that language, and its voice "
                   "switches to match (English, Spanish, French, German, Italian, Portuguese, Russian, "
                   "Chinese, Japanese, Korean). Off = everything is treated as your main language.",
-        "tools": [], "default": True,
+        "tools": [], "default": False,
         "settings": [
             {"key": "listen", "label": "Listen for", "type": "select", "default": "auto",
              "options": [{"value": "auto", "label": "Detect automatically (recommended)"}] + _LANG_OPTIONS,
@@ -286,20 +302,20 @@ BUILTIN: List[dict] = [
         "detail": "'Roll a d20', 'settle it with a coin flip', 'let's vote: pizza or tacos'. "
                   "Results come from your PC's secure random source, never from the model. Nothing leaves this PC.",
         "tools": ["roll_dice", "flip_coin", "pick_one", "start_poll", "cast_vote", "poll_results"],
-        "default": True, "settings": [], "test": _test_dice,
+        "default": False, "settings": [], "test": _test_dice,
     },
     {
         "id": "timers", "name": "Timers & reminders", "icon": "timer", "category": "Productivity",
         "summary": "'Remind us in 10 minutes to start the raid.' The agent speaks up when it goes off.",
         "detail": "Timers are shared by all agents and survive a restart. A reminder waits for a gap "
                   "in the talk (at most a few seconds) before it's announced. Nothing leaves this PC.",
-        "tools": ["set_timer", "list_timers", "cancel_timer"], "default": True, "settings": [],
+        "tools": ["set_timer", "list_timers", "cancel_timer"], "default": False, "settings": [],
     },
     {
         "id": "weather", "name": "Weather", "icon": "cloud", "category": "Knowledge",
         "summary": "Live weather and a 3-day forecast for any place.",
         "detail": "Uses Open-Meteo: free, no account, no key. Only the place name is sent to open-meteo.com.",
-        "tools": ["check_weather"], "default": True,
+        "tools": ["check_weather"], "default": False,
         "settings": [
             {"key": "home", "label": "Default location", "type": "text", "default": "",
              "placeholder": "e.g. Seattle", "help": "Used when someone just asks 'what's the weather?'."},
@@ -316,7 +332,7 @@ BUILTIN: List[dict] = [
         "detail": "Keeps this session's transcript in memory only (never saved by this plugin, gone "
                   "when ATLAS closes) and gives the agent the real lines to summarise. Nothing leaves this PC "
                   "unless you use a cloud model.",
-        "tools": ["recap_call"], "default": True,
+        "tools": ["recap_call"], "default": False,
         "settings": [
             {"key": "minutes", "label": "Default recap window (minutes)", "type": "number", "default": 10,
              "min": 1, "max": 240, "help": "Used when someone just says 'recap'."},
@@ -356,7 +372,7 @@ BUILTIN: List[dict] = [
         "detail": "Lessons are per agent and stay on this PC (in that agent's memory folder). A lesson only "
                   "comes back when the talk is about its topic. Private details are refused. Wiping an "
                   "agent's memory clears its lessons too.",
-        "tools": ["learn_lesson", "recall_lessons", "forget_lesson"], "default": True,
+        "tools": ["learn_lesson", "recall_lessons", "forget_lesson"], "default": False,
         "settings": [],
     },
     {
@@ -366,7 +382,7 @@ BUILTIN: List[dict] = [
                   "your approval before the agent ever uses it. Approved lore comes back only when the talk "
                   "touches it, at most one callback per turn and not the same one twice in 20 minutes. Lore is "
                   "per agent and stays on this PC; private details are refused; wiping an agent's memory clears it.",
-        "tools": ["add_lore", "recall_lore", "forget_lore"], "default": True, "feed": True,
+        "tools": ["add_lore", "recall_lore", "forget_lore"], "default": False, "feed": True,
         "settings": [
             {"key": "approval", "label": "New lore", "type": "select", "default": "owner",
              "options": [{"value": "owner", "label": "Waits for my approval"},
@@ -428,19 +444,20 @@ BUILTIN: List[dict] = [
                   "through something hard. Tense room: calm, kind, brief, no jokes at anyone's expense. "
                   "Heavy: gentle and slow. Lively: quick and playful. It only changes tone, never whether "
                   "the agent speaks. Text and timing only for now (no audio analysis); nothing is saved.",
-        "tools": [], "default": True, "feed": True,
+        "tools": [], "default": False, "feed": True,
         "settings": [],
     },
     {
         "id": "nemotron_diarization", "name": "Nemotron diarization", "icon": "pulse", "category": "Senses",
         "summary": "Tells voices apart better: NVIDIA Nemotron-3 follows who is talking, voiceprints keep who is who.",
-        "detail": "Runs NVIDIA's Nemotron-3-Diarization in a side process on the GPU (about 3%) and fills in "
-                  "the turns the voiceprints alone can't place. Held-out test with real voices: 88.7% of "
-                  "turns labelled right and 2.0% wrong, against 83.5% and 1.4% for voiceprints alone. Needs "
-                  "a one-time setup of its own Python (docs/NEMOTRON_DIARIZATION.md). Off, missing or "
+        "detail": "Runs NVIDIA's Nemotron-3-Diarization in a separate GPU process and fills in "
+                  "the turns the voiceprints alone can't place. Needs "
+                  "a one-time setup of its own Python (see the bundled plugin setup guide). Off, missing or "
                   "crashed, Atlas uses the voiceprints alone; nothing else changes.",
         "tools": [], "default": False,
-        "settings": [],
+        "settings": [{"key": "python", "label": "Nemotron Python executable", "type": "text", "default": "",
+                      "help": "Full path to Python in the separate Nemotron environment. Leave blank to use the standard sidecar installation."}],
+        "test": _test_nemotron,
     },
     {
         "id": "live_translate", "name": "Live translate", "icon": "globe", "category": "Senses",
@@ -464,7 +481,7 @@ BUILTIN: List[dict] = [
         "summary": "'Is it on sale?' 'How many people are playing?' Live Steam prices and player counts.",
         "detail": "Uses Steam's public store and player-count endpoints: free, no account, no key. "
                   "Only the game's name is sent to Steam. Player counts are Steam only.",
-        "tools": ["game_info"], "default": True,
+        "tools": ["game_info"], "default": False,
         "settings": [
             {"key": "cc", "label": "Store region (prices)", "type": "select", "default": "us",
              "options": [{"value": c, "label": l} for c, l in (
@@ -477,19 +494,19 @@ BUILTIN: List[dict] = [
         "id": "notes", "name": "Notes & follow-ups", "icon": "note", "category": "Memory",
         "summary": "A private task board: notes to self, promises, finished searches.",
         "detail": "Notes stay on this PC with the agent's other state.",
-        "tools": ["note_to_self", "clear_note"], "default": True, "settings": [],
+        "tools": ["note_to_self", "clear_note"], "default": False, "settings": [],
     },
     {
         "id": "step_back", "name": "Step back", "icon": "pause", "category": "Social",
         "summary": "Lets the agent choose to go quiet for a few minutes when the room is busy.",
-        "detail": "Its name still wakes it.", "tools": ["step_back"], "default": True, "settings": [],
+        "detail": "Its name still wakes it.", "tools": ["step_back"], "default": False, "settings": [],
     },
     {
         "id": "self_check", "name": "Self-check", "icon": "code", "category": "Reflection",
         "summary": "Log predictions and check them later; read (never change) its own source code.",
         "detail": "Code access is read-only, limited to ATLAS's own code files, and skips keys, "
                   "memories and anything private.",
-        "tools": None, "default": True, "settings": [],   # tools filled from self_tools.NAMES
+        "tools": None, "default": False, "settings": [],   # tools filled from self_tools.NAMES
     },
 ]
 
@@ -543,7 +560,18 @@ def is_enabled(pid: str, state: Optional[dict] = None) -> bool:
     if p is None:
         return False
     e = (state if state is not None else _load()).get(pid, {})
-    return bool(e.get("enabled", p.get("default", True)))
+    # A saved choice is authoritative. Missing entries never grant an ability,
+    # including newly added plugins on an existing installation.
+    return e.get("enabled") is True and is_installed(pid, state)
+
+
+def is_installed(pid: str, state: Optional[dict] = None) -> bool:
+    if pid not in _by_id():
+        return False
+    e = (state if state is not None else _load()).get(pid, {})
+    # Older profiles had only enabled/settings. Keep those explicitly configured
+    # plugins installed without granting any new enabled flags.
+    return bool(e.get("installed", "enabled" in e or "settings" in e))
 
 
 def settings_of(pid: str, state: Optional[dict] = None) -> dict:
@@ -595,9 +623,45 @@ def usable(pid: str, state: Optional[dict] = None) -> bool:
     there is no scraping fallback (owner 10-06), so the agent must not offer it."""
     if not is_enabled(pid, state):
         return False
+    return readiness(pid, state)["ready"]
+
+
+def readiness(pid: str, state: Optional[dict] = None) -> dict:
+    """Cheap local checks only. Opening Plugins never captures or calls a provider.
+
+    Ready describes configuration, not proof a remote service will answer. Live
+    diagnostics run only after the owner explicitly presses Test connection.
+    """
+    ready, message = True, "Ready to enable."
     if pid == "web_search" and not _search_ready():
-        return False
-    return True
+        ready, message = False, "Add an Exa or Brave API key in Configure."
+    elif pid == "fact_check" and not usable("web_search", state):
+        ready, message = False, "Install, configure and enable Web search first."
+    elif pid == "eyes":
+        import screen
+        v = screen.model_vision()
+        if v.get("vision_supported") is not True:
+            ready, message = False, v.get("unavailable_reason") or "Select a model with confirmed image support."
+    elif pid in {"live_screen", "think_listen"}:
+        import live_screen
+        if not live_screen._transport_ok():
+            ready, message = False, "Needs a configured remote vLLM server; local and cloud chat APIs cannot run this plugin."
+        elif pid == "live_screen":
+            if not is_enabled("eyes", state):
+                ready, message = False, "Install and enable Eyes first, then turn Eyes on in the dashboard."
+            elif not live_screen._eyes_toggle():
+                ready, message = False, "Turn Eyes on in the dashboard."
+    elif pid == "nemotron_diarization":
+        from nemotron_client import python_path
+        if not Path(python_path()).is_file():
+            ready, message = False, "Set up the Nemotron Python environment, then enter its Python executable in Configure. See the bundled plugin setup guide."
+        else:
+            message = "Python found. Test connection checks the GPU and sidecar dependencies before use."
+    elif pid == "highlights":
+        import shutil
+        if not shutil.which("ffmpeg"):
+            message = "Moment lists are ready. Install FFmpeg to render clips."
+    return {"ready": ready, "message": message}
 
 
 def off_ids() -> set:
@@ -671,6 +735,8 @@ def listing() -> List[dict]:
             "id": p["id"], "name": p["name"], "icon": p["icon"], "category": p["category"],
             "summary": p["summary"], "detail": p.get("detail", ""),
             "tools": _builtin_tools(p), "enabled": is_enabled(p["id"], st),
+            "installed": is_installed(p["id"], st),
+            "readiness": readiness(p["id"], st),
             "builtin": True, "testable": bool(p.get("test")), "feed": bool(p.get("feed")),
             "settings": [_field_view(f) for f in p.get("settings", [])],
             "values": settings_of(p["id"], st),
@@ -683,11 +749,29 @@ def set_enabled(pid: str, on: bool) -> dict:
         raise KeyError(pid)
     with _lock:
         st = _load()
+        installed = is_installed(pid, st)
+        # Explicit enable is also supported for older API clients. Installing
+        # alone, saving settings and testing never turn an ability on.
+        if on:
+            _entry(st, pid)["installed"] = True
+        else:
+            _entry(st, pid)["installed"] = installed
         _entry(st, pid)["enabled"] = bool(on)
         _save(st)
     logger.info("🧩 plugin %s %s", pid, "ON" if on else "OFF")
     apply_all()
     _changed()
+    return next(x for x in listing() if x["id"] == pid)
+
+
+def install(pid: str) -> dict:
+    """Register bundled code locally. No downloads, startup or enablement."""
+    if pid not in _by_id():
+        raise KeyError(pid)
+    with _lock:
+        st = _load()
+        _entry(st, pid)["installed"] = True
+        _save(st)
     return next(x for x in listing() if x["id"] == pid)
 
 
@@ -782,8 +866,10 @@ def marketplace() -> List[dict]:
     except (OSError, ValueError):
         items = []
     have = _by_id()
+    st = _load()
     out = [{"id": p["id"], "name": p["name"], "icon": p["icon"], "category": p["category"],
-            "summary": p["summary"], "status": "installed", "author": "ATLAS"} for p in BUILTIN]
+            "summary": p["summary"], "status": "installed" if is_installed(p["id"], st) else "available",
+            "author": "ATLAS"} for p in BUILTIN]
     for it in items:
         if it.get("id") in have:
             continue

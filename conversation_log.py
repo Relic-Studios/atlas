@@ -90,6 +90,7 @@ class ConversationLog:
     ledger: deque = field(default_factory=deque)
     roster: dict = field(default_factory=dict)
     last_agent_at: float | None = None
+    last_audio_committed_at: float | None = None
     last_agent_target: str | None = None
     last_reaction: str = ""
 
@@ -98,6 +99,7 @@ class ConversationLog:
         self.ledger.clear()
         self.roster.clear()
         self.last_agent_at = self.last_agent_target = None
+        self.last_audio_committed_at = None
         self.last_reaction = ""
 
     def add_user(self, speaker: str | None, text: str) -> str:
@@ -126,7 +128,8 @@ class ConversationLog:
             if re.search(rf"\b{re.escape(self.agent_name.lower())}\b", body.lower()):
                 rec.addressed_agent += 1
         last = self.ledger[-1] if self.ledger else None
-        if (last and last.role == "user" and last.speaker == spk
+        if (spk and last and last.role == "user" and last.speaker == spk
+                and (self.last_audio_committed_at is None or last.t_end > self.last_audio_committed_at)
                 and now - last.t_end <= self.merge_window_s):
             last.parts.append(body)
             last.t_end = now
@@ -149,6 +152,10 @@ class ConversationLog:
         self.last_agent_at, self.last_agent_target = now, tgt
         self.last_reaction = ""
         self._cap()
+
+    def note_audio_committed(self) -> None:
+        """Output was handed to a transport, even if a cut reply never enters history."""
+        self.last_audio_committed_at = self.clock()
 
     def _expire(self, now: float) -> None:
         for label in [l for l, r in self.roster.items() if now - r.last_seen > self.forget_s]:
@@ -183,7 +190,36 @@ class ConversationLog:
         body = clip_words(text, self.max_entry_words)
         return {"role": "user", "content": f"[{e.speaker}] {body}" if e.speaker else body}
 
-    def messages(self, current: str | None = None) -> tuple[list[dict], set]:
+    def current_turn(self, current: str, *, allow_continuation: bool = True) -> tuple[str, Entry | None]:
+        """Pure prompt view of a recent, unanswered same-voice continuation.
+
+        Finals may already have merged into the ledger or still be an in-flight
+        partial. Return the same complete turn in either case, and the entry
+        consumed by that view. Never rewrite transcripts or the ledger.
+        """
+        label = _LABEL.match(current or "")
+        last = self.ledger[-1] if self.ledger else None
+        if (not allow_continuation or not label or not re.fullmatch(r"S\d+", label[1])
+                or not last or last.role != "user" or last.speaker != label[1]
+                or (self.last_audio_committed_at is not None and last.t_start <= self.last_audio_committed_at)
+                or not 0 <= self.clock() - last.t_end <= self.merge_window_s):
+            return current, None
+        body = _LABEL.sub("", current).strip()
+        cur = _norm(body)
+        if not cur:
+            return current, None
+        whole, tail = _norm(last.text), _norm(last.parts[-1])
+        if cur == whole or cur.startswith(whole + " "):
+            parts = [body]  # cumulative transcript already includes the earlier words
+        elif cur == tail or tail.startswith(cur + " "):
+            parts = last.parts  # committed final is at least as complete as this partial
+        elif cur.startswith(tail + " "):
+            parts = last.parts[:-1] + [body]  # refinement replaces, rather than repeats, its tail
+        else:
+            parts = last.parts + [body]
+        return f"[{label[1]}] {' '.join(parts)}", last
+
+    def messages(self, current: str | None = None, *, consumed: Entry | None = None) -> tuple[list[dict], set]:
         """Budgeted verbatim window, oldest->newest, plus the set of speakers in view.
 
         If the newest ledger fragment IS the in-flight turn (committed before the
@@ -198,6 +234,8 @@ class ConversationLog:
         self.oldest_rendered_wall = None   # wall time of the oldest entry in this view (design D5); None = empty
         for i in range(len(entries) - 1, -1, -1):
             e = entries[i]
+            if e is consumed:
+                continue
             parts = None
             if i == len(entries) - 1 and cur and e.role == "user" and _norm(e.parts[-1]) == cur:
                 if len(e.parts) == 1:

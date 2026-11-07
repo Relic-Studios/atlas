@@ -25,6 +25,7 @@ import os
 import threading
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import requests
 
@@ -50,6 +51,14 @@ UP_STABLE_S = 60.0        # remote healthy this long before local VRAM is freed 
 
 def load_config():
     """Return the remote config dict, or None if not configured (public build)."""
+    # A choice saved in Settings has the same precedence in every build.
+    # An invalid selected cloud stays unavailable; never switch to a private host.
+    import user_settings
+    if user_settings.selected_llm_mode() == "cloud":
+        return user_settings.cloud_config()
+    selected_cloud = user_settings.cloud_config()
+    if selected_cloud is not None:
+        return selected_cloud
     try:
         cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -71,20 +80,28 @@ def load_config():
     return {"url": cfg["url"].rstrip("/"), "model": cfg["model"], "key": key,
             "label": cfg.get("label") or cfg["url"], "vllm": bool(cfg.get("vllm", True)),
             "allow_local_fallback": bool(cfg.get("allow_local_fallback", True)),
-            "context": int(cfg.get("context") or 8192)}
+            "context": int(cfg.get("context") or 8192),
+            "vision": cfg.get("vision") if isinstance(cfg.get("vision"), bool) else None}
+
+
+def remote_selected() -> bool:
+    """One startup selector: explicit environment, Settings, then legacy profile."""
+    mode = os.environ.get("ATLAS_LLM")
+    if mode in ("local", "remote"):
+        return mode == "remote"
+    import user_settings
+    selected = user_settings.selected_llm_mode()
+    if selected is not None:
+        return selected == "cloud"
+    try:
+        return (ROOT / "private" / "llm_mode.txt").read_text(encoding="utf-8").strip() == "remote"
+    except OSError:
+        return False
 
 
 def restore_at_startup(llm):
     """Restore the selected remote transport before prewarm or latency probes."""
-    import user_settings
-    mode_path = ROOT / "private" / "llm_mode.txt"
-    try:
-        saved_remote = mode_path.read_text(encoding="utf-8").strip() == "remote"
-    except OSError:
-        saved_remote = False
-    requested = (os.environ.get("ATLAS_LLM") == "remote" or saved_remote or
-                 (user_settings.is_public() and user_settings.llm_mode() == "cloud"))
-    if not requested:
+    if not remote_selected():
         return
     cfg = load_config()
     if cfg is None:
@@ -172,6 +189,18 @@ def translate_payload(payload: dict, model: str, vllm: bool = True) -> dict:
         body["response_format"] = {"type": "json_schema", "json_schema": {"name": "record", "schema": fmt}}
     if body["stream"]:
         body["stream_options"] = {"include_usage": False}
+    return body
+
+
+def provider_request_body(body: dict, endpoint: str, *, think=None) -> dict:
+    """Apply a provider's documented wire option, never a model/prompt heuristic.
+
+    DeepSeek enables thinking by default. Atlas's explicit think=False must
+    disable it through its Chat Completions field, including tool rounds.
+    Other hosts retain the strict OpenAI-compatible body unchanged.
+    """
+    if think is False and urlsplit(endpoint).hostname == "api.deepseek.com":
+        return {**body, "thinking": {"type": "disabled"}}
     return body
 
 
@@ -508,11 +537,14 @@ class RemoteSession:
         return time.time() >= self.down_until
 
     def post(self, url, json=None, stream=False, timeout=None, **kw):
+        request_fallback = kw.pop("allow_local_fallback", True)
+        allow_fallback = self.cfg.get("allow_local_fallback", True) and request_fallback
         payload = json or {}
         if self.next_thought is not None and url.endswith("/api/chat") and not self._remote_ok():
             self.next_thought = None             # a handover only belongs to a two-stage request
         if url.endswith("/api/chat") and self._remote_ok():
             body = translate_payload(payload, self.cfg["model"], vllm=self.cfg.get("vllm", True))
+            body = provider_request_body(body, self.cfg["url"], think=payload.get("think"))
             body["stream"] = bool(stream)
             if not stream:
                 body.pop("stream_options", None)
@@ -543,15 +575,15 @@ class RemoteSession:
                     raise
                 self.down_until = time.time() + FAIL_COOLDOWN_S
                 self.last_error = str(e)[:200]
-                if not self.cfg.get("allow_local_fallback", True):
+                if not allow_fallback:
                     logger.warning("Remote LLM unavailable; local fallback is disabled: %s", self.last_error)
                     raise
                 self.fallbacks += 1
                 logger.warning("🌐🤖 Remote LLM unreachable (%s) — falling back to local for %.0fs",
                                self.last_error, FAIL_COOLDOWN_S)
-        if url.endswith("/api/chat") and not self.cfg.get("allow_local_fallback", True):
+        if url.endswith("/api/chat") and not allow_fallback:
             raise requests.ConnectionError("Remote LLM unavailable; local fallback is disabled")
-        if not self.cfg.get("allow_local_fallback", True) and not (
+        if not allow_fallback and not (
                 url.endswith("/api/generate") and payload.get("keep_alive") == 0
                 and not any(payload.get(key) for key in ("prompt", "messages", "images"))):
             raise requests.ConnectionError("Remote-only transport prohibits local model generation")
@@ -1160,6 +1192,7 @@ class RemoteSession:
 
     def status(self) -> dict:
         return {"label": self.cfg["label"], "url": self.cfg["url"], "model": self.cfg["model"],
+                "allow_local_fallback": bool(self.cfg.get("allow_local_fallback",True)),
                 "healthy": self._remote_ok(), "last_error": self.last_error,
                 "requests": self.requests, "fallbacks": self.fallbacks}
 
@@ -1177,14 +1210,24 @@ def unload_local(ollama_url: str, model: str) -> bool:
         return False
 
 
+def make_session(cfg, local=None):
+    if cfg.get("provider") in ("codex", "claude_code"):
+        from native_providers import NativeSession
+        return NativeSession(cfg, local)
+    return RemoteSession(cfg, local)
+
+
 def activate(llm, cfg: dict) -> "RemoteSession":
     """Point an LLM instance at the remote host. Returns the RemoteSession."""
     llm._ensure_local_session()
-    rs = RemoteSession(cfg, llm._local_session)
+    rs = make_session(cfg, llm._local_session)
     llm.ollama_session = rs
     llm.remote = rs
     llm._remote_startup_error = None
     llm._client_initialized = False
+
+    if getattr(rs,"skip_startup_inference",False):
+        rs.ping(timeout=5)
 
     def _warm():
         # prewarm() goes through llm.ollama_session, which is the RemoteSession;

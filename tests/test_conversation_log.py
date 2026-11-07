@@ -148,6 +148,31 @@ class ConversationLogTests(unittest.TestCase):
     def test_est_tokens_monotone(self):
         self.assertLess(est_tokens("a b"), est_tokens("a b c d e f"))
 
+    def test_current_turn_replaces_refined_committed_tail_without_mutating_ledger(self):
+        self.log.add_user('S1', 'Juniper what is 2 plus 3?')
+        self.c.tick(2.43)
+        self.log.add_user('S1', 'Please keep')
+        text, consumed = self.log.current_turn('[S1] Please keep your answer short.')
+        self.assertEqual(text, '[S1] Juniper what is 2 plus 3? Please keep your answer short.')
+        self.assertEqual(self.log.messages(text, consumed=consumed)[0], [])
+        self.assertEqual(self.log.ledger[-1].parts, ['Juniper what is 2 plus 3?', 'Please keep'])
+
+    def test_unknown_voices_never_merge_or_assemble(self):
+        self.log.add_user(None, 'What is 2 plus 3?')
+        self.c.tick(1)
+        self.log.add_user(None, 'Please keep your answer short.')
+        self.assertEqual(len(self.log.ledger), 2)
+        text, consumed = self.log.current_turn('[user] Please keep your answer short.')
+        self.assertEqual(text, '[user] Please keep your answer short.')
+        self.assertIsNone(consumed)
+
+    def test_continuation_uses_configured_merge_window(self):
+        self.log.merge_window_s = 1.0
+        self.log.add_user('S1', 'What is 2 plus 3?')
+        self.c.tick(1.01)
+        current = '[S1] Please keep your answer short.'
+        self.assertEqual(self.log.current_turn(current), (current, None))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

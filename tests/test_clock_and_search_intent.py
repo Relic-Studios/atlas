@@ -40,6 +40,35 @@ class Clock(unittest.TestCase):
     def test_bad_zone_falls_back(self):
         self.assertIn("Unknown time zone", clock.check("Mars/Base", self.NOW))
 
+    def test_explicit_clock_commands_have_real_arguments(self):
+        self.assertEqual(clock.intent('Juniper, use your date and time tool to check today.'),
+                         ('check_date_time', {'timezone': ''}))
+        self.assertEqual(clock.intent('Juniper, call check_date_time for Asia/Tokyo.'),
+                         ('check_date_time', {'timezone': 'Asia/Tokyo'}))
+        for text in ('What time is it?', 'She said use your clock tool.',
+                     'Repeat "use your clock tool".', 'Juniper, use your time tool in Paris.',
+                     'Juniper, do not use your clock tool.', 'Juniper, repeat use your clock tool.',
+                     'Juniper, say “use your clock tool”.'):
+            self.assertIsNone(clock.intent(text), text)
+
+    def test_explicit_clock_prefetch_requires_direct_address(self):
+        import ast,re
+        from pathlib import Path
+        from types import SimpleNamespace
+        from floor import names_agent
+        path=Path(__file__).resolve().parents[1]/'speech_pipeline_manager.py'
+        tree=ast.parse(path.read_text(encoding='utf-8'))
+        cls=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='SpeechPipelineManager')
+        fn=next(n for n in cls.body if isinstance(n,ast.FunctionDef) and n.name=='_room_prefetch')
+        import room_tools,logging
+        ns={'_clock':clock,'_room':room_tools,'re':re,'logger':logging.getLogger('test')}
+        exec(compile(ast.Module(body=[fn],type_ignores=[]),str(path),'exec'),ns)
+        mgr=SimpleNamespace(current_persona='juniper',floor=SimpleNamespace(active_partner=lambda:'S1'))
+        run=ns['_room_prefetch']
+        self.assertEqual(run(mgr,'[S1] Juniper, use your clock tool.'),('check_date_time',{'timezone':''}))
+        self.assertIsNone(run(mgr,'[S1] Alex, use your clock tool.'))
+        self.assertIsNone(run(mgr,'[S1] Juniper, use your clock tool.',is_cue=True))
+
     def test_every_agent_sees_date_and_tool(self):
         for persona in ("", "fae", "wren"):
             note = capability.abilities_note(False, True, persona)

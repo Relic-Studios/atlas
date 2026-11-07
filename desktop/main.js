@@ -8,6 +8,9 @@ const PORT = process.env.ATLAS_PORT || 8000;
 const APP_URL = `http://localhost:${PORT}/static/atlas.html`;
 const HEALTH_URL = `http://localhost:${PORT}/`;
 const SERVER_DIR = path.resolve(__dirname, '..'); // dir containing server.py
+const APP_ID = 'RelicStudios.ATLAS';
+const APP_ICON = path.join(SERVER_DIR, 'static', 'favicon.ico');
+if (process.platform === 'win32') app.setAppUserModelId(APP_ID);
 // Explicit interpreter: in git-bash `python3` is the WindowsApps shim. Prefer the
 // per-user 3.12 install when present, else whatever `python` is on PATH.
 const fs = require('fs');
@@ -209,8 +212,18 @@ async function createWindow() {
     backgroundColor: '#0b0d10',
     autoHideMenuBar: true,
     title: 'ATLAS',
-    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true },
+    icon: APP_ICON,
+    titleBarStyle: 'hidden',
+    titleBarOverlay: { color: '#0b0d10', symbolColor: '#b7c2d0', height: 32 },
+    webPreferences: { preload: path.join(__dirname, 'shell-preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true },
     show: false,
+  });
+  if (process.platform === 'win32') mainWindow.setAppDetails({
+    appId: APP_ID,
+    appIconPath: APP_ICON,
+    appIconIndex: 0,
+    relaunchCommand: `"${process.execPath}" "${__dirname}"`,
+    relaunchDisplayName: 'ATLAS',
   });
   wireWindowState(mainWindow);
   if (saved.maximized && pickBounds(saved, screen ? screen.getAllDisplays() : [])) mainWindow.maximize();

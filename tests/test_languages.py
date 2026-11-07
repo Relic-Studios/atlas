@@ -188,6 +188,8 @@ class PluginRoundTrip(unittest.TestCase):
 
     def test_save_then_read(self):
         self.P.save_settings("languages", {"listen": "es", "primary": "de"})
+        self.assertEqual(L.setting(), "de")  # configuring alone does not enable detection
+        self.P.set_enabled("languages", True)
         self.assertEqual(L.setting(), "es")
         self.assertEqual(L.primary(), "de")
         self.P.save_settings("languages", {"listen": "auto"})

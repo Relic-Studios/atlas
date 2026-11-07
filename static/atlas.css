@@ -17,10 +17,16 @@ html{font-size:14px}
 html,body{height:100%;margin:0;background:var(--bg);color:var(--text);font:var(--ui)/1.45 var(--font);overflow-x:auto;overflow-y:hidden;-webkit-font-smoothing:antialiased}
 ::selection{background:rgba(var(--accent-rgb),.28)}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-::-webkit-scrollbar{width:10px;height:10px}
+*{scrollbar-width:none}
+::-webkit-scrollbar{width:0;height:0;display:none}
 ::-webkit-scrollbar-thumb{background:#262c36;border:3px solid transparent;background-clip:padding-box;border-radius:6px}
 ::-webkit-scrollbar-thumb:hover{background:#343c48;background-clip:padding-box;border:3px solid transparent}
 ::-webkit-scrollbar-track{background:transparent}
+.provider-notice{position:fixed;bottom:2.2rem;left:1rem;right:1rem;z-index:65;display:flex;gap:1rem;align-items:center;padding:.8rem 1rem;background:var(--panel-2);border:1px solid var(--warn);border-radius:var(--r);color:var(--text)}
+.provider-notice span{flex:1}.provider-notice a{color:var(--accent)}
+.provider-notice button{background:var(--raise);color:var(--text);border:1px solid var(--line-2);border-radius:4px;padding:.35rem .7rem;cursor:pointer}
+.provider-notice button:hover{border-color:var(--accent)}
+.provider-notice.hidden{display:none}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
 @keyframes spin{to{transform:rotate(360deg)}}
 @keyframes fadein{from{opacity:0}to{opacity:1}}
@@ -352,4 +358,5 @@ input[type=range]{accent-color:var(--accent);width:7.8rem;min-width:3.5rem;heigh
 .creator .src{font:var(--small) var(--mono);padding:1px .4rem;border-radius:3px;background:var(--raise);color:var(--muted)}
 .creator .busy{display:flex;align-items:center;gap:.7rem;color:var(--muted);font-size:var(--label)}
 #crPrompt{background:var(--bg);color:var(--text);border:1px solid var(--line-2);font:var(--small) var(--mono)!important}
+#pSetup.hidden{display:none}
 

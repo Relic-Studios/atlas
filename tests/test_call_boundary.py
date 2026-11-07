@@ -407,5 +407,50 @@ class PipelineSerialized(unittest.TestCase):
         self.assertEqual(max(overlaps), 1)
 
 
+class TickerResponsiveness(unittest.TestCase):
+    def test_runner_boundary_lock_is_evaluated_off_the_event_loop(self):
+        import asyncio
+        import logging
+        source = ast.parse((ROOT / 'server.py').read_text(encoding='utf-8'))
+        node = next(n for n in source.body if isinstance(n, ast.AsyncFunctionDef) and n.name == '_call_ticker')
+        proxy = SimpleNamespace(sleep=lambda _: asyncio.sleep(.001), to_thread=asyncio.to_thread,
+                                CancelledError=asyncio.CancelledError)
+        ns = {'asyncio': proxy, 'logger': logging.getLogger('test')}
+        exec(compile(ast.Module(body=[node], type_ignores=[]), 'server.py', 'exec'), ns)
+        lock, entered, release, finished = threading.Lock(), threading.Event(), threading.Event(), threading.Event()
+        lock.acquire()
+        def in_progress():
+            entered.set()
+            with lock:
+                return True
+        def unlock():
+            release.wait(1)
+            lock.release()
+        unlocker = threading.Thread(target=unlock)
+        boundary = SimpleNamespace(tick=lambda: None, in_progress_here=in_progress, last_activity=123)
+        runner = SimpleNamespace(tick=lambda active, last: finished.set())
+        async def scenario():
+            task = asyncio.create_task(ns['_call_ticker'](SimpleNamespace(state=SimpleNamespace(MemoryRunner=runner))))
+            try:
+                self.assertTrue(await asyncio.to_thread(entered.wait, .5))
+                # A direct in_progress_here() argument blocks the loop until the
+                # one-second fallback unlocker fires, so this assertion fails.
+                self.assertTrue(lock.locked(), 'the event loop waited on the boundary lock')
+                await asyncio.sleep(.01)
+                self.assertTrue(lock.locked())
+                release.set()
+                self.assertTrue(await asyncio.to_thread(finished.wait, 1))
+            finally:
+                release.set()
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+        try:
+            unlocker.start()
+            with mock.patch.object(CB, 'BOUNDARY', boundary):
+                asyncio.run(scenario())
+        finally:
+            release.set(); unlocker.join(2)
+
+
 if __name__ == "__main__":
     unittest.main()

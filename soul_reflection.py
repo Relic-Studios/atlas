@@ -249,24 +249,17 @@ def complete(system: str, user: str, timeout: float = 120.0) -> str:
     """One-shot completion on whatever model the owner set up (remote/cloud or local Ollama)."""
     import requests
     cfg = None
-    try:
-        import remote_llm
-        mode = ""
-        mf = ROOT / "private" / "llm_mode.txt"
-        if mf.exists():
-            mode = mf.read_text(encoding="utf-8").strip()
-        else:
-            import user_settings
-            mode = "remote" if user_settings.llm_mode() == "cloud" else "local"
-        if mode == "remote":
-            cfg = remote_llm.load_config()
-    except Exception:  # noqa: BLE001
-        cfg = None
+    import remote_llm
+    if remote_llm.remote_selected():
+        cfg = remote_llm.load_config()
+        if not cfg:
+            raise RuntimeError("The selected cloud model is not configured. Open Settings to finish its setup.")
     msgs = [{"role": "system", "content": system}, {"role": "user", "content": user}]
     if cfg:
         body = {"model": cfg["model"], "temperature": 0.3, "max_tokens": 500, "messages": msgs}
         if cfg.get("vllm"):
             body["chat_template_kwargs"] = {"enable_thinking": False}
+        body = remote_llm.provider_request_body(body, cfg["url"], think=False)
         r = requests.post(cfg["url"].rstrip("/") + "/v1/chat/completions", json=body, timeout=timeout,
                           headers={"Authorization": "Bearer " + (cfg.get("key") or "")})
         r.raise_for_status()

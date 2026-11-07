@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.7.0 — beta · 2026-11-07
+
+**Ready-to-use agents and provider connections**
+- Juniper and the selected natural starter voice are ready on first launch; you can create or edit agents with the currently selected model.
+- Claude Code and Codex account connectors use the installed official CLIs. Connect opens their official sign-in flow; account limits stay visible without changing billing or falling back to another provider.
+- Settings include vision-capable local recommendations and clearly explain when Eyes is unavailable.
+- Plugins start uninstalled and disabled on fresh installations. Install, configure and enable the abilities you want.
+- The shared desktop shell uses the Atlas logo and a dark title area. Scrollbars are hidden while wheel and keyboard scrolling remain available.
+- Installer completion artwork, selected audio output, streaming cancellation and setup progress handling have been corrected.
+- Uninstall removes only the requested ATLAS data and preserves unrelated files in a custom install folder. Setup and uninstall refuse development folders.
+
+**Live demo:** a new 83-second local Qwen3 14B run replaces the staged 0.6 clip. All assistant replies are generated live;
+human input voices are synthetic. Conversation, follow-up, aside, real clock and interruption checks pass, with recorded audio verification.
+
+Core installed checks pass on the test Windows RTX 4090 system: 1,166 unit tests passed (60 expected lightweight-CI skips), plus 10 desktop lifecycle checks. This is a beta release; broader hardware and credential-dependent external integrations need coverage. The installer is unsigned. Claude account sign-in and usage-limit handling were verified, but successful live Claude inference still needs testing after the account allowance resets. Native account inference currently supports Claude Code 2.1.281 and Codex 0.146.1.
+
+Updating: run the new `ATLAS-Setup` over your install. It keeps your Python environment, models and data, so the
+download is small (the voice model, if you don't have it yet). ATLAS still needs a GeForce RTX 20-series or newer GPU.
+
+**New Windows installer**
+- **One window from start to finish.** The long part (the Python environment, PyTorch, ATLAS's packages, the models)
+  now runs inside Setup, with a list of steps, how much is downloaded and the time left, instead of a console window.
+- **Nothing installed system-wide.** Setup brings its own Python 3.12 and a ready-built desktop app, so it no longer
+  installs Python or Node.js, and no Windows permission prompt appears.
+- **Checks your PC first.** Before anything downloads, Setup checks the graphics card and driver: no NVIDIA card, a
+  GTX 10-series card or a driver older than 570.65 gets a clear message, and a card with less than 8 GB of graphics
+  memory asks before going on. It also checks the free space on every drive it uses.
+- **The first launch downloads nothing.** The voice model, the voice-activity model and the sentence-splitting
+  data now download during setup with the others.
+- **Stop and Try again.** Stop ends the install at any point; run Setup again to finish, and finished steps are
+  skipped. A failed step says what went wrong (not enough disk space, a blocked secure connection, a dropped download,
+  a server not responding) and offers Try again and Open log.
+- **Updates** close a running ATLAS first (after asking) and keep your environment, models and data.
+- The desktop shortcut is now a choice, the last page has **Launch ATLAS**, and Setup and the uninstaller use ATLAS's
+  look. Uninstalling asks with two plain choices: keep my data, or delete it too.
+- The installer is about 140 MB (it was 3 MB), because it carries Python and the desktop app.
+
+**Source installs**
+- `install.ps1` pins pip, adds to `install.log` instead of overwriting it, makes `.venv` again when it no longer
+  runs, and downloads the voice model, the voice-activity model and the sentence-splitting data too.
+
 ## 0.6.3 — speech that flows
 
 Updating is quick: nothing big is downloaded. ATLAS still needs a GeForce RTX 20-series or newer GPU (see 0.6.1).

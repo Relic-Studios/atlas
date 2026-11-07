@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ATLAS · Plugin setup</title>
+<style>body{background:#0b1017;color:#e1e8ef;font:16px/1.65 system-ui;margin:40px auto;padding:0 24px;max-width:900px}a{color:#64cbe5}table{border-collapse:collapse;width:100%}td,th{padding:12px;text-align:left;border-bottom:1px solid #273341}code{overflow-wrap:anywhere;color:#93d8ea}h1,h2{line-height:1.25}</style>
+<h1>Optional plugins</h1>
+<p>ATLAS starts with Juniper and voice chat ready to set up. Optional plugins start uninstalled and off. In Plugins → Marketplace, select Install. This registers the bundled plugin without running it. Configure it, then use its switch in Installed to enable it. Installing or saving a key never enables a plugin. Saved choices survive application updates.</p>
+<p>“Ready to enable” checks local configuration. It does not prove that an internet service is online or that your account has credit. Test connection runs only when you press it. Planned entries cannot be installed.</p>
+<table><thead><tr><th>Plugin</th><th>Setup and use</th></tr></thead><tbody>
+<tr><td>Web search</td><td>Add your own Exa or Brave API key and test it. Choose that provider or Auto. There is no keyless search fallback. Queries go to the chosen service.</td></tr>
+<tr><td>Eyes (screen)</td><td>Choose a model with confirmed image support, enable the plugin, then turn Eyes on in the dashboard. Choose your monitor in Configure. A text-only model cannot use screenshot Eyes.</td></tr>
+<tr><td>Live screen</td><td>Requires Eyes on and a remote vLLM deployment with the live watcher configured. The standard local Ollama setup and cloud chat APIs do not supply that service. Configure the program to watch. Test connection reports whether capture is working.</td></tr>
+<tr><td>Think while listening</td><td>Requires a remote vLLM deployment with ATLAS two-stage inference enabled. It cannot run on the standard local or cloud chat API setup.</td></tr>
+<tr><td>Date &amp; time</td><td>No account required. Ask for the time in a city or timezone. Configure and test a timezone.</td></tr>
+<tr><td>Languages</td><td>Choose automatic detection or one input language and your main reply language. Speech support depends on the selected transcription and voice models.</td></tr>
+<tr><td>Dice, coins &amp; polls; Timers &amp; reminders</td><td>No account required. Ask for a roll, start a vote or set a timer. Timers are announced while ATLAS is running and the plugin is enabled.</td></tr>
+<tr><td>Weather; Game info</td><td>Require internet access to Open-Meteo and Steam respectively. No key required. Configure your location/units or store region, then Test connection.</td></tr>
+<tr><td>Call summary; Floor referee; Room-energy sense</td><td>Use the current session transcript. Ask for a recap, talk-time balance or a topic. Room-energy sense adjusts tone. There is no historical transcript when a fresh session begins.</td></tr>
+<tr><td>Teach-me mode; Lore keeper</td><td>Ask ATLAS to learn a lesson or add group lore. Stored per agent locally. Lore waits for approval by default; review it in Configure.</td></tr>
+<tr><td>Notes &amp; follow-ups; Step back; Self-check</td><td>No extra service required. Ask for a note, a pause or a prediction check. Source inspection is read-only and restricted to ATLAS files.</td></tr>
+<tr><td>Quiet fact-check</td><td>Install, configure and enable Web search first. Searches may use credits. Configure daily limits and background checking; results appear in Configure.</td></tr>
+<tr><td>Live translate; Soul reflection</td><td>Use the model selected in Settings. Translation needs a transcript line. Reflection needs a finished recorded call; approve or reject its proposed notes. The model provider may charge for these requests.</td></tr>
+<tr><td>Highlight reel</td><td>Requires a finished recorded call. Find moments in Configure. Listing does not require FFmpeg; rendering caption cards requires FFmpeg on PATH and the consent setting. No clips are made automatically.</td></tr>
+<tr><td>Nemotron diarization</td><td>Requires an NVIDIA CUDA GPU and a separate Python environment with CUDA-capable PyTorch, NumPy, packaging and transformers ≥ 5.18. Enter that environment’s full Python executable path in Configure and save, then Test connection. Use the PyTorch installation selector for the correct CUDA build. Enabling downloads/loads <code>nvidia/Nemotron-3-Diarization</code> on first use. Model access and internet are required for the first download; base voiceprints remain available if it fails.</td></tr>
+</tbody></table>
+<p><a href="https://pytorch.org/get-started/locally/" target="_blank" rel="noopener">PyTorch installation</a> · <a href="https://huggingface.co/nvidia/Nemotron-3-Diarization" target="_blank" rel="noopener">Nemotron model</a> · <a href="/static/plugins.html">Back to Plugins</a></p>
+</html>

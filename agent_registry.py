@@ -1,12 +1,14 @@
 """Single source of truth for which agents and voices exist.
 
-Two sources, one schema:
+Three sources, one schema:
   * dev pack   -- dev_pack/pack.json (owner's hand-tuned agents + voice clones).
                   Loaded only when present. The public export omits dev_pack/,
                   personas/ and voices/, so none of it ships. Disable locally with
                   ATLAS_DEV_PACK=0 to run exactly as the public build does.
   * user data  -- personas/agents.json (agents made in the creator / heart.md) and
                   voices/user/voices.json (imported reference audio).
+  * bundle     -- starter_pack/pack.json, immutable public defaults. Existing
+                  dev and user IDs/voice keys always take precedence.
 
 Every other module asks this registry (agents, voices, profiles, identity,
 nicknames, backchannel lines) instead of hard-coding names, so the code itself
@@ -32,6 +34,7 @@ ROOT = Path(__file__).resolve().parent
 DEV_PACK = ROOT / "dev_pack" / "pack.json"
 USER_AGENTS = ROOT / "personas" / "agents.json"
 USER_VOICES = ROOT / "voices" / "user" / "voices.json"
+BUNDLED_PACK = ROOT / "starter_pack" / "pack.json"
 GENERIC_PROMPT = ("You're a friendly voice in a group conversation. No character has been set up yet, "
                   "so keep replies short, and if asked, say the owner can create an agent in ATLAS.")
 
@@ -54,10 +57,48 @@ def _read_json(p: Path, default):
 
 
 def _abs(p: str | None) -> str | None:
-    if not p:
+    if not p or not isinstance(p, (str, os.PathLike)):
         return None
     q = Path(p)
     return str(q if q.is_absolute() else ROOT / q)
+
+
+def _prompt_for(a: dict) -> str | None:
+    if a.get("prompt"):
+        return str(a["prompt"]).strip()
+    p = _abs(a.get("prompt_file"))
+    try:
+        return Path(p).read_text(encoding="utf-8").strip() if p else None
+    except (OSError, UnicodeError):
+        return None
+
+
+def _voice_usable(v: dict, *, bundled=False) -> bool:
+    try:
+        path = Path(v.get("wav") or "")
+        if bundled:
+            import wave
+            text = Path(v.get("text") or "")
+            base = BUNDLED_PACK.parent.resolve()
+            if not (path.resolve().is_relative_to(base) and text.resolve().is_relative_to(base)):
+                return False
+            if not text.read_text(encoding="utf-8").strip():
+                return False
+            # PCM samples are finite by construction. Bound decoding to a 30s
+            # reference and require the declared frames to actually be readable.
+            with wave.open(str(path), "rb") as audio:
+                n = audio.getnframes()
+                if (audio.getnchannels() != 1 or audio.getframerate() != 24000
+                        or audio.getcomptype() != "NONE" or not 0 < n <= 30 * 24000):
+                    return False
+                return len(audio.readframes(n)) == n * audio.getsampwidth()
+        # Existing user/dev references may be stereo, another rate/format, and
+        # need not have an ICL transcript. Do not impose the bundle's format.
+        import soundfile as sf
+        with sf.SoundFile(str(path)) as audio:
+            return audio.frames > 0 and audio.samplerate > 0 and audio.channels > 0
+    except Exception:  # noqa: BLE001 - corrupt references must not make setup fail
+        return False
 
 
 def reload() -> dict:
@@ -66,7 +107,8 @@ def reload() -> dict:
     voices: dict[str, dict] = {}
     default = None
     traits: dict = {}
-    if dev_enabled():
+    dev = dev_enabled()
+    if dev:
         pack = _read_json(DEV_PACK, {})
         traits = dict(pack.get("traits") or {})
         for k, v in (pack.get("voices") or {}).items():
@@ -81,21 +123,85 @@ def reload() -> dict:
                               "label": v.get("label"), "user": True})
     reg = _read_json(USER_AGENTS, [])
     for a in reg if isinstance(reg, list) else []:
-        if isinstance(a, dict) and a.get("id") and a["id"] not in agents:
+        if isinstance(a, dict) and isinstance(a.get("id"), str) and a["id"] and a["id"] not in agents:
             rec = {**a, "custom": True}
             rec.setdefault("prompt_file", f"personas/{a['id']}.txt")
             agents[a["id"]] = rec
-    if default not in agents:
-        default = next(iter(agents), None)
-    with _lock:   # same four keys every time: update in place, so a reader without the lock never sees it empty
-        _state.update(agents=agents, voices=voices, default=default, traits=traits)
+    bundle_error = None
+    pack = _read_json(BUNDLED_PACK, {})
+    if not isinstance(pack, dict):
+        pack = {}
+    bundle_voices = pack.get("voices") or {}
+    bundle_agents = pack.get("agents") or []
+    bundle_default = pack.get("default")
+    if not isinstance(bundle_default, str) or not bundle_default.strip():
+        bundle_default = None
+        if pack:
+            bundle_error = "The default agent ID is invalid. Repair ATLAS, or choose another agent."
+    if not isinstance(bundle_voices, dict):
+        bundle_voices = {}
+        bundle_error = "The default agent bundle is invalid. Repair ATLAS, or create an agent."
+    if not isinstance(bundle_agents, list):
+        bundle_agents = []
+        bundle_error = "The default agent bundle is invalid. Repair ATLAS, or create an agent."
+    for k, v in bundle_voices.items():
+        if k in voices:
+            continue
+        if not isinstance(v, dict):
+            bundle_error = "The bundled voice record is invalid. Repair ATLAS, or import a voice."
+            continue
+        rec = {"wav": _abs(v.get("wav")), "text": _abs(v.get("text")),
+               "label": v.get("label"), "bundled": True}
+        if _voice_usable(rec, bundled=True):
+            voices[k] = rec
+        else:
+            bundle_error = "The bundled voice is missing or damaged. Repair ATLAS, or import a voice and create an agent."
+    for a in bundle_agents:
+        if (not isinstance(a, dict) or not isinstance(a.get("id"), str) or not a["id"].strip()
+                or not isinstance(a.get("voice"), str) or not a["voice"].strip()):
+            bundle_error = "A bundled agent ID or voice is invalid. Repair ATLAS, or choose another agent."
+            continue
+        if a["id"] not in agents:
+            prompt_path = _abs(a.get("prompt_file"))
+            contained_prompt = (bool(a.get("prompt")) or
+                                (prompt_path and Path(prompt_path).resolve().is_relative_to(BUNDLED_PACK.parent.resolve())))
+            if (contained_prompt and _prompt_for(a)
+                    and _voice_usable(voices.get(a.get("voice"), {}),
+                                      bundled=bool(voices.get(a.get("voice"), {}).get("bundled")))):
+                agents[a["id"]] = {**a, "bundled": True, "custom": False, "dev": False}
+    usable_voices = {k for k, v in voices.items() if _voice_usable(v, bundled=bool(v.get("bundled")))}
+    usable = [aid for aid, a in agents.items() if isinstance(a.get("voice"), str)
+              and a["voice"] in usable_voices and _prompt_for(a)]
+    if not pack and not dev:
+        bundle_error = "The default agent bundle is missing or unreadable. Repair ATLAS, or import a voice and create an agent."
+    elif bundle_default and bundle_default not in usable:
+        bundle_error = bundle_error or "The default agent has no usable voice or personality. Repair ATLAS, or choose another agent."
+    # Settings I/O stays outside the registry lock. A public saved selection
+    # determines both persona and voice, rather than two independent defaults.
+    selected = None
+    if not dev:
+        import user_settings
+        selected = user_settings.load().get("agent")
+    if dev and default in usable:
+        pass
+    elif selected in usable:
+        default = selected
+    else:
+        default = (next((aid for aid in usable if agents[aid].get("custom")), None)
+                   or (bundle_default if bundle_default in usable else None)
+                   or next(iter(usable), None))
+    with _lock:   # update in place, so a reader without the lock never sees it empty
+        _state.update(agents=agents, voices=voices, default=default, traits=traits,
+                      usable=usable, bundle_error=bundle_error)
     return _state
 
 
 def _s() -> dict:
     with _lock:
-        if not _state:
-            reload()
+        initialized = bool(_state)
+    if not initialized:
+        reload()  # settings I/O and asset decoding never run under the registry lock
+    with _lock:
         return _state
 
 
@@ -140,20 +246,27 @@ def default_agent() -> str | None:
     return _s()["default"]
 
 
+def ready_agents() -> list[dict]:
+    state = _s()
+    return [{"id": aid, "name": state["agents"][aid].get("name") or aid.title(),
+             "voice": state["agents"][aid]["voice"], "bundled": bool(state["agents"][aid].get("bundled"))}
+            for aid in state.get("usable", [])]
+
+
+def ready_agent() -> dict | None:
+    return next((a for a in ready_agents() if a["id"] == default_agent()), None)
+
+
+def bundle_error() -> str | None:
+    return _s().get("bundle_error")
+
+
 def is_dev(aid: str) -> bool:
     return bool(agent(aid).get("dev"))
 
 
 def prompt_text(aid: str) -> str | None:
-    a = agent(aid)
-    if a.get("prompt"):
-        return str(a["prompt"]).strip()
-    p = _abs(a.get("prompt_file"))
-    try:
-        return Path(p).read_text(encoding="utf-8").strip() if p else None
-    except FileNotFoundError:
-        logger.warning("registry: prompt file for %s missing: %s", aid, p)
-        return None
+    return _prompt_for(agent(aid))
 
 
 def display_name(aid: str) -> str:
@@ -165,6 +278,8 @@ def meta(aid: str) -> dict:
     out = {"role": a.get("role", ""), "accent": a.get("accent", "#22d3ee")}
     if a.get("custom"):
         out.update(name=a.get("name"), custom=True)
+    if a.get("bundled"):
+        out.update(name=a.get("name"), bundled=True)
     return out
 
 

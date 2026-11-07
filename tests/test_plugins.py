@@ -52,14 +52,41 @@ class Registry(Base):
         self.assertFalse(names - owned, f"tools with no plugin switch: {names - owned}")
 
     def test_defaults(self):
-        # Every plugin starts at its declared default; opt-in ones (floor referee) start off.
-        dflt = {p["id"]: p.get("default", True) for p in P.BUILTIN}
-        self.assertTrue(all(p["enabled"] == dflt[p["id"]] for p in P.listing()))
-        off_tools = {t for p in P.BUILTIN if not p.get("default", True) for t in p["tools"]}
+        self.assertTrue(all(p["default"] is False for p in P.BUILTIN))
+        self.assertTrue(all(not p["enabled"] and not p["installed"] for p in P.listing()))
+        off_tools = {t for p in P.BUILTIN for t in P._builtin_tools(p)}
         self.assertEqual(P.tool_names_disabled(), off_tools)
-        self.assertEqual(off_tools, {"floor_stats", "start_topic", "debate_sides", "check_claim", "translate_line"})
+        self.assertFalse(P.filter_tools(_tools(*off_tools)))
+
+    def test_install_never_enables_and_persists(self):
+        item = P.install("clock")
+        self.assertTrue(item["installed"])
+        self.assertFalse(item["enabled"])
+        self.assertIn("check_date_time", P.tool_names_disabled())
+        P._cache[:] = [None, None]
+        self.assertTrue(P.is_installed("clock"))
+        self.assertFalse(P.is_enabled("clock"))
+
+    def test_existing_choices_survive_new_plugins_stay_off(self):
+        P.USER.mkdir()
+        P.STATE_PATH.write_text(json.dumps({"clock": {"enabled": True}, "notes": {"enabled": False},
+                                           "weather": {"settings": {"home": "London"}}}))
+        before = P.STATE_PATH.read_bytes()
+        self.assertTrue(P.is_enabled("clock"))
+        self.assertTrue(P.is_installed("notes"))
+        self.assertFalse(P.is_enabled("notes"))
+        self.assertFalse(P.is_enabled("weather"))
+        self.assertFalse(P.is_installed("game_info"))
+        P.listing()
+        self.assertEqual(P.STATE_PATH.read_bytes(), before)
+
+    def test_settings_and_keys_never_enable(self):
+        P.save_settings("web_search", {"exa": "exa-test-key-123456789"})
+        self.assertFalse(P.is_enabled("web_search"))
+        self.assertIn("web_search", P.tool_names_disabled())
 
     def test_switch_off_removes_tools(self):
+        P.set_enabled("clock", True)
         P.set_enabled("web_search", False)
         kept = [t["function"]["name"] for t in P.filter_tools(_tools("web_search", "read_page", "check_date_time"))]
         self.assertEqual(kept, ["check_date_time"])
@@ -124,6 +151,7 @@ class Settings(Base):
 
     def test_search_tool_hidden_without_key(self):
         import unittest.mock as m
+        P.set_enabled("web_search", True)
         with m.patch.object(self.ws, "available", return_value=False):
             self.assertIn("web_search", P.tool_names_disabled())
             self.assertFalse(P.usable("web_search"))
@@ -168,10 +196,67 @@ class Abilities(unittest.TestCase):
 
 class Market(Base):
     def test_builtins_installed_plus_catalog(self):
+        P.install("clock")
         m = P.marketplace()
         ids = {p["id"] for p in P.BUILTIN}
-        self.assertTrue(all(x["status"] == "installed" for x in m if x["id"] in ids))
+        self.assertTrue(all(x["status"] == "available" for x in m if x["id"] in ids - {"clock"}))
+        self.assertEqual(next(x for x in m if x["id"] == "clock")["status"], "installed")
         self.assertTrue(any(x["status"] == "coming_soon" for x in m))
+
+
+class Dependencies(Base):
+    def test_search_and_factcheck_need_setup(self):
+        self.assertFalse(P.readiness("web_search")["ready"])
+        self.assertFalse(P.readiness("fact_check")["ready"])
+        P.set_enabled("fact_check", True)
+        self.assertFalse(P.usable("fact_check"))
+        P.set_enabled("web_search", True)
+        P.save_settings("web_search", {"brave": "test-brave-key-22222222"})
+        self.assertTrue(P.usable("fact_check"))
+
+    def test_text_only_eyes_are_not_advertised(self):
+        from unittest.mock import patch
+        import screen
+        P.set_enabled("eyes", True)
+        with patch.object(screen, "model_vision", return_value={"vision_supported": False, "unavailable_reason": "Text-only model"}):
+            self.assertFalse(P.usable("eyes"))
+            self.assertIn("look_at_screen", P.tool_names_disabled())
+
+    def test_live_features_report_missing_server(self):
+        from unittest.mock import patch
+        import live_screen
+        with patch.object(live_screen, "_transport_ok", return_value=False):
+            for pid in ("live_screen", "think_listen"):
+                self.assertFalse(P.readiness(pid)["ready"])
+                self.assertIn("vLLM", P.readiness(pid)["message"])
+
+    def test_nemotron_configured_python_is_used(self):
+        from nemotron_client import python_path
+        exe = self.tmp / "python.exe"
+        exe.touch()
+        P.save_settings("nemotron_diarization", {"python": str(exe)})
+        self.assertEqual(python_path(), str(exe))
+        self.assertFalse(P.is_enabled("nemotron_diarization"))
+        self.assertTrue(P.readiness("nemotron_diarization")["ready"])
+
+    def test_disabled_plugin_tool_is_rejected_before_execution(self):
+        import ast
+        from types import SimpleNamespace
+        path = Path(__file__).resolve().parents[1] / "speech_pipeline_manager.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "SpeechPipelineManager")
+        fn = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == "_run_tool")
+        ns = {}
+        exec(compile(ast.Module(body=[fn], type_ignores=[]), str(path), "exec"), ns)
+        out = ns["_run_tool"](SimpleNamespace(), "check_date_time", {})
+        self.assertIn("switched off", out)
+
+    def test_old_task_notes_can_be_hidden_without_deleting_them(self):
+        import tasks
+        b = tasks.TaskBoard("juniper")
+        b.add_note("a saved follow-up")
+        self.assertEqual(b.note(kinds=set()), "")
+        self.assertIn("a saved follow-up", b.note(kinds={"note"}))
 
 
 class Api(Base):
@@ -188,6 +273,20 @@ class Api(Base):
     def test_remote_denied(self):
         self.assertEqual(self.remote.get("/api/plugins").status_code, 403)
         self.assertEqual(self.remote.post("/api/plugins/eyes/enabled", json={"enabled": False}).status_code, 403)
+        self.assertEqual(self.remote.post("/api/plugins/clock/install", json={}).status_code, 403)
+
+    def test_install_then_enable(self):
+        r = self.local.post("/api/plugins/clock/install", json={})
+        self.assertEqual(r.status_code, 200)
+        self.assertFalse(r.json()["plugin"]["enabled"])
+        self.assertTrue(r.json()["plugin"]["installed"])
+        self.assertEqual(self.local.post("/api/plugins/calendar/install", json={}).status_code, 404)
+        r = self.local.post("/api/plugins/clock/enabled", json={"enabled": True})
+        self.assertTrue(r.json()["plugin"]["enabled"])
+
+    def test_disabled_actions_cannot_run(self):
+        self.assertEqual(self.local.post("/api/plugins/highlights/action", json={"act": "clip"}).status_code, 409)
+        self.assertEqual(self.local.post("/api/plugins/soul_reflection/action", json={"act": "approve"}).status_code, 409)
 
     def test_toggle_and_settings(self):
         self.assertEqual(len(self.local.get("/api/plugins").json()["plugins"]), len(P.BUILTIN))

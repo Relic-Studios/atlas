@@ -36,6 +36,13 @@ RESTART_BACKOFF_S = 30.0
 
 
 def python_path() -> str:
+    try:
+        import plugins
+        configured = str(plugins.settings_of("nemotron_diarization").get("python") or "").strip()
+        if configured:
+            return configured
+    except Exception:
+        pass
     if os.environ.get("ATLAS_NEMOTRON_PYTHON"):
         return os.environ["ATLAS_NEMOTRON_PYTHON"]
     try:

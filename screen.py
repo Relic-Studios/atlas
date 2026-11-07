@@ -69,6 +69,111 @@ _state = {
     "glances": [],                   # times of looks nobody asked for (rate limit)
 }
 
+# Capability probes run away from audio and HTTP event loops. Owner intent in
+# _state stays separate from the active model's ability to consume images.
+_model_provider = None
+_vision_lock = threading.Lock()
+_vision = {"key": None, "supported": None, "reason": "Model image support has not been checked."}
+_vision_thread = None
+
+
+def _model_identity():
+    llm = _model_provider() if _model_provider is not None else None
+    if llm is None:
+        return None, None
+    remote = getattr(llm, "remote", None)
+    if remote is not None and not (getattr(remote, "down_until", 0) > time.time()
+                                   and remote.cfg.get("allow_local_fallback", True)):
+        cfg = remote.cfg
+        key = ("remote", cfg.get("url", ""), cfg.get("model", ""), cfg.get("vision"))
+        return key, cfg
+    return ("local", getattr(llm, "effective_ollama_url", None) or "http://127.0.0.1:11434",
+            getattr(llm, "model", "")), None
+
+
+def _declared_vision(data):
+    if not isinstance(data, dict):
+        return None
+    for values in (data.get("capabilities"), data.get("input_modalities"),
+                   (data.get("architecture") or {}).get("input_modalities")):
+        if isinstance(values, list):
+            return any(str(x).lower() in {"vision", "image", "images"} for x in values)
+    return None
+
+
+def _probe_vision(key, cfg=None):
+    import requests
+    if cfg is not None and isinstance(cfg.get("vision"), bool):
+        return cfg["vision"]
+    if key[0] == "local":
+        response = requests.post(key[1].rstrip("/") + "/api/show", json={"model": key[2]}, timeout=2)
+        response.raise_for_status()
+        return _declared_vision(response.json())
+    url = key[1].rstrip("/")
+    if not url.endswith("/v1"):
+        url += "/v1"
+    headers = {"Authorization": "Bearer " + cfg["key"]} if cfg.get("key") else {}
+    response = requests.get(url + "/models", headers=headers, timeout=2)
+    response.raise_for_status()
+    record = next((x for x in response.json().get("data", []) if x.get("id") == key[2]), {})
+    return _declared_vision(record)
+
+
+def _refresh_vision():
+    key, cfg = _model_identity()
+    if key is None:
+        return
+    try:
+        supported = _probe_vision(key, cfg)
+    except Exception:  # metadata is optional; never claim a failed probe proves text-only
+        supported = None
+    reason = (f"{key[2]} is text-only. Choose a vision-capable model to use Eyes." if supported is False
+              else ("Model image support is confirmed." if supported is True
+                    else f"Image support for {key[2]} is unverified. Check the selected model's capabilities."))
+    if _model_identity()[0] == key:
+        with _vision_lock:
+            changed = (_vision.get("key"), _vision.get("supported")) != (key, supported)
+            _vision.update(key=key, supported=supported, reason=reason)
+        if changed:
+            # Tools must follow the active model after startup and model switches,
+            # even when no plugin switch was touched in the meantime.
+            try:
+                import plugins
+                plugins._changed()
+            except Exception:
+                logger.debug("vision plugin refresh failed", exc_info=True)
+
+
+def bind_model(provider):
+    """Bind the active LLM getter; cache metadata without blocking status/capture."""
+    global _model_provider, _vision_thread
+    _model_provider = provider
+    if _vision_thread is None:
+        def watch():
+            last_key, checked = None, 0.0
+            while True:
+                try:
+                    key, _ = _model_identity()
+                    if key != last_key or time.monotonic() - checked >= 30:
+                        _refresh_vision()
+                        last_key, checked = key, time.monotonic()
+                except Exception:
+                    pass
+                time.sleep(1)
+        _vision_thread = threading.Thread(target=watch, name="ModelVisionProbe", daemon=True)
+        _vision_thread.start()
+
+
+def model_vision() -> dict:
+    key, _ = _model_identity()
+    with _vision_lock:
+        state = dict(_vision)
+    if key is None:
+        return {"vision_supported": None, "model": "", "unavailable_reason": ""}
+    if state["key"] != key:
+        state.update(supported=None, reason=f"Checking image support for {key[2]}.")
+    return {"vision_supported": state["supported"], "model": key[2], "unavailable_reason": state["reason"]}
+
 # Looks the agent takes on its own (owner 11-01: "when they feel like they need or
 # want to see them"). Eyes plugin setting "glance": cooldown since the last look of
 # any kind, and a cap per 10 minutes. Looks someone asks for are never limited.
@@ -80,6 +185,8 @@ def can_glance(mode: str = "sometimes", now: float | None = None) -> bool:
     """Would a look nobody asked for be allowed right now?"""
     lim = GLANCE_LIMITS.get(mode)
     if lim is None:
+        return False
+    if model_vision()["vision_supported"] is False:
         return False
     now = time.time() if now is None else now
     with _lock:
@@ -97,7 +204,12 @@ def set_enabled(on: bool) -> None:
 
 def status() -> dict:
     with _lock:
-        return dict(_state)
+        out = dict(_state)
+    out.update(model_vision())
+    out["requested_enabled"] = out["enabled"]
+    if out["vision_supported"] is False:
+        out["enabled"] = False
+    return out
 
 
 def _grab():
@@ -354,6 +466,9 @@ def capture(reason: str = "", grab=None, asked: bool = True, glance: str = "some
     setting and its rate limit, and answered as a glance rather than a request.
     With Live screen on (live_screen.enabled()) the frames come from the live capture, never a screenshot;
     `plan` (live_screen.plan.Plan) or `line` decides the kind of look."""
+    model = model_vision()
+    if model["vision_supported"] is False:
+        return {"text": model["unavailable_reason"] + " Say you can't see images with this model."}
     with _lock:
         enabled = _state["enabled"]
     if not enabled:

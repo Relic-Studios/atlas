@@ -55,7 +55,8 @@ def should_yield(text: str, names: tuple[str, ...] = (), *, speaker: str | None 
     Yield to: her name, a stop/shut-up aimed at her, her conversation partner
     taking the floor back, or anyone who clearly takes over (sustained speech).
     Talk over: backchannels, short remarks, side chatter addressed to someone
-    else, and anything that lands when she's about to finish anyway.
+    else, and short remarks when she's about to finish. A partner's new question
+    still takes the floor so it cannot disappear at the end of a short reply.
     """
     from floor import BACKCHANNEL
     body = _body(text)
@@ -70,6 +71,9 @@ def should_yield(text: str, names: tuple[str, ...] = (), *, speaker: str | None 
     if detect_silence_request(body) is not None and not to_other:
         return True, "stop"
     content = [t for t in w if t not in BACKCHANNEL]
+    if (not to_other and speaker and speaker == partner and "?" in body
+            and len(content) >= 2 and w[0] not in _GROUP_VOCATIVE):
+        return True, "partner asked"
     if agent_left_s is not None and agent_left_s <= FINISH_S:
         return False, "finishing her line"
     if to_other:

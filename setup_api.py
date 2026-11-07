@@ -8,6 +8,7 @@ the creator endpoints in server.py (/api/voices/import, /api/agents/*).
 Owner-only (this machine) for anything that writes or spends: the server binds
 0.0.0.0, so a LAN client must never be able to change the model or read keys.
 """
+import asyncio
 import json
 import logging
 import os
@@ -25,12 +26,78 @@ import user_settings as US
 log = logging.getLogger(__name__)
 router = APIRouter()
 
+def _stop_restart_children(parent=None, term_timeout=2.0, kill_timeout=1.0) -> bool:
+    """Release this backend's descendants before Electron replaces it.
+
+    RealtimeSTT's Windows worker can outlive os._exit, retaining Whisper on the
+    GPU. Use captured process objects and bounded waits, never executable names.
+    """
+    import psutil
+    try:
+        parent = parent or psutil.Process()
+        children = parent.children(recursive=True)
+        for child in children:
+            try:
+                child.terminate()
+            except psutil.NoSuchProcess:
+                pass
+            except psutil.Error as exc:
+                log.warning("restart: could not terminate child %s: %s", child.pid, exc)
+        _, alive = psutil.wait_procs(children, timeout=term_timeout)
+        for child in alive:
+            try:
+                child.kill()
+            except psutil.NoSuchProcess:
+                pass
+            except psutil.Error as exc:
+                log.warning("restart: could not kill child %s: %s", child.pid, exc)
+        _, alive = psutil.wait_procs(alive, timeout=kill_timeout)
+        remaining = parent.children(recursive=True)
+        def running(child):
+            try:
+                return child.is_running() and child.status() != psutil.STATUS_ZOMBIE
+            except psutil.NoSuchProcess:
+                return False
+        left = [p.pid for p in alive + remaining if running(p)]
+        if left:
+            log.error("restart refused: backend children still alive: %s", sorted(set(left)))
+        return not left
+    except psutil.Error:
+        log.exception("restart refused: could not verify backend child cleanup")
+        return False
+
+
+def exit_for_restart():
+    """Deliver the response, then restart only after owned workers are gone."""
+    time.sleep(0.6)
+    try:
+        from call_recorder import REC
+        REC.close(timeout=2.0)
+        code = 75 if _stop_restart_children() else 1
+    except Exception:
+        log.exception("restart refused: recorder close or child cleanup failed")
+        code = 1
+    os._exit(code)
+
+
 _LOOPBACK = {"127.0.0.1", "::1", "localhost"}
 
 
 def _owner(request: Request) -> bool:
     host = getattr(getattr(request, "client", None), "host", "") or ""
-    return host in _LOOPBACK or host.startswith("127.")
+    if not (host in _LOOPBACK or host.startswith("127.")):
+        return False
+    origin=(getattr(request,"headers",{}) or {}).get("origin")
+    if origin:
+        from urllib.parse import urlsplit
+        try:
+            parsed=urlsplit(origin)
+            port=parsed.port or (443 if parsed.scheme=="https" else 80)
+            return (parsed.scheme in ("http","https") and parsed.hostname in _LOOPBACK
+                    and port==int(os.environ.get("ATLAS_PORT","8000")))
+        except ValueError:
+            return False
+    return True
 
 
 def _deny():
@@ -85,18 +152,17 @@ def test_cloud(base_url: str, model: str, api_key: str, timeout: float = 20.0) -
     # ATLAS's [SPEAK]/[HOLD] header is still a broken setup (10-03: reasoning models
     # spent an 8-token probe thinking and returned an empty reply that was marked "ok").
     import re as _re
+    from remote_llm import provider_request_body
     hdr = _re.compile(r"^\s*\[(SPEAK to=[^\]]+|HOLD)\]")
     got, ms = [], None
     for line, want in PROBE_CASES:
         body = {"model": model, "max_tokens": 60, "temperature": 0,
                 "messages": [{"role": "system", "content": PROBE_SYSTEM},
                              {"role": "user", "content": line}]}
+        body = provider_request_body(body, url, think=False)
         t0 = time.time()
         try:
-            r = requests.post(url + "/chat/completions", headers=h, timeout=timeout,
-                              json=dict(body, chat_template_kwargs={"enable_thinking": False}))
-            if r.status_code in (400, 422):  # providers that reject unknown fields
-                r = requests.post(url + "/chat/completions", headers=h, timeout=timeout, json=body)
+            r = requests.post(url + "/chat/completions", headers=h, timeout=timeout, json=body)
         except requests.RequestException as e:
             return {"ok": False, "error": f"could not reach {url}: {type(e).__name__}"}
         if ms is None:
@@ -115,6 +181,9 @@ def test_cloud(base_url: str, model: str, api_key: str, timeout: float = 20.0) -
         return {"ok": False, "ms": ms, "probe": got,
                 "error": (f"the key works, but {model} doesn't follow the reply format ATLAS needs "
                           f"(it answered: \"{bad[0][2] or '(nothing)'}\"). Try a larger or non-reasoning model.")}
+    if got[0][1] != "SPEAK" or not hdr.sub("", got[0][2], count=1).strip():
+        return {"ok": False, "ms": ms, "probe": got,
+                "error": f"the key works, but {model} gave no spoken reply when directly addressed. Try another model."}
     return {"ok": True, "ms": ms, "probe": got, "reply": got[0][2][:60],
             "routing_correct": sum(1 for w, g, _ in got if w == g)}
 
@@ -175,6 +244,9 @@ def test_local(url: str, model: str, timeout: float = 120.0) -> dict:
         return {"ok": False, "error": (f"{model} doesn't follow the reply format ATLAS needs "
                                        f"(it answered: \"{bad[0][2]}\"). Pick a recommended model "
                                        "or use a cloud provider."), "probe": got}
+    if got[0][1] != "SPEAK" or not hdr.sub("", got[0][2], count=1).strip():
+        return {"ok": False, "probe": got,
+                "error": f"{model} gave no spoken reply when directly addressed. Pick another model or a cloud provider."}
     return {"ok": True, "probe": got, "routing_correct": sum(1 for w, g, _ in got if w == g)}
 
 
@@ -212,6 +284,32 @@ def pull_state() -> dict:
 # ---------------------------------------------------------------------------
 # routes
 # ---------------------------------------------------------------------------
+def configured_brain_error() -> str | None:
+    """Configuration readiness only; setup's existing save route owns model probes."""
+    llm = US.load().get("llm") or {}
+    if not isinstance(llm, dict):
+        return "Choose and save a brain before completing setup."
+    nonblank = lambda value: isinstance(value, str) and bool(value.strip())
+    mode = llm.get("mode") or "local"
+    if mode == "local":
+        local = llm.get("local") or {}
+        if isinstance(local, dict) and nonblank(local.get("model")):
+            return None
+    elif mode == "cloud":
+        cloud = llm.get("cloud") or {}
+        if isinstance(cloud, dict):
+            provider = cloud.get("provider") or "custom"
+            if provider in ("codex","claude_code"):
+                return None if US.cloud_config() else "Connect, verify and save your subscription brain before completing setup."
+            if (isinstance(provider, str)
+                    and nonblank(cloud.get("base_url")) and nonblank(cloud.get("model"))):
+                preset = US.PROVIDERS.get(provider, US.PROVIDERS["custom"])
+                if not preset.get("keys") or nonblank(cloud.get("api_key")):
+                    return None
+                return "Save the API key for your chosen brain before completing setup."
+    return "Choose and save a brain before completing setup."
+
+
 @router.get("/api/setup/status")
 def setup_status():   # plain def: FastAPI runs it off the event loop (nvidia-smi, audio devices, Ollama probe)
     loc = US.local_llm()
@@ -222,15 +320,16 @@ def setup_status():   # plain def: FastAPI runs it off the event loop (nvidia-sm
     except Exception:  # noqa: BLE001
         devices = {"inputs": [], "outputs": []}
     try:
-        import voices
-        voice_list = voices.voice_names()
-    except Exception:  # noqa: BLE001
-        voice_list = []
-    try:
-        import agents as _ag
-        agent_list = [a.get("id") for a in _ag.load_registry()]
+        import agent_registry as registry
+        registry.reload()
+        agent_list = registry.agent_ids()
+        voice_list = list(registry.voices())
+        choices, ready, bundle_error = registry.ready_agents(), registry.ready_agent(), registry.bundle_error()
     except Exception:  # noqa: BLE001
         agent_list = []
+        voice_list = []
+        choices, ready, bundle_error = [], None, "Agent configuration could not be read. Repair ATLAS, or create an agent."
+    brain_error = configured_brain_error()
     return {
         "setup_needed": US.setup_needed(),
         "public": US.is_public(),
@@ -238,11 +337,17 @@ def setup_status():   # plain def: FastAPI runs it off the event loop (nvidia-sm
         "gpu": gpu,
         "ollama": ollama_info(loc["url"]),
         "recommended": US.recommend_local_model(gpu.get("total_gb", 0)),
-        "local_models": US.LOCAL_MODELS,
-        "providers": {k: {kk: v[kk] for kk in ("label", "base_url", "model", "keys")} for k, v in US.PROVIDERS.items()},
+        "recommended_vision": US.recommend_local_model(gpu.get("total_gb", 0), vision=True),
+        "local_models": [dict(m, vision=False, tools=True) for m in US.LOCAL_MODELS] + US.VISION_MODELS,
+        "providers": {k: {kk: v.get(kk) for kk in ("label", "base_url", "model", "keys", "protocol", "auth_mode", "install_url")} for k, v in US.PROVIDERS.items()},
         "devices": devices,
         "voices": voice_list,
         "agents": agent_list,
+        "agent_choices": choices,
+        "ready_agent": ready,
+        "bundle_error": bundle_error,
+        "brain_ready": brain_error is None,
+        "brain_error": brain_error,
         "pull": pull_state(),
     }
 
@@ -288,6 +393,135 @@ async def setup_ollama_install(request: Request):
     return {"started": True}
 
 
+def _account_error(exc):
+    from provider_errors import ProviderError
+    if isinstance(exc, ProviderError):
+        status={"not_found":404,"busy":409,"sign_in_required":401,"usage_limit":429}.get(exc.code,400)
+        return JSONResponse({"error": str(exc), "provider_error": exc.public()}, status_code=status,headers={"Cache-Control":"no-store"})
+    return JSONResponse({"error": "The account operation failed. Update the official CLI and retry."}, status_code=400,headers={"Cache-Control":"no-store"})
+
+
+def _account_response(value):
+    return JSONResponse(value,headers={"Cache-Control":"no-store"})
+
+
+def test_account(provider, model, configured=None, vision=None):
+    """Same native session as voice; a verified limit is not a successful reply probe."""
+    import re
+    from provider_accounts import account_status, account_models
+    from provider_errors import ProviderError
+    from native_providers import NativeSession
+    from codex_native import instruction_fingerprint
+    account = account_status(provider, configured)
+    if not account["connected"]:
+        raise ProviderError(provider,"sign_in_required",account["message"])
+    catalog = account_models(provider,configured)
+    if not model:
+        model = next((m["id"] for m in catalog if m.get("default")), catalog[0]["id"] if catalog else "")
+    if not isinstance(model,str) or not model.strip():
+        raise ProviderError(provider,"model_access","Choose an account model before continuing.")
+    metadata = next((m for m in catalog if m["id"]==model),{})
+    if provider=="codex" and not metadata:
+        raise ProviderError(provider,"model_access","Choose a model listed for this Codex account.")
+    cfg={"provider":provider,"protocol":US.PROVIDERS[provider]["protocol"],"auth_mode":"subscription",
+         "model":model,"executable":configured or None,"account_binding":account["account_binding"],
+         "label":US.PROVIDERS[provider]["label"],"url":"","allow_local_fallback":False}
+    if provider=="codex":cfg["instruction_fingerprint"]=instruction_fingerprint()
+    probe=[]
+    start=time.monotonic()
+    session=NativeSession(cfg)
+    state="tested"
+    provider_error=None
+    try:
+        for line,want in PROBE_CASES:
+            try:
+                reply=session.post("/api/chat",json={"messages":[{"role":"system","content":PROBE_SYSTEM},
+                    {"role":"user","content":line}],"options":{"temperature":0,"num_predict":60}}).json()["message"]["content"]
+            except ProviderError as exc:
+                if exc.code!="usage_limit" or not session.isolation_verified:
+                    raise
+                state,provider_error="limited",exc.public()
+                break
+            match=re.match(r"^\s*\[(SPEAK to=[^\]]+|HOLD)\]",reply)
+            got=match.group(1).split()[0] if match else None
+            probe.append((want,got,reply.strip()[:120]))
+            if not match or want=="SPEAK" and (got!="SPEAK" or not reply[match.end():].strip()):
+                raise ProviderError(provider,"reply_format","The account connected, but this model did not follow Atlas's required reply format. Choose another model.")
+        fresh=account_status(provider,configured)
+        if not fresh["connected"] or fresh["account_binding"]!=cfg["account_binding"]:
+            raise ProviderError(provider,"account_changed","The account changed during setup. Verify it and retry.")
+        actual=session.resolved_model or model
+        if provider=="claude_code" and model in ("sonnet","opus","haiku"):
+            cfg["model"]=actual
+        cfg.pop("label",None);cfg.pop("url",None);cfg.pop("allow_local_fallback",None)
+        known=metadata.get("vision")
+        cfg["vision"]=known if isinstance(known,bool) else vision if isinstance(vision,bool) else None
+        cfg["verification"]={"status":state,"verified_at":int(time.time()),"isolation_verified":session.isolation_verified,
+            "cli_version":session.cli_version,"provider_error":provider_error,"participation_tested":state=="tested"}
+        return {"ok":True,"ms":int((time.monotonic()-start)*1000),"probe":probe,"verification":state,
+                "provider_error":provider_error,"routing_correct":sum(w==g for w,g,_ in probe),"cloud":cfg}
+    finally:
+        session.close()
+
+
+@router.post("/api/setup/provider/status")
+async def setup_provider_status(request: Request):
+    if not _owner(request):
+        return _deny()
+    b = await request.json()
+    try:
+        from provider_accounts import account_status
+        return _account_response(await asyncio.to_thread(account_status, b.get("provider"), b.get("executable")))
+    except Exception as exc:
+        return _account_error(exc)
+
+
+@router.post("/api/setup/provider/models")
+async def setup_provider_models(request: Request):
+    if not _owner(request):
+        return _deny()
+    b = await request.json()
+    try:
+        from provider_accounts import account_models
+        return _account_response({"models": await asyncio.to_thread(account_models, b.get("provider"), b.get("executable"))})
+    except Exception as exc:
+        return _account_error(exc)
+
+
+@router.post("/api/setup/provider/connect")
+async def setup_provider_connect(request: Request):
+    if not _owner(request):
+        return _deny()
+    b = await request.json()
+    try:
+        from provider_accounts import start_login
+        return _account_response(await asyncio.to_thread(start_login, b.get("provider"), b.get("executable")))
+    except Exception as exc:
+        return _account_error(exc)
+
+
+@router.get("/api/setup/provider/connect/{attempt_id}")
+async def setup_provider_connection(request: Request, attempt_id: str):
+    if not _owner(request):
+        return _deny()
+    try:
+        from provider_accounts import login_state
+        return _account_response(login_state(attempt_id))
+    except Exception as exc:
+        return _account_error(exc)
+
+
+@router.delete("/api/setup/provider/connect/{attempt_id}")
+async def setup_provider_disconnect(request: Request, attempt_id: str):
+    if not _owner(request):
+        return _deny()
+    try:
+        from provider_accounts import login_state
+        return _account_response(await asyncio.to_thread(login_state, attempt_id, True))
+    except Exception as exc:
+        return _account_error(exc)
+
+
 @router.post("/api/setup/llm")
 async def setup_llm(request: Request):
     """{mode:"local", model, url?} or {mode:"cloud", provider, base_url, model, api_key}.
@@ -301,31 +535,49 @@ async def setup_llm(request: Request):
         if not model:
             return JSONResponse({"error": "pick a model"}, status_code=400)
         url = b.get("url") or US.local_llm()["url"]
-        res = test_local(url, model) if not b.get("skip_probe") else {"ok": True}
+        res = await asyncio.to_thread(test_local, url, model) if not b.get("skip_probe") else {"ok": True}
         if not res["ok"]:
             return JSONResponse(res, status_code=400)
         US.update({"llm": {"mode": "local", "local": {"model": model, "url": url}}})
         return {**res, "settings": US.public_view(), "restart": True}
     if mode == "cloud":
         prov = b.get("provider") or "custom"
+        if prov in ("codex","claude_code"):
+            try:
+                res=await asyncio.to_thread(test_account,prov,b.get("model"),b.get("executable"),b.get("vision"))
+                cloud=res.pop("cloud")
+                try:
+                    context=int(b.get("context") or 0)
+                except (TypeError,ValueError):
+                    context=0
+                if context>0:
+                    cloud["context"]=max(US.MIN_CONTEXT,context)
+                US.replace_cloud(cloud)
+                return {**res,"settings":US.public_view(),"restart":True}
+            except Exception as exc:
+                return _account_error(exc)
         preset = US.PROVIDERS.get(prov, US.PROVIDERS["custom"])
         base = (b.get("base_url") or preset["base_url"]).strip()
         model = (b.get("model") or preset["model"]).strip()
         key = b.get("api_key")
         if key in (None, ""):  # keep the stored key when the user didn't retype it
-            key = ((US.load().get("llm") or {}).get("cloud") or {}).get("api_key", "")
-        res = test_cloud(base, model, key)
+            saved = ((US.load().get("llm") or {}).get("cloud") or {})
+            # A saved credential belongs to one provider endpoint. A blank field on a different
+            # provider/server must never forward the previous server's key to that destination.
+            same_endpoint = (saved.get("base_url") or "").strip().rstrip("/") == base.rstrip("/")
+            key = saved.get("api_key", "") if saved.get("provider") == prov and same_endpoint else ""
+        res = await asyncio.to_thread(test_cloud, base, model, key)
         if not res["ok"]:
             return JSONResponse(res, status_code=400)
         cloud = {"provider": prov, "base_url": base, "model": model, "api_key": key,
-                 "vllm": prov == "custom" and bool(b.get("vllm"))}
+                 "vllm": prov == "custom" and bool(b.get("vllm")), "vision": b.get("vision") is True}
         try:   # optional: the model's context window (memory budgets follow it, docs/designs/experience_memory.md D4)
             ctx = int(b.get("context") or 0)
         except (TypeError, ValueError):
             ctx = 0
         if 2048 <= ctx <= 1_048_576:
             cloud["context"] = ctx
-        US.update({"llm": {"mode": "cloud", "cloud": cloud}})
+        US.replace_cloud(cloud)
         return {**res, "settings": US.public_view(), "restart": True}
     return JSONResponse({"error": "mode must be local or cloud"}, status_code=400)
 
@@ -344,9 +596,16 @@ async def setup_complete(request: Request):
     if not _owner(request):
         return _deny()
     b = (await request.json()) or {}
-    patch = {"setup_complete": True}
-    if b.get("agent"):
-        patch["agent"] = b["agent"]
+    brain_error = configured_brain_error()
+    if brain_error:
+        return JSONResponse({"error": brain_error}, status_code=400)
+    import agent_registry as registry
+    registry.reload()
+    selected = b.get("agent") if "agent" in b else registry.default_agent()
+    ready = next((a for a in registry.ready_agents() if a["id"] == selected), None)
+    if ready is None:
+        return JSONResponse({"error": "Choose an available agent with a usable voice, or repair ATLAS to restore Juniper."}, status_code=400)
+    patch = {"setup_complete": True, "agent": ready["id"]}
     US.update(patch)
     return {"ok": True, "restart": True}
 

@@ -360,12 +360,14 @@ class TaskBoard:
             self._save()
 
     # ----------------------------------------------------------------- prompt
-    def note(self) -> str:
+    def note(self, kinds=None) -> str:
         """Compact TASK BOARD block for the prompt ('' when empty)."""
         now = self.clock()
         lines = []
         with self.lock:
             for t in self.tasks:
+                if kinds is not None and t["kind"] not in kinds:
+                    continue
                 age = max(0, int(now - t["updated"]))
                 ago = f"{age}s ago" if age < 90 else f"{age // 60} min ago"
                 who = f" for {t['asker']}" if t["asker"] else ""

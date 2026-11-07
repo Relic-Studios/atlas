@@ -93,7 +93,7 @@ class Director:
     def agent_block(self, audible: bool):
         if audible and not self.agent_on:
             self.ev("agent_start", t=self.t)
-            if self.line_end_t is not None:
+            if self.cur is None and self.line_end_t is not None:
                 self.agent_started_after_line = True
         if not audible and self.agent_on:
             self.ev("agent_end", t=self.t)
@@ -121,6 +121,8 @@ class Director:
         out = np.zeros(n, dtype=np.float32)
         if self.cur is None and self.i < len(self.lines) and self._ready():
             self.cur, self.pos = self.audio[self.i], 0
+            self.line_end_t = None
+            self.agent_started_after_line = self.agent_finished_after_line = False
             ln = self.lines[self.i]
             self.ev("line_start", line=self.i, who=ln.get("who"), text=ln.get("text"), t=self.t)
         if self.cur is not None:
@@ -132,7 +134,10 @@ class Director:
                 self.ev("line_end", line=self.i, t=self.t)
                 self.cur = None
                 self.line_end_t = self.t
-                self.agent_started_after_line = self.agent_finished_after_line = False
+                # An early acknowledgment cannot stand in for the answer to the
+                # completed human line. A reply still playing across its end counts.
+                self.agent_started_after_line = self.agent_on
+                self.agent_finished_after_line = False
                 self.i += 1
         if self.i >= len(self.lines) and self.cur is None and not self.agent_on and self.done_at is None \
                 and self.t - self.last_sound > 1.0:
@@ -175,6 +180,7 @@ class VirtualCallAudio(CallAudio):
         self._hum, self._agt = [], []
         self._thread = None
         self.wall_t0 = None
+        self._output = None
 
     def _event(self, kind, **kw):
         rec = dict(kind=kind, wall=time.time(), **kw)
@@ -185,14 +191,36 @@ class VirtualCallAudio(CallAudio):
 
     def open(self):
         log.info("[audio] DEMO virtual call: %s -> %s", os.environ["ATLAS_DEMO_SCENE"], self.out_dir)
+        out_idx = -1
+        if os.environ.get("ATLAS_DEMO_OUTPUT") == "selected":
+            from audio_io import resolve_device, sd
+            out_idx, out_name = resolve_device("output", self.output_device)
+            self._output = sd.OutputStream(device=out_idx, channels=1, dtype="float32",
+                                           samplerate=SAMPLE_RATE, blocksize=BLOCKSIZE)
+            try:
+                self._output.start()
+            except BaseException:
+                self._close_output()
+                raise
+            log.info("[audio] DEMO audible output = %d %s (program selection)", out_idx, out_name)
         global _ACTIVE
         _ACTIVE = self
         self._running = True
         self._thread = threading.Thread(target=self._clock, name="demo-clock", daemon=True)
         self._thread.start()
-        return -1, -1
+        return -1, out_idx
 
     def _clock(self):
+        try:
+            self._run_clock()
+        except Exception:
+            log.exception("[demo] audio clock failed; run is incomplete")
+            (self.out_dir / "ERROR").write_text("Audio clock failed; see server.log", encoding="utf-8")
+        finally:
+            self._running = False
+            self._close_output()
+
+    def _run_clock(self):
         # Hold the room silent until the orchestrator says GO (agent picked, recorder
         # running). Silence still flows so STT/VAD see a normal idle line.
         go = self.out_dir / "GO"
@@ -202,8 +230,13 @@ class VirtualCallAudio(CallAudio):
                     self.on_clean_input(np.zeros(BLOCKSIZE, dtype=np.float32))
                 except Exception:  # noqa: BLE001
                     pass
-            self.drain(BLOCKSIZE)
-            time.sleep(BLOCKSIZE / SAMPLE_RATE)
+            agent = self.drain(BLOCKSIZE)
+            if self._output is not None:
+                self._output.write(np.asarray(agent, dtype=np.float32).reshape(-1, 1))
+            else:
+                time.sleep(BLOCKSIZE / SAMPLE_RATE)
+        if not self._running:
+            return
         self.wall_t0 = time.time()
         self._event("start", t=0.0)
         block_s = BLOCKSIZE / SAMPLE_RATE
@@ -218,6 +251,8 @@ class VirtualCallAudio(CallAudio):
                 except Exception as e:  # noqa: BLE001
                     log.warning("[demo] clean-input callback error: %s", e)
             agent = self.drain(BLOCKSIZE)
+            if self._output is not None:
+                self._output.write(np.asarray(agent, dtype=np.float32).reshape(-1, 1))
             self.level_out = float(np.sqrt(np.mean(agent * agent))) if len(agent) else 0.0
             self.director.agent_block(self.level_out > AGENT_ON_RMS or self.pending_seconds() > 0.05)
             self._hum.append(mic.copy())
@@ -226,6 +261,7 @@ class VirtualCallAudio(CallAudio):
                 self._event("finished", t=self.director.t)
                 self._write()
                 self._running = False
+                self._close_output()
                 break
             nxt += block_s
             dt = nxt - time.perf_counter()
@@ -252,6 +288,15 @@ class VirtualCallAudio(CallAudio):
             if self._thread:
                 self._thread.join(timeout=2)
             self._write()
+        self._close_output()
+
+    def _close_output(self):
+        stream, self._output = self._output, None
+        if stream is not None:
+            try:
+                stream.stop()
+            finally:
+                stream.close()
 
     @property
     def running(self) -> bool:

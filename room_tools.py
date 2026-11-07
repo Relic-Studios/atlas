@@ -536,7 +536,9 @@ def _tool(name: str, desc: str, props: dict, required=()) -> dict:
 
 TOOLS_BY_PLUGIN: Dict[str, List[dict]] = {
     "dice_polls": [
-        _tool("roll_dice", "Roll dice fairly (d20, 2d6, 3d8+2). Always use this instead of making up a number.",
+        _tool("roll_dice", "Generate a NEW random dice roll when someone asks to roll dice (d20, 2d6, 3d8+2). "
+              "Use it for requested randomness, never for arithmetic or recalling/repeating a previous answer. "
+              "For an earlier result, quote the conversation without rolling again.",
               {"dice": {"type": "string", "description": "dice notation, default d20"}}),
         _tool("flip_coin", "Flip a fair coin (to settle something). Never invent the result.",
               {"times": {"type": "integer", "description": "1-10, default 1"}}),

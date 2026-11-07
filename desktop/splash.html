@@ -16,7 +16,7 @@
   .wrap { text-align:center; padding:0 32px; }
   .mark {
     width:64px; height:64px; margin:0 auto 24px; border-radius:18px;
-    background:linear-gradient(135deg,var(--indigo),var(--violet));
+    overflow:hidden;
     box-shadow:0 0 40px rgba(91,108,240,.45);
     animation:breathe 2.4s ease-in-out infinite;
   }
@@ -30,7 +30,12 @@
 </head>
 <body>
   <div class="wrap">
-    <div class="mark"></div>
+    <svg class="mark" viewBox="0 0 512 512" role="img" aria-label="ATLAS logo" style="display:block">
+      <defs><linearGradient id="markBg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#151b24"/><stop offset="1" stop-color="#0a0e13"/></linearGradient></defs>
+      <rect width="512" height="512" rx="116" fill="url(#markBg)"/>
+      <path d="M146 380 L256 120 L366 380" fill="none" stroke="#f3f5f7" stroke-width="52" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="256" cy="296" r="30" fill="#5ed3c6"/>
+    </svg>
     <div class="name">ATLAS</div>
     <div class="sub">Local Voice Intelligence</div>
     <div class="status"><span class="dot"></span><span id="status">Initializing local models…</span></div>

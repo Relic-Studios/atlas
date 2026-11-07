@@ -35,9 +35,10 @@ ENGINE_SILENCES = {
     "kokoro":  Silence(comma=0.3, sentence=0.6, default=0.3),
     "orpheus": Silence(comma=0.3, sentence=0.6, default=0.3),
     # Qwen leaves ~0.2 s of its own silence after a sentence (measured 11-06, work/tts_flow/silence_probe.py), so
-    # 0.15 s more gives ~0.4 s between sentences, a natural conversational pause (0.4 made it ~0.65 s, halting).
-    # Comma silence only follows a piece that ends at a comma (a first sentence too long to wait for).
-    "qwen":    Silence(comma=0.1, sentence=0.15, default=0.15),
+    # 0.15 s more gives ~0.4 s between sentences (0.4 made it ~0.65 s, halting). A piece ending at a comma is the
+    # first piece of a reply, cut early for speed (owner: no added delay): no added silence, so the rest follows
+    # as soon as the voice's own short tail ends.
+    "qwen":    Silence(comma=0.0, sentence=0.15, default=0.15),
 }
 # Every play()/play_async() voices whole sentences. RealtimeTTS' play_async() defaults
 # fast_sentence_fragment_allsentences=True (play() defaults False): each sentence's part before its first comma
@@ -143,15 +144,20 @@ ICL_VOICES = {v.strip() for v in os.environ.get("ATLAS_ICL_VOICES", _icl_default
 
 def voice_ref_text(name):
     """Transcript for ICL cloning, or None (falls back to x-vector)."""
-    if not name or name not in ICL_VOICES:
+    if not name:
         return None
+    if name not in ICL_VOICES:
+        import user_settings
+        import agent_registry
+        record = agent_registry.voices().get(name, {})
+        # Imported/bundled references use their transcript in both dev and public
+        # builds. Preserve the tuned dev-pack whitelist and explicit overrides.
+        supplied = record.get("user") or record.get("bundled") or user_settings.is_public()
+        if not supplied or "ATLAS_ICL_VOICES" in os.environ:
+            return None
     try:
-        from voices import voice_wav
-        wav = voice_wav(name)
-        txt = os.path.splitext(wav)[0] + ".txt" if wav else None
-        if txt and os.path.exists(txt):
-            t = open(txt, encoding="utf-8").read().strip()
-            return t or None
+        from voices import voice_text
+        return voice_text(name) or None
     except Exception:  # noqa: BLE001
         pass
     return None

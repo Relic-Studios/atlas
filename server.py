@@ -77,9 +77,10 @@ LLM_START_PROVIDER = "ollama"
 LLM_START_MODEL = "local-model:latest"  # same Model weights + Qwen3.8 mmproj (native vision)
 try:  # public build: the model the user picked in first-run setup
     import user_settings as _us
-    if _us.is_public():
-        LLM_START_MODEL = _us.local_llm()["model"] or "qwen3:8b"
-        os.environ.setdefault("OLLAMA_BASE_URL", _us.local_llm()["url"])
+    _local_startup = _us.startup_local_config()
+    if _local_startup is not None:
+        LLM_START_MODEL = _local_startup["model"]
+        os.environ.setdefault("OLLAMA_BASE_URL", _local_startup["url"])
 except Exception:  # noqa: BLE001
     pass
 NO_THINK = True
@@ -207,6 +208,11 @@ async def lifespan(app: FastAPI):
         _live_screen.bind(app.state.SpeechPipelineManager)
     except Exception as e:  # noqa: BLE001
         logger.warning("live screen unavailable: %s", e)
+    try:
+        import screen as _screen
+        _screen.bind_model(lambda: app.state.SpeechPipelineManager.llm)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("model image capability unavailable: %s", e)
 
     app.state.Upsampler = UpsampleOverlap()
     app.state.AudioInputProcessor = AudioInputProcessor(
@@ -263,9 +269,8 @@ async def lifespan(app: FastAPI):
     # Refresh the selected remote transport and release any old local standby.
     # Startup already selects remote before prewarm; a failure retains that mode.
     try:
-        import user_settings as _us2
-        if os.environ.get("ATLAS_LLM") == "remote" or (_us2.is_public() and _us2.llm_mode() == "cloud") or (
-                os.path.exists(_LLM_MODE_FILE) and open(_LLM_MODE_FILE, encoding="utf-8").read().strip() == "remote"):
+        import remote_llm as _rl_startup
+        if _rl_startup.remote_selected():
             async def _restore_remote():
                 res = await asyncio.to_thread(_switch_llm_backend, "remote")
                 if res.get("error"):
@@ -295,6 +300,11 @@ async def lifespan(app: FastAPI):
         logger.warning("call end at shutdown failed: %s", e)
 
     logger.info("🖥️⏹️ Server shutting down")
+    try:
+        import provider_accounts
+        provider_accounts.close_logins()
+    except Exception:
+        logger.debug("account login cleanup failed",exc_info=True)
     __import__("turn_trace").flush_all()
     try:
         import live_screen as _live_screen
@@ -304,6 +314,11 @@ async def lifespan(app: FastAPI):
     if app.state.CallBridge is not None:
         app.state.CallBridge.stop()
     app.state.AudioInputProcessor.shutdown()
+    try:
+        from call_recorder import REC
+        await asyncio.to_thread(REC.close)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("recorder close at shutdown failed: %s", e)
 
 # --------------------------------------------------------------------
 # FastAPI app instance
@@ -323,10 +338,8 @@ async def setup_restart(request: Request):
     relaunches the backend on that code (see desktop/main.js)."""
     if not _is_owner(request):
         return JSONResponse({"error": "owner only"}, status_code=403)
-    def _bye():
-        time.sleep(0.6)
-        os._exit(75)
-    threading.Thread(target=_bye, daemon=True).start()
+    from setup_api import exit_for_restart
+    threading.Thread(target=exit_for_restart, daemon=True).start()
     return {"ok": True}
 
 # Local-server hardening (security.py): Host allowlist (DNS rebinding), browser
@@ -414,6 +427,10 @@ async def screen_set(request: Request):
     if not _is_owner(request):
         return JSONResponse({"error": "owner only"}, status_code=403)
     body = await request.json()
+    if body.get("enabled"):
+        import plugins as _screen_plugins
+        if not _screen_plugins.is_enabled("eyes"):
+            return JSONResponse({"error": "Install and enable Eyes in Plugins first."}, status_code=409)
     _scr.set_enabled(bool(body.get("enabled")))
     return _scr.status()
 
@@ -488,10 +505,12 @@ def _switch_llm_backend(mode: str) -> dict:
             cfg = _rl.load_config()
             if cfg is None:
                 return {"error": "no cloud provider configured (set one up in Settings)"}
-            probe = _rl.RemoteSession(cfg, None)
-            if not probe.ping(timeout=4.0):
-                return {"error": "remote unreachable: " + probe.last_error}
-            probe.close()
+            probe = _rl.make_session(cfg, None)
+            try:
+                if not probe.ping(timeout=4.0):
+                    return {"error": "remote unreachable: " + probe.last_error}
+            finally:
+                probe.close()
             if getattr(llm, "remote", None) is None:
                 spm.abort_generation(wait_for_completion=True, timeout=5.0, reason="llm_backend:remote")
                 _rl.activate(llm, cfg)
@@ -508,8 +527,7 @@ def _switch_llm_backend(mode: str) -> dict:
                 logger.warning("local prewarm failed: %s", e)
         try:
             import user_settings as _us3
-            if _us3.is_public():
-                _us3.update({"llm": {"mode": "cloud" if mode == "remote" else "local"}})
+            _us3.remember_llm_backend(mode, cfg if mode == "remote" else None)
         except Exception:  # noqa: BLE001
             pass
         try:
@@ -528,6 +546,19 @@ def _switch_llm_backend(mode: str) -> dict:
 @app.get("/api/llm_backend")
 async def llm_backend_get():
     return _llm_backend_status()
+
+
+@app.post("/api/llm_backend/retry")
+async def llm_backend_retry(request: Request):
+    if not _is_owner(request):
+        return JSONResponse({"error":"owner only"},status_code=403)
+    llm=app.state.SpeechPipelineManager.llm
+    session=getattr(llm,"remote",None)
+    retry=getattr(session,"clear_usage_limit",None)
+    if not callable(retry):
+        return JSONResponse({"error":"The current provider has no paused account request."},status_code=400)
+    retry()
+    return {"ok":True,"message":"Ready for a new request. The previous turn was not replayed."}
 
 
 @app.post("/api/llm_backend")
@@ -553,7 +584,13 @@ async def agents_template():
     import agents as A
     from voices import voice_names, PERSONA_VOICES
     used = set(PERSONA_VOICES.values())
+    try:
+        model_info = A.runtime_model_info(getattr(app.state.SpeechPipelineManager, "llm", None))
+        model_error = None
+    except A.DraftError as exc:
+        model_info, model_error = None, str(exc)
     return {"fields": A.FIELDS, "voices": voice_names(), "used_voices": sorted(used),
+            "model_info": model_info, "model_error": model_error,
             "palette": A.PALETTE, "example": A.assemble_prompt("Name", {
                 "identity": "(who they are)", "who": "(personality)", "talk": "(speech style)",
                 "bait": "(bait reaction)"})}
@@ -570,11 +607,18 @@ async def agents_draft(request: Request):
     if len(name) < 2 or len(desc) < 10:
         return JSONResponse({"error": "Give the agent a name and a short description."}, status_code=400)
     mgr = app.state.SpeechPipelineManager
-    # Through the pipeline's LLM wrapper, so it follows the active backend (local/remote).
-    draft = await asyncio.to_thread(
-        A.build_draft, name, desc, body.get("voice") or (__import__("voices").DEFAULT_VOICE or ""),
-        mgr.llm_model, lambda n, d, m: A.draft_fields_llm(mgr.llm, n, d))
-    return draft
+    if getattr(app.state, "llm_switching", False):
+        return JSONResponse({"error": "The current model is switching. Wait for it to finish, then retry drafting."}, status_code=409)
+    llm = getattr(mgr, "llm", None)
+    try:
+        draft = await asyncio.to_thread(
+            A.build_runtime_draft, llm, name, desc,
+            body.get("voice") or (__import__("voices").DEFAULT_VOICE or ""))
+        if getattr(mgr, "llm", None) is not llm or getattr(app.state, "llm_switching", False):
+            raise A.DraftError("The current model changed while drafting. Retry with the model now loaded.")
+        return draft
+    except A.DraftError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=503)
 
 
 @app.post("/api/agents/heart")
@@ -790,7 +834,7 @@ async def _call_ticker(app) -> None:
             runner = getattr(app.state, "MemoryRunner", None)
             if runner is not None:
                 b = call_boundary.BOUNDARY
-                await asyncio.to_thread(runner.tick, b.in_progress_here(), b.last_activity)
+                await asyncio.to_thread(lambda: runner.tick(b.in_progress_here(), b.last_activity))
         except asyncio.CancelledError:
             raise
         except Exception as e:  # noqa: BLE001
@@ -1584,7 +1628,7 @@ async def send_tts_chunks(app: FastAPI, message_queue: asyncio.Queue, callbacks:
                 log_status()
                 continue
 
-            if _g.abortion_started:
+            if _g.abortion_started or getattr(_g, 'resume_cancelled', False):
                 await asyncio.sleep(0.001)
                 log_status()
                 continue
@@ -1600,8 +1644,11 @@ async def send_tts_chunks(app: FastAPI, message_queue: asyncio.Queue, callbacks:
                     app.state.SpeechPipelineManager.threads.retire_active()
                 except Exception:  # noqa: BLE001
                     pass
-                app.state.SpeechPipelineManager.running_generation = None
-                callbacks.reset_state()
+                with app.state.SpeechPipelineManager.__dict__.setdefault('_request_lock', threading.RLock()):
+                    if (app.state.SpeechPipelineManager.running_generation is gen
+                            and not getattr(gen, 'resume_cancelled', False)):
+                        app.state.SpeechPipelineManager.running_generation = None
+                        callbacks.reset_state()
                 continue
 
             if not _g.quick_answer_first_chunk_ready:
@@ -1620,16 +1667,20 @@ async def send_tts_chunks(app: FastAPI, message_queue: asyncio.Queue, callbacks:
 
                 if not final_expected or audio_final_finished:
                     logger.info("🖥️🏁 Sending of TTS chunks and 'user request/assistant answer' cycle finished.")
-                    if app.state.CallBridge is not None:
-                        try:
-                            app.state.CallBridge.end_reply()
-                            _ps = app.state.CallBridge.playout_stats()
-                            if _ps.get("last_reply_underruns"):
-                                logger.warning("🖥️🔇 Playout ran dry %d time(s) last reply (total %d, %.0f ms silent, prebuffer now %d ms)",
-                                               _ps["last_reply_underruns"], _ps["underruns"], _ps["silence_ms"], _ps["prebuffer_ms"])
-                        except Exception:  # noqa: BLE001
-                            pass
-                    callbacks.send_final_assistant_answer() # Callbacks method
+                    with app.state.SpeechPipelineManager.__dict__.setdefault('_request_lock', threading.RLock()):
+                        if (app.state.SpeechPipelineManager.running_generation is not _g
+                                or getattr(_g, 'resume_cancelled', False)):
+                            continue
+                        if app.state.CallBridge is not None:
+                            try:
+                                app.state.CallBridge.end_reply()
+                                _ps = app.state.CallBridge.playout_stats()
+                                if _ps.get("last_reply_underruns"):
+                                    logger.warning("🖥️🔇 Playout ran dry %d time(s) last reply (total %d, %.0f ms silent, prebuffer now %d ms)",
+                                                   _ps["last_reply_underruns"], _ps["underruns"], _ps["silence_ms"], _ps["prebuffer_ms"])
+                            except Exception:  # noqa: BLE001
+                                pass
+                        callbacks.send_final_assistant_answer() # Callbacks method
                     try:
                         # Use the snapshot: re-reading running_generation here could
                         # return None after a barge-in and break the line below.
@@ -1638,11 +1689,12 @@ async def send_tts_chunks(app: FastAPI, message_queue: asyncio.Queue, callbacks:
                     except Exception:  # noqa: BLE001
                         pass
 
-                    assistant_answer = _g.quick_answer + _g.final_answer                    
-                    app.state.SpeechPipelineManager.running_generation = None
-
-                    callbacks.tts_chunk_sent = False # Reset via callbacks
-                    callbacks.reset_state() # Reset connection state via callbacks
+                    with app.state.SpeechPipelineManager.__dict__.setdefault('_request_lock', threading.RLock()):
+                        if (app.state.SpeechPipelineManager.running_generation is _g
+                                and not getattr(_g, 'resume_cancelled', False)):
+                            app.state.SpeechPipelineManager.running_generation = None
+                            callbacks.tts_chunk_sent = False
+                            callbacks.reset_state()
 
                 await asyncio.sleep(0.001)
                 log_status()
@@ -1650,21 +1702,25 @@ async def send_tts_chunks(app: FastAPI, message_queue: asyncio.Queue, callbacks:
 
             # Route synthesized audio to VAIO3 (into the call) in addition to the
             # browser monitor. AEC uses this same audio as its reference.
-            if app.state.CallBridge is not None:
-                try:
-                    app.state.CallBridge.play_tts(chunk)
-                except Exception as e:  # noqa: BLE001
-                    logger.warning(f"🖥️⚠️ CallBridge.play_tts error: {e}")
+            with app.state.SpeechPipelineManager.__dict__.setdefault('_request_lock', threading.RLock()):
+                if (app.state.SpeechPipelineManager.running_generation is not _g
+                        or getattr(_g, 'resume_cancelled', False)):
+                    continue
+                if app.state.CallBridge is not None:
+                    try:
+                        app.state.CallBridge.play_tts(chunk)
+                        app.state.SpeechPipelineManager.note_audio_committed(_g)
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning(f"🖥️⚠️ CallBridge.play_tts error: {e}")
 
-            if not ENABLE_CALL_BRIDGE:
-                # Bridge mode routes TTS to VAIO3 only (play_tts above). Sending
-                # tts_chunk to the client as well plays a SECOND copy on the local
-                # speakers — double audio.
-                base64_chunk = app.state.Upsampler.get_base64_chunk(chunk)
-                message_queue.put_nowait({
-                    "type": "tts_chunk",
-                    "content": base64_chunk
-                })
+                if not ENABLE_CALL_BRIDGE:
+                    # Bridge mode routes TTS to VAIO3 only (play_tts above).
+                    base64_chunk = app.state.Upsampler.get_base64_chunk(chunk)
+                    message_queue.put_nowait({
+                        "type": "tts_chunk",
+                        "content": base64_chunk
+                    })
+                    app.state.SpeechPipelineManager.note_audio_committed(_g)
             last_chunk_sent = time.time()
 
             # Use connection-specific state via callbacks
@@ -2690,6 +2746,7 @@ class TranscriptionCallbacks:
 
     def interrupt_agent(self, reason: str):
         """Stop the agent mid-reply (browser TTS or call audio)."""
+        interrupted_generation = self.app.state.SpeechPipelineManager.running_generation
         if True:
             self.tts_to_client = False # Stop server sending TTS
             self.user_interrupted = True # Mark connection as user interrupted
@@ -2697,7 +2754,8 @@ class TranscriptionCallbacks:
 
             # Send final assistant answer *if* one was generated and not sent
             logger.info(Colors.apply("🖥️✅ Sending final assistant answer (forced on interruption)").pink)
-            self.send_final_assistant_answer(forced=True)
+            if interrupted_generation is not None:
+                self.send_final_assistant_answer(forced=True, generation=interrupted_generation)
 
             # Minimal reset for interruption:
             self.tts_chunk_sent = False # Reset chunk sending flag
@@ -2722,35 +2780,42 @@ class TranscriptionCallbacks:
             # Be careful what exactly needs reset vs persists (like tts_client_playing)
             # self.reset_state() # Might clear too much, like user_interrupted prematurely
 
-    def send_final_assistant_answer(self, forced=False):
+    def send_final_assistant_answer(self, forced=False, *, generation=None):
+        """Commit only the captured live owner, for normal and forced callers alike."""
+        mgr = self.app.state.SpeechPipelineManager
+        with mgr.__dict__.setdefault('_request_lock', threading.RLock()):
+            owner = mgr.running_generation
+            if owner is None or (generation is not None and owner is not generation):
+                return False
+            if getattr(owner, 'resume_cancelled', False):
+                self._cut_said = None
+                return False
+            if not forced and getattr(owner, 'abortion_started', False):
+                return False
+            return self._commit_final_assistant_answer(owner, forced=forced)
+
+    def _commit_final_assistant_answer(self, generation, forced=False):
         """
         Sends the final (or best available) assistant answer to the client.
 
         Constructs the full answer from quick and final parts if available.
-        If `forced` and no full answer exists, uses the last partial answer.
+        A forced answer uses this generation's available partial buffers.
         Cleans the text and sends it as 'final_assistant_answer' if not already sent.
 
         Args:
             forced: If True, attempts to send the last partial answer if no complete
                     final answer is available. Defaults to False.
         """
-        final_answer = ""
-        # Access global manager state
-        if self.app.state.SpeechPipelineManager.is_valid_gen():
-            final_answer = self.app.state.SpeechPipelineManager.running_generation.quick_answer + self.app.state.SpeechPipelineManager.running_generation.final_answer
+        final_answer = generation.quick_answer + generation.final_answer
 
         if not final_answer: # Check if constructed answer is empty
-            # If forced, try using the last known partial answer from this connection
-            if forced and self.assistant_answer:
-                 final_answer = self.assistant_answer
-                 logger.warning(f"🖥️⚠️ Using partial answer as final (forced): '{final_answer}'")
-            else:
-                logger.warning(f"🖥️⚠️ Final assistant answer was empty, not sending.")
-                return# Nothing to send
+            # A connection-level partial may belong to an older generation.
+            logger.warning(f"🖥️⚠️ Final assistant answer was empty, not sending.")
+            return
 
         logger.debug(f"🖥️✅ Attempting to send final answer: '{final_answer}' (Sent previously: {self.final_assistant_answer_sent})")
 
-        if not self.final_assistant_answer_sent and final_answer:
+        if not getattr(generation, 'final_answer_committed', False) and final_answer:
             import re
             # Clean up the final answer text
             cleaned_answer = re.sub(r'[\r\n]+', ' ', final_answer)
@@ -2771,7 +2836,6 @@ class TranscriptionCallbacks:
                     "content": cleaned_answer,
                     "personaId": self.app.state.SpeechPipelineManager.current_persona,
                 })
-                generation = self.app.state.SpeechPipelineManager.running_generation
                 target = generation.decision.target if generation else ''
                 # Store the EXACT control header the model must emit. The old '[to=S1]' form
                 # was copied by the model as its own header -> INVALID -> silent turns,
@@ -2839,6 +2903,7 @@ class TranscriptionCallbacks:
                     duration_s=max(1.0, len(cleaned_answer) / 15.0)
                 )
                 self.final_assistant_answer_sent = True
+                generation.final_answer_committed = True
                 self.final_assistant_answer = cleaned_answer # Store the sent answer
             else:
                 logger.warning(f"🖥️⚠️ {Colors.YELLOW}Final assistant answer was empty after cleaning.{Colors.RESET}")
@@ -2944,7 +3009,7 @@ def start_resume(mgr, callbacks) -> bool:
     callbacks.user_finished_turn = True
     callbacks.user_history_committed = True
     logger.info(f"🖥️↩️ resuming cut-off thought at a gap: '{cut.unsaid[:50]}'")
-    mgr.prepare_generation(cut.cue())
+    mgr.prepare_generation(cut.cue(), resume_cut=cut)
     return True
 
 
@@ -2992,6 +3057,9 @@ def _only_filler_playing(mgr) -> bool:
 
 def start_delivery(mgr, callbacks) -> Optional[int]:
     """Launch the cue generation for the oldest untold result (None if nothing)."""
+    import plugins
+    if not plugins.usable("web_search"):
+        return None
     t = mgr.board().deliverable()
     if not t:
         return None

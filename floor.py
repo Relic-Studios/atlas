@@ -882,8 +882,18 @@ class ConversationFloor:
         r"|\blonger (answers?|sentences|replies)\b|\b(more|in) detail\b|\belaborate\b|\bexpand on\b"
         r"|\bexplain (it|that|this|yourself|why|how|what)\b|\btell me more\b|\bsay more\b|\bkeep going\b"
         r"|\bwhat (do |have )?you got\b|\bhold a (real )?conversation\b|\bstimulate\b"
-        r"|\b(answers?|replies|you're|you are|so|too) (so |too )?(short|brief)\b"
+        r"|\b(answers?|replies|you're|you are) (so|too) (short|brief)\b|\b(so|too) (short|brief)\b"
         r"|\btalk (to me )?(more|longer)\b|\bgive me (something|more)\b|\bwalk me through\b", re.I)
+    _BRIEF_ASK = re.compile(
+        r"\b(?:keep|make)\s+(?:(?:your|the|this|that)\s+)?(?:answers?|replies|responses?|it|this|that)"
+        r"\s+(?:(?:very|really|quite)\s+)?(?:short|brief|concise)\b"
+        r"|\bbe\s+(?:concise|brief)\b|\bgive\s+(?:me\s+)?shorter\s+(?:answers?|replies|responses?)\b", re.I)
+    _CONSTRAINED_ASK = re.compile(
+        r"\b(?:just|only)\s+(?:say|answer|reply|give|tell)\b"
+        r"|\b(?:one|single)(?:[ -]+(?:short|brief|concise))?[ -]+(?:word|sentence|number)\b"
+        r"|\b(?:repeat|quote|recite|pronounce)\b|\bread\b.{0,60}\baloud\b"
+        r"|\b(?:at\s+least|at\s+most|exactly|no\s+more\s+than)\s+(?:\d+|[a-z]+)\s+"
+        r"(?:sentences?|words?|paragraphs?|lines?)\b", re.I)
     _OPEN_Q = re.compile(
         r"\b(why|how come|how do you|how does|how would|what do you think|what's your take|what is your take"
         r"|do you (think|believe|ever|feel)|what (is|was|'s) it like|what would you|tell me about"
@@ -895,6 +905,9 @@ class ConversationFloor:
         now = self.clock()
         asks = getattr(self, "depth_asks", {})
         self.depth_asks = asks
+        if self._BRIEF_ASK.search(body) or self._CONSTRAINED_ASK.search(body):
+            asks.pop(speaker, None)
+            return ""  # Explicit brevity overrides remembered depth and one-on-one expansion.
         if speaker and self._DEPTH_ASK.search(body):
             asks[speaker] = now
         people = self.room_size(120.0)
@@ -927,8 +940,9 @@ class ConversationFloor:
         flat; notes on the turn steer where room notes don't, SPM 2144): the roast/battle and
         lull re-light notes live HERE now, not in steering_note/room_note. Mutually exclusive
         with depth_note: two stacked demands bloat the prompt."""
-        if not engage_on() or depth_fired:
-            return ""
+        if (not engage_on() or depth_fired or self._BRIEF_ASK.search(strip_label(text))
+                or self._CONSTRAINED_ASK.search(strip_label(text))):
+            return ""  # Coaching must not contradict an explicit reply constraint.
         # roast first: note_roast already judged this prepared turn (single predicate)
         if self.roast_current:
             try:
@@ -1641,13 +1655,13 @@ def collapse_openers(history: list) -> list:
 
 
 SHORT_REPLY_WORDS = 5
-SHORT_REPLY_KEEP = int(os.environ.get("ATLAS_SHORT_KEEP", "3"))
+SHORT_REPLY_KEEP = int(os.environ.get("ATLAS_SHORT_KEEP", "-1"))
 
 
 def thin_short_replies(history: list, keep: int = None) -> list:
-    """Model-facing only. A wall of the agent's own one-liners ('Pip see it.',
-    'Rokay, I'm here.') teaches it to answer in one-liners. Keep only the latest
-    few short agent replies; longer ones and all user turns stay."""
+    """Optional legacy thinning; disabled by default to preserve conversational facts.
+    ConversationLog already owns the bounded history budget. Explicit keep values
+    retain the older behavior for an owner who chooses that tradeoff."""
     keep = SHORT_REPLY_KEEP if keep is None else keep
     if keep < 0:
         return history
@@ -1657,13 +1671,13 @@ def thin_short_replies(history: list, keep: int = None) -> list:
     return [m for i, m in enumerate(history) if i not in drop]
 
 
-OWN_KEEP = int(os.environ.get("ATLAS_OWN_KEEP", "1"))
+OWN_KEEP = int(os.environ.get("ATLAS_OWN_KEEP", "-1"))
 
 
 def clip_own_replies(history: list, keep: int = None) -> list:
-    """Model-facing only ("Clip Context", conversational-inertia research): models
-    treat their own earlier replies as few-shot demos and imitate them. Keep only
-    the latest `keep` agent replies verbatim; user turns all stay. keep<0 = off."""
+    """Optional legacy clipping, disabled by default. Dropping earlier answers can
+    make a model deny something it actually said. ConversationLog owns the budget;
+    an explicit nonnegative keep retains only that many assistant replies."""
     keep = OWN_KEEP if keep is None else keep
     if keep < 0:
         return history

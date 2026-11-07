@@ -1,0 +1,18 @@
+{
+  "model": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+  "quant": "BF16",
+  "seed": 144,
+  "prompt": "An adult woman in her late twenties speaking native American English in a relaxed, spontaneous conversation with a friend. Warm, grounded medium-low feminine voice with a little natural texture and clear effortless diction. Subtle audible breaths between thoughts, natural changes of pace, gentle sentence endings, and small expressive shifts. She sounds thoughtful, quietly amused, emotionally present and completely at ease. Close, dry studio recording with ordinary speaking volume. Understated realistic human delivery.",
+  "text": "Hey, I'm Juniper. Give me a second to think about that. I love the moment when a complicated idea finally makes sense. We can work through it together, and if something feels off, just tell me. I'd rather get it right.",
+  "duration": 14.855,
+  "wall": 4.0,
+  "voice": "Juniper Natural",
+  "origin": "New synthetic voice described for ATLAS; no reference person or recording supplied",
+  "selected_by_owner": "Take A, 2026-11-06",
+  "native_engine": "qwentts.cpp b91bca4 (2026-08-31), installed RealtimeTTS QwenEngine",
+  "model_source": "https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+  "gguf_source": "https://huggingface.co/Serveurperso/Qwen3-TTS-GGUF",
+  "model_license": "Apache-2.0",
+  "reference_sha256": "1cb7947acb185d960ca9ba22bb33e01c900b784af6271385acb57d1df04c97cd",
+  "runtime_note": "Reference only. ATLAS runtime uses Qwen3-TTS-12Hz-0.6B-Base Q8_0 with audio and transcript conditioning. Runtime quality tested separately."
+}

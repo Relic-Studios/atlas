@@ -37,6 +37,7 @@ BACKWARD_S = 60.0               # S6: a backward off-the-record trigger reaches 
 # top-level modules and live_screen/ and fails on any function named reset, reset_*, clear, clear_*, end_call or
 # forget_all that is neither registered (REGISTERED) nor listed here.
 EXEMPT = {
+    "native_providers.NativeSession.clear_usage_limit": "explicit owner retry of account quota, not per-call memory; call end must not resume exhausted inference",
     "factcheck.reset": "also clears the daily check cap; call end uses factcheck.end_call",
     "translate.reset": "also clears the daily caption cap; call end uses translate.end_call",
     "speech_pipeline_manager.SpeechPipelineManager.reset": "the Clear history action; call end uses end_call",

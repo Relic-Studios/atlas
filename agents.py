@@ -18,6 +18,7 @@ import json
 import logging
 import re
 import threading
+import uuid
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -201,7 +202,10 @@ def delete_agent(aid: str) -> bool:
         REGISTRY.write_text(json.dumps(keep, indent=2), encoding="utf-8")
         p = PERSONA_DIR / f"{aid}.txt"
         if p.exists():
-            p.rename(p.with_suffix(".deleted"))
+            archived = p.with_suffix(".deleted")
+            if archived.exists():
+                archived = p.with_name(f"{p.stem}.{uuid.uuid4().hex}.deleted")
+            p.rename(archived)
     try:
         import agent_memory
         agent_memory.archive(aid)   # a new agent with the same name must start empty
@@ -257,11 +261,75 @@ def coerce_fields(d: dict) -> dict:
 def draft_fields_llm(llm, name: str, description: str) -> dict:
     """Same interpretation through the pipeline's LLM wrapper (works on the remote backend too)."""
     spec = "\n".join(f'- "{k}": {v}' for k, v in FIELDS.items())
-    text = (DRAFT_SYSTEM + spec + f"\n\nCharacter name: {name}\nDescription from the user:\n"
-            + description.strip()[:2000] + "\n\nJSON:")
-    chunks = llm.generate(text, history=None, use_system_prompt=False, use_tools=False,
-                          temperature=0.7, num_predict=600)
-    return coerce_fields(_parse_json("".join(chunks)))
+    text = f"Character name: {name}\nDescription from the user:\n{description.strip()[:2000]}\n\nJSON:"
+    budget = {"num_predict": 600} if llm.backend == "ollama" else {"max_tokens": 600}
+    chunks = llm.generate(text, history=[{"role": "system", "content": DRAFT_SYSTEM + spec}],
+                          use_system_prompt=False, use_tools=False, strict_backend=True,
+                          temperature=0.7, **budget)
+    raw_fields = _parse_json("".join(chunks))
+    if not isinstance(raw_fields.get("who"), str):
+        raise DraftError("The current model did not return a usable personality. Retry the draft or write it by hand.")
+    fields = coerce_fields(raw_fields)
+    if not fields.get("who"):
+        raise DraftError("The current model did not return a usable personality. Retry the draft or write it by hand.")
+    return fields
+
+
+class DraftError(RuntimeError):
+    """An actionable creator error, safe to return to the owner."""
+
+
+def runtime_model_info(llm) -> dict:
+    """Public identity from the live transport, never from saved/default settings."""
+    from urllib.parse import urlsplit, urlunsplit
+    if llm is None or getattr(llm, "_remote_startup_error", None):
+        raise DraftError("The current model is unavailable. Load a brain in Settings, then retry drafting.")
+    remote = getattr(llm, "remote", None)
+    if remote is not None:
+        backend, model, endpoint = "remote", remote.cfg.get("model"), remote.cfg.get("url")
+    else:
+        backend, model = llm.backend, llm.model
+        endpoint = getattr(llm, {"ollama": "effective_ollama_url", "openai": "effective_openai_base_url",
+                                 "lmstudio": "effective_lmstudio_url"}.get(backend, ""), "")
+    if not model or backend not in ("remote", "ollama", "openai", "lmstudio"):
+        raise DraftError("No current model is available. Load a brain in Settings, then retry drafting.")
+    # Endpoints can carry credentials; expose only scheme, host, port and path.
+    parts = urlsplit(endpoint or "")
+    host = parts.hostname or ""
+    host = f"[{host}]" if ":" in host else host
+    netloc = host + (f":{parts.port}" if parts.port else "")
+    identity = {"backend": backend, "model": model,
+                "endpoint": urlunsplit((parts.scheme, netloc, parts.path, "", ""))}
+    if remote is not None and remote.cfg.get("provider") in ("codex", "claude_code"):
+        identity.update(provider=remote.cfg["provider"],
+                        account_binding=remote.cfg.get("account_binding"),
+                        instruction_fingerprint=remote.cfg.get("instruction_fingerprint"))
+        if getattr(remote, "account_invalidated", False):
+            raise DraftError("The account changed. Verify and save this brain again in Settings before drafting.")
+    return identity
+
+
+def build_runtime_draft(llm, name: str, description: str, voice: str) -> dict:
+    """Draft strictly with this runtime; no implicit template or provider fallback."""
+    identity = runtime_model_info(llm)
+    remote = getattr(llm, "remote", None)
+    session = getattr(llm, "ollama_session", None)
+    try:
+        fields = draft_fields_llm(llm, name, description)
+    except DraftError:
+        raise
+    except Exception as exc:
+        from provider_errors import ProviderError
+        if isinstance(exc, ProviderError):
+            raise DraftError(str(exc)) from exc
+        logger.warning("current-model agent draft failed: %s", type(exc).__name__)
+        raise DraftError("The current model could not draft this agent. Check its connection, then retry, or write it by hand.") from exc
+    if (runtime_model_info(llm) != identity or getattr(llm, "remote", None) is not remote
+            or getattr(llm, "ollama_session", None) is not session):
+        raise DraftError("The current model changed while drafting. Retry with the model now loaded.")
+    result = build_draft(name, description, voice, identity["model"], drafter=lambda *_: fields)
+    result["model_info"] = identity
+    return result
 
 
 def build_draft(name: str, description: str, voice: str, model: str, drafter=draft_fields) -> dict:

@@ -91,6 +91,8 @@ async def feed_action(pid: str, request: Request):
     d = await _body(request)
     if pid not in ("soul_reflection", "lore", "highlights"):
         return JSONResponse({"error": "this plugin has no actions"}, status_code=404)
+    if d.get("act") not in {"reject", "delete", "open"} and not P.is_enabled(pid):
+        return JSONResponse({"error": "Enable this plugin before running its actions."}, status_code=409)
     import importlib
     mod = importlib.import_module(pid)
     try:
@@ -138,6 +140,16 @@ async def set_enabled(pid: str, request: Request):
         return JSONResponse({"error": "send {\"enabled\": true|false}"}, status_code=400)
     try:
         return {"plugin": await asyncio.to_thread(P.set_enabled, pid, d["enabled"])}
+    except KeyError:
+        return _missing(pid)
+
+
+@router.post("/api/plugins/{pid}/install")
+async def install(pid: str, request: Request):
+    if not _owner(request):
+        return _deny()
+    try:
+        return {"plugin": await asyncio.to_thread(P.install, pid)}
     except KeyError:
         return _missing(pid)
 

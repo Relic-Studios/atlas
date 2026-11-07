@@ -2,6 +2,7 @@
 numpy
 scipy
 soundfile
+Pillow            # screen-tool tests use synthetic images; no screen capture
 fastapi
 uvicorn
 httpx

@@ -21,8 +21,11 @@ from __future__ import annotations
 import json
 import logging
 import os
+import copy
+import queue
 import threading
 import time
+from concurrent.futures import Future, TimeoutError as FutureTimeout
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -32,6 +35,8 @@ ROOT = Path(__file__).resolve().parent / "recordings"
 MASK_FIELDS = {"user": "text", "agent": "text", "drop": "text", "retry": "dropped", "name": "name"}
 MASKED = "[off the record]"
 MAX_BYTES = 50 * 1024 * 1024  # roll to a new file past this
+MAX_PENDING_DATA = 256
+MAX_PENDING_BYTES = 4 * 1024 * 1024
 
 
 class CallRecorder:
@@ -48,6 +53,93 @@ class CallRecorder:
         self._path: Path | None = None
         self._paths: list = []          # this session's files (a call can span a roll)
         self._wav = None
+        self._enqueue_lock = threading.Lock()  # bookkeeping only; never held during disk I/O
+        self._queue = queue.Queue()
+        self._thread = None
+        self._pending_data = self._pending_bytes = 0
+        self.dropped_events = self.dropped_audio = self.write_errors = 0
+        self._mask_windows = []
+        self._event_captures = {}
+
+    def _prune_masks_locked(self, now):
+        # Queued earlier events are covered by the FIFO mask barrier; later ones
+        # already carry their submission-time redaction. Only a producer still
+        # capturing an older event can require an expired interval.
+        captures = self._event_captures.values()
+        self._mask_windows = [(a, b) for a, b in self._mask_windows
+                              if b >= now - .001 or any(a <= t <= b for t in captures)]
+
+    def _enqueue_locked(self, kind, payload=None, size=None):
+        if size is not None:
+            if self._pending_data >= MAX_PENDING_DATA or self._pending_bytes + size > MAX_PENDING_BYTES:
+                if kind == "audio":
+                    self.dropped_audio += 1
+                else:
+                    self.dropped_events += 1
+                return None
+            self._pending_data += 1
+            self._pending_bytes += size
+        future = Future() if size is None else None
+        self._queue.put((kind, payload, size, future))
+        if self._thread is None or not self._thread.is_alive():
+            self._thread = threading.Thread(target=self._run, name="CallRecorderWriter", daemon=True)
+            self._thread.start()
+        return future
+
+    def _control(self, kind, payload=None, timeout=10.0):
+        with self._enqueue_lock:
+            future = self._enqueue_locked(kind, payload)
+        try:
+            return future.result(timeout=timeout)
+        except FutureTimeout as exc:
+            raise TimeoutError(f"recorder {kind} did not finish within {timeout} seconds") from exc
+
+    def _run(self):
+        reported_drops = 0
+        while True:
+            try:
+                kind, payload, size, future = self._queue.get(timeout=1.0)
+            except queue.Empty:
+                with self._enqueue_lock:
+                    if self._queue.empty():
+                        self._thread = None
+                        return
+                continue
+            try:
+                if kind == "event":
+                    result = self._append_event(payload)
+                elif kind == "audio":
+                    result = self._append_audio(payload)
+                elif kind == "mask":
+                    result = self._mask_since(*payload)
+                elif kind == "close":
+                    with self._lock:
+                        result = self.close_locked()
+                else:  # flush barrier
+                    with self._lock:
+                        for fh in (self._fh, self._wav):
+                            if fh is not None:
+                                fh.flush()
+                    result = True
+                if future is not None:
+                    future.set_result(result)
+            except Exception as exc:  # recording data remains best effort; controls propagate failure
+                if future is not None:
+                    future.set_exception(exc)
+                else:
+                    self.write_errors += 1
+                    logger.debug("recorder %s failed: %s", kind, exc)
+            finally:
+                if size is not None:
+                    with self._enqueue_lock:
+                        self._pending_data -= 1
+                        self._pending_bytes -= size
+                        drops = self.dropped_events + self.dropped_audio
+                    if drops != reported_drops:
+                        logger.warning("recorder overloaded: dropped %d events and %d audio blocks",
+                                       self.dropped_events, self.dropped_audio)
+                        reported_drops = drops
+                self._queue.task_done()
 
     # -- files -----------------------------------------------------------
     def _open(self):
@@ -73,49 +165,104 @@ class CallRecorder:
     def event(self, kind: str, **fields):
         if not self.enabled:
             return
+        capture = object()
         try:
+            with self._enqueue_lock:
+                stamp = round(time.time(), 3)
+                self._event_captures[capture] = stamp
+                self._prune_masks_locked(stamp)
             field = MASK_FIELDS.get(kind)
-            if field and field in fields and (_off_record_open() or (kind == "agent" and _reply_off_record())):
+            private = bool(field and field in fields and
+                           (_off_record_open() or (kind == "agent" and _reply_off_record())))
+            fields = copy.deepcopy(fields)
+            if private:
                 fields = {**fields, field: MASKED}
-            line = json.dumps({"t": round(time.time(), 3), "k": kind, **fields}, ensure_ascii=False)
-            with self._lock:
-                if self._fh is None or (self._path and self._path.stat().st_size > MAX_BYTES):
-                    self.close_locked()
-                    self._open()
-                self._fh.write(line + "\n")
-                self._fh.flush()
+            with self._enqueue_lock:
+                if field and field in fields and any(a <= stamp <= b for a, b in self._mask_windows):
+                    fields[field] = MASKED
+                line = json.dumps({"t": stamp, "k": kind, **fields}, ensure_ascii=False)
+                self._enqueue_locked("event", line, len(line.encode("utf-8")))
         except Exception as e:  # noqa: BLE001
             logger.debug("recorder event failed: %s", e)
+        finally:
+            with self._enqueue_lock:
+                self._event_captures.pop(capture, None)
+                self._prune_masks_locked(round(time.time(), 3))
+
+    def _append_event(self, line):
+        with self._lock:
+            if self._fh is None or (self._path and self._path.stat().st_size > MAX_BYTES):
+                self.close_locked()
+                self._open()
+            self._fh.write(line + "\n")
+            self._fh.flush()
 
     def audio(self, pcm_float32):
         if not (self.enabled and self.audio_enabled):
             return
         try:
-            if _off_record_open():                       # D7: an off-the-record span is recorded as silence
-                import numpy as _np
+            private = _off_record_open()
+            import numpy as _np
+            pcm_float32 = _np.asarray(pcm_float32, dtype=_np.float32).copy()
+            if private:                                 # D7: an off-the-record span is recorded as silence
                 pcm_float32 = _np.zeros_like(pcm_float32)
-            with self._lock:
-                if self._fh is None:
-                    self._open()
-                if self._wav is not None:
-                    self._wav.write(pcm_float32)
+            with self._enqueue_lock:
+                self._enqueue_locked("audio", pcm_float32, pcm_float32.nbytes)
         except Exception as e:  # noqa: BLE001
             logger.debug("recorder audio failed: %s", e)
 
+    def _append_audio(self, pcm_float32):
+        with self._lock:
+            if self._fh is None:
+                self._open()
+            if self._wav is not None:
+                self._wav.write(pcm_float32)
+
     def close_locked(self):
+        first_error = None
         for f in (self._fh, self._wav):
             try:
                 if f is not None:
                     f.close()
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                if first_error is None:
+                    first_error = exc
         self._fh = self._wav = None
+        if first_error is not None:
+            raise first_error
 
-    def close(self):
-        with self._lock:
-            self.close_locked()
+    def flush(self, timeout=10.0):
+        """Wait for previously accepted data; never call this barrier on the event loop."""
+        try:
+            return bool(self._control("flush", timeout=timeout))
+        except TimeoutError:
+            return False
+
+    def close(self, timeout=10.0):
+        """Ordered file close; reusable for a new recording, raises on barrier timeout."""
+        return self._control("close", timeout=timeout)
 
     def mask_since(self, t_from: float, t_to: float) -> int:
+        """FIFO privacy barrier. PendingWriter retries failures; never call on the event loop."""
+        if not self.enabled:
+            return 0
+        with self._enqueue_lock:
+            self._prune_masks_locked(round(time.time(), 3))
+            windows = sorted(self._mask_windows + [(t_from, t_to)])
+            merged = []
+            for a, b in windows:
+                if merged and a <= merged[-1][1]:
+                    merged[-1] = (merged[-1][0], max(b, merged[-1][1]))
+                else:
+                    merged.append((a, b))
+            self._mask_windows = merged
+            future = self._enqueue_locked("mask", (t_from, t_to))
+        try:
+            return future.result(timeout=10.0)
+        except FutureTimeout as exc:
+            raise TimeoutError("recorder mask did not finish within 10 seconds") from exc
+
+    def _mask_since(self, t_from: float, t_to: float) -> int:
         """Off the record, backward (D7): mask the text of events from `t_from` to `t_to` in this session's files.
         Events are appended in time order, so only each file's tail from the first event at or after `t_from` is read
         and rewritten in place: a few kilobytes for the last minute, however large the file, so the lock (which the

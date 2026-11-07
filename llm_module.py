@@ -316,6 +316,8 @@ class LLM:
     def inference_target(self) -> str:
         remote = getattr(self, "remote", None)
         if remote is not None:
+            if not remote.cfg.get("url"):
+                return remote.cfg.get("label") or f"account {remote.cfg['model']}"
             return f"remote {remote.cfg['model']} at {remote.cfg['url']}"
         return f"{self.backend} {self.model}"
 
@@ -419,6 +421,7 @@ class LLM:
         generator from a different thread.
         """
         streams = []
+        owners = []
         with self._requests_lock:
             ids = list(self._active_requests) if request_id is None else [request_id]
             for req_id in ids:
@@ -426,15 +429,22 @@ class LLM:
                 if state is not None and not state["cancelled"]:
                     state["cancelled"] = True
                     streams.append(state["stream"])
+                    owners.append((state.get("session") or self.ollama_session, req_id))
                     state["stream"] = None
         if streams:
             # A remote session may still be inside post() (e.g. finishing a thought): stop that too.
-            interrupt = getattr(self.ollama_session, "interrupt", None)
-            if callable(interrupt):
-                try:
-                    interrupt()
-                except Exception as exc:
-                    logger.warning("Error interrupting remote session: %s", exc)
+            interrupted = set()
+            for owner, req_id in owners:
+                interrupt = getattr(owner, "interrupt", None)
+                if callable(interrupt):
+                    try:
+                        if getattr(owner, "_request_scoped_interrupt", False):
+                            interrupt(req_id)
+                        elif id(owner) not in interrupted:
+                            interrupted.add(id(owner))
+                            interrupt()
+                    except Exception as exc:
+                        logger.warning("Error interrupting remote session: %s", exc)
         for stream in streams:
             self._close_stream(stream)
         return bool(streams)
@@ -461,6 +471,7 @@ class LLM:
                     raise ValueError(f"Request ID already active: {request_id}")
                 self._active_requests[request_id] = {
                     "type": request_type, "stream": None,
+                    "session": self.ollama_session,
                     "start_time": time.time(), "cancelled": False,
                 }
                 return True
@@ -469,6 +480,11 @@ class LLM:
                 return True
         self._close_stream(stream_obj)
         return False
+
+    def _request_session(self, request_id):
+        with self._requests_lock:
+            state = self._active_requests.get(request_id)
+            return (state.get("session") if state else None) or self.ollama_session
 
     def _release_stream(self, request_id: str, stream):
         # Exactly one closer owns each transport: cancel or the reader finally.
@@ -536,6 +552,9 @@ class LLM:
             False if initialization or generation failed after retries.
         """
         prompt = "Respond with only the word 'OK'."
+        if getattr(self.ollama_session,"skip_startup_inference",False):
+            logger.info("Account provider selected; inference waits for an explicit setup test or human request.")
+            return True
         logger.info("LLM prewarm target: %s", self.inference_target())
 
         # Lazy initialization now includes the 'ollama ps' logic if needed
@@ -665,12 +684,17 @@ class LLM:
             # into SpeechPipelineManager.history, corrupting context across turns.
             messages.extend(dict(m) for m in history)
 
+        # Legacy local Ollama compatibility is an explicit owner option. API
+        # transports control reasoning on the wire and must see the real utterance.
+        local_no_think = (self.no_think and self.backend == "ollama"
+                          and self.remote is None)
+
         # A held room turn leaves a USER at the tail. That is not necessarily
         # the current turn; never silently discard a new utterance based on role.
         if (not messages or messages[-1]["role"] != "user"
                 or messages[-1].get('content') != text):
             added_text = text # for normal text
-            if self.no_think:
+            if local_no_think:
                  # Qwen3-native token-level instruction. Empirically cuts the
                  # pre-content reasoning trace ~209 -> ~59 tokens (TTFT 11.5s -> 3.5s),
                  # unlike chat_template_kwargs which the model ignores.
@@ -678,7 +702,7 @@ class LLM:
             if log:
                 logger.info(f"🧠💬 llm_module.py generate adding role user to messages, content: {added_text}")
             messages.append({"role": "user", "content": added_text})
-        elif self.no_think and messages[-1]["role"] == "user":
+        elif local_no_think and messages[-1]["role"] == "user":
             # last message is already a user turn (history tail): prefix it in place
             messages[-1]["content"] = f"/no_think {messages[-1]['content']}"
         return messages
@@ -720,6 +744,9 @@ class LLM:
         logger.info(f"🤖💬 Starting generation (Request ID: {req_id})")
 
         participation = kwargs.pop('participation', False)
+        strict_backend = kwargs.pop('strict_backend', False)
+        strict_session = self.ollama_session if strict_backend else None
+        strict_remote = getattr(self, 'remote', None) if strict_backend else None
         use_tools = kwargs.pop('use_tools', True)
         memory_context = kwargs.pop('memory_context', '')
         room_context = kwargs.pop('room_context', '')
@@ -737,7 +764,10 @@ class LLM:
         self._register_request(req_id, self.backend, None)
         try:
             # Lazy initialization now includes the 'ollama ps' logic if needed
-            if not self._lazy_initialize_clients():
+            # Creator requests must never initialize or fall back to a different local model.
+            initialized = (not getattr(self, '_remote_startup_error', None)
+                           and strict_remote.ping(timeout=5.0)) if strict_remote is not None else self._lazy_initialize_clients()
+            if not initialized:
                 # Provide a clearer error if initialization failed
                 if getattr(self, "remote", None) is not None or getattr(self, "_remote_startup_error", None):
                     raise ConnectionError("Remote LLM unavailable; local inference remains disabled")
@@ -785,14 +815,16 @@ class LLM:
                 # Connection check (and potential ps fallback) happened in lazy_init
 
                 ollama_api_url = f"{self.effective_ollama_url}/api/chat"
-                valid_options = {"temperature", "top_k", "top_p", "num_predict", "stop", "repeat_penalty", "repeat_last_n", "presence_penalty", "frequency_penalty"}
+                valid_options = {"temperature", "top_k", "top_p", "num_ctx", "num_predict", "stop", "repeat_penalty", "repeat_last_n", "presence_penalty", "frequency_penalty"}
                 options = {k: v for k, v in kwargs.items() if k in valid_options}
                 if 'temperature' not in options:
                     options['temperature'] = 0.7
-                # Pin context so prefill stays fast/bounded — the model default is
-                # 262k, which makes cold-load TTFT balloon. History is already
-                # trimmed to 16 messages, so 4096 is ample.
-                options.setdefault('num_ctx', 4096)
+                # Include enabled tool schemas in the context budget. Real calls
+                # exceeded 5.5k input tokens; 4096 silently dropped the protocol.
+                # Bound ordinary spoken output too, leaving room for input.
+                import user_settings
+                options.setdefault('num_ctx', user_settings.MIN_CONTEXT)
+                options.setdefault('num_predict', 512)
 
                 if use_tools and self.tools and self.tool_executor:
                     yield from self._generate_ollama_agentic(
@@ -810,8 +842,12 @@ class LLM:
                     logger.info(f"🤖💬 [{req_id}] Sending Ollama request to {ollama_api_url} with payload:")
                     logger.info(f"{json.dumps(payload, indent=2)}")
                     # Increase read timeout significantly for generation
-                    response = self.ollama_session.post(
-                        ollama_api_url, json=payload, stream=True, timeout=(10.0, 600.0) # (connect_timeout, read_timeout)
+                    session = strict_session if strict_backend else self._request_session(req_id)
+                    if getattr(session, "_request_scoped_interrupt", False):
+                        payload["_atlas_request_id"] = req_id
+                    response = session.post(
+                        ollama_api_url, json=payload, stream=True, timeout=(10.0, 600.0),
+                        **({'allow_local_fallback': False} if strict_remote is not None else {})
                     )
                     response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
                     stream_object_to_register = response # The requests.Response object
@@ -965,7 +1001,10 @@ class LLM:
                 payload["tools"] = ([t for t in self.tools
                                      if (t.get("function") or {}).get("name") == "read_page"]
                                     if only_read else self.tools)
-            response = self.ollama_session.post(
+            session = self._request_session(request_id)
+            if getattr(session, "_request_scoped_interrupt", False):
+                payload["_atlas_request_id"] = request_id
+            response = session.post(
                 ollama_api_url, json=payload, stream=True,
                 timeout=(10.0, 600.0),
             )
@@ -1067,7 +1106,8 @@ class LLM:
                 "role": "assistant",
                 "content": "",
                 "tool_calls": [
-                    {"function": {"name": tc["function"]["name"], "arguments": tc["function"]["arguments"]}}
+                    {"function": {"name": tc["function"]["name"], "arguments": tc["function"]["arguments"]},
+                     **({"id":tc["id"]} if tc.get("id") else {})}
                     for tc in tool_calls
                 ],
             })
@@ -1107,6 +1147,8 @@ class LLM:
                     result = str(result.get("text") or "")
                 result = str(result)
                 tool_msg = {"role": "tool", "content": result}
+                if tc.get("id"):
+                    tool_msg.update(tool_call_id=tc["id"],name=name)
                 if images:
                     tool_msg["images"] = images
                 working.append(tool_msg)
@@ -1180,8 +1222,8 @@ class LLM:
             # reply shape it would normally have produced before calling the tool itself.
             _who = re.findall(r"\[(S\d+)\]", _last_user_text(working) or "")
             _hdr = f"[SPEAK to={_who[-1]}]" if _who else "[SPEAK to=...]"
-            result += ("\n[Now reply out loud: start with the header " + _hdr + ", then "
-                       "one to three short spoken sentences in your own words. No lists.]")
+            result += ("\n[Now answer the current request using this result. Start with the header "
+                       + _hdr + ", then follow the user's requested length, language and format.]")
             working.append({"role": "assistant", "content": "", "tool_calls": calls})
             msg = {"role": "tool", "content": result}
             if images:

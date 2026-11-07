@@ -3,7 +3,7 @@
 ATLAS tells voices apart with voiceprints. In busy calls the **Nemotron diarization** plugin
 (Plugins > Senses) adds NVIDIA's streaming diarizer, Nemotron-3-Diarization, which follows who
 is talking moment to moment while the voiceprints keep track of who is who. It runs in its own
-process on the GPU and uses little of it. If it's off, missing, slow or crashes, ATLAS simply
+process on the GPU. If it's off, missing, slow or crashes, ATLAS simply
 uses the voiceprints alone.
 
 ## What you need
@@ -14,16 +14,20 @@ uses the voiceprints alone.
 
 ## Setup (Windows)
 
-Create the environment where ATLAS looks for it, reusing the PyTorch that ATLAS's Python
-already has:
+Create a separate environment; do not change ATLAS's own dependencies:
 
 ```
-py -3.12 -m venv --system-site-packages "%LOCALAPPDATA%\atlas_sidecar\venv"
-"%LOCALAPPDATA%\atlas_sidecar\venv\Scripts\python.exe" -m pip install "transformers>=5.18"
+py -3.12 -m venv "%LOCALAPPDATA%\atlas_sidecar\venv"
+"%LOCALAPPDATA%\atlas_sidecar\venv\Scripts\python.exe" -m pip install "transformers>=5.18" numpy packaging
 ```
 
-To use a different Python instead, set the environment variable `ATLAS_NEMOTRON_PYTHON` to its
-`python.exe`.
+Install CUDA-capable PyTorch in that environment using the command for your system from
+[PyTorch's installation selector](https://pytorch.org/get-started/locally/), replacing `pip3` with
+`"%LOCALAPPDATA%\atlas_sidecar\venv\Scripts\python.exe" -m pip`.
+
+In Plugins, install **Nemotron diarization**, enter this environment's `python.exe` in Configure
+(or leave it blank for the standard location), Save, then Test connection. Installing and testing
+do not enable it. You can also set `ATLAS_NEMOTRON_PYTHON`; a path saved in Configure takes precedence.
 
 Then turn on **Plugins > Senses > Nemotron diarization**. The first start downloads the model
 (`nvidia/Nemotron-3-Diarization`) from Hugging Face into `%USERPROFILE%\.cache\atlas_models\hf`

@@ -13,6 +13,7 @@ from pathlib import Path
 ap = argparse.ArgumentParser()
 ap.add_argument("demo"); ap.add_argument("frames"); ap.add_argument("out")
 ap.add_argument("--caption", default="")
+ap.add_argument("--window-frame", action="store_true", help="crop invisible Windows resize borders and keep the full UI above a 1080p caption strip")
 a = ap.parse_args()
 
 demo, frames = Path(a.demo).resolve(), Path(a.frames).resolve()  # ffmpeg concat resolves relative to the list file
@@ -33,11 +34,13 @@ for k in range(n_out):
 lst = demo / "frames.txt"
 lst.write_text("".join(lines) + f"file '{fs[i].as_posix()}'\n", encoding="utf-8")
 
-vf = "scale=1600:-2,format=yuv420p"
+vf = ("crop=iw-16:ih-8:8:0,scale=1680:1050,pad=1920:1080:120:0:color=0x0b0d10,format=yuv420p"
+      if a.window_frame else "scale=1600:-2,format=yuv420p")
 if a.caption:
     cap = a.caption.replace(":", r"\:").replace("'", r"\'")
+    position="fontsize=20:x=120:y=h-25" if a.window_frame else "fontsize=22:x=24:y=h-44"
     vf += (",drawtext=fontfile='C\\:/Windows/Fonts/segoeui.ttf':text='" + cap +
-           "':fontcolor=white@0.85:fontsize=22:x=24:y=h-44:box=1:boxcolor=black@0.45:boxborderw=8")
+           "':fontcolor=white@0.85:" + position + ":box=1:boxcolor=black@0.45:boxborderw=4")
 cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
        "-f", "concat", "-safe", "0", "-i", str(lst), "-i", str(demo / "master.wav"),
        "-vf", vf, "-r", str(fps), "-c:v", "libx264", "-crf", "20", "-preset", "medium",

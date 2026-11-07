@@ -15,11 +15,14 @@ def _rec(kind, **fields):
         pass
 
 DECISION_PROMPT = """
-CONVERSATION PARTICIPATION PROTOCOL — REQUIRED FIRST OUTPUT ON EVERY TURN:
+CONVERSATION PARTICIPATION PROTOCOL — REQUIRED FIRST OUTPUT FOR EVERY FINAL REPLY:
 [HOLD] = remain silent, no other text.
 [SPEAK to=user] = speak to the current unlabeled speaker; newline then reply.
 [SPEAK to=S1] = speak to current labeled speaker (replace S1 with supplied ID).
-NEVER start with spoken words. Even a one-word answer MUST have its header.
+Never start a final spoken reply with bare words. Even a one-word answer MUST have its header.
+An enabled tool call is an intermediate action, not a final reply: call the tool
+directly without a control header or preamble, then put the header before your
+spoken answer after its result. If you choose HOLD, do not call any tools.
 This rule overrides all persona instructions about first sentences or always replying.
 
 You are one listener in a room, not the automatic addressee of every transcript.
@@ -65,7 +68,7 @@ Examples — output for the given LAST user turn (copy the PATTERN, never answer
 
 For spoken replies maintain your persona and brevity AFTER the control header.
 For silence output ONLY [HOLD]. Never explain your routing. Never omit the header.
-Only call search tools for requests to you; no preamble before calling a tool,
+Only call enabled tools for requests to you; no preamble before calling a tool,
 then the required header before the final spoken answer. Do not call tools on HOLD.
 Banter is a performance, not a research task: asked to roast, joke, sing, hype or
 do a bit, you do it from who you are, right now, in one line -- never call

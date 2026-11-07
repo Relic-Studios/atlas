@@ -1,5 +1,8 @@
 // First run on a public build: send the user to the setup wizard.
-fetch('/api/setup/status').then((r) => r.json()).then((s) => { if (s.setup_needed) location.replace('/static/setup.html'); }).catch(() => {});
+fetch('/api/setup/status').then((r) => r.json()).then((s) => {
+  document.getElementById('pSetup')?.classList.remove('hidden');
+  if (s.setup_needed) location.replace('/static/setup.html');
+}).catch(() => {});
 
 /* ATLAS live dashboard.
  *
@@ -378,13 +381,14 @@ async function openCreator() {
   $('crErr').textContent = ''; $('crName').value = ''; $('crDesc').value = '';
   try {
     const t = await (await fetch('/api/agents/template')).json();
+    $('crModel').textContent = t.model_info ? `Current model: ${t.model_info.model} · ${t.model_info.endpoint || t.model_info.backend}. Draft, edit, or go Back to regenerate.` : (t.model_error || 'Load a model in Settings to draft. You can also write by hand.');
     CR.palette = t.palette || []; CR.usedVoices = t.used_voices || [];
     const vs = $('crVoice'); vs.innerHTML = '';
     (t.voices || S.voices).forEach((v) => { const o = document.createElement('option'); o.value = v; o.textContent = v + (CR.usedVoices.includes(v) ? '  (in use)' : ''); vs.appendChild(o); });
     const free = (t.voices || []).find((v) => !CR.usedVoices.includes(v)); if (free) vs.value = free;
   } catch (e) { $('crErr').textContent = 'backend unreachable'; }
   crVoiceHint(); crShow(1); crPaintAv();
-  $('creatorModal').classList.add('open'); setTimeout(() => $('crName').focus(), 50);
+  $('creatorModal').classList.add('open'); $('crName').focus();
 }
 function crVoiceHint() { const v = $('crVoice').value; $('crVoiceHint').textContent = CR.usedVoices.includes(v) ? 'another agent already uses this voice' : ''; }
 function closeCreator() { $('creatorModal').classList.remove('open'); }
@@ -403,7 +407,7 @@ function crCheck1() {
   return '';
 }
 async function crInterpret(useModel) {
-  const err = crCheck1(); $('crErr').textContent = err; if (err) return;
+  const err = crCheck1(); $('crErr').textContent = ''; if (err) return crDraftFailed(err);
   const name = $('crName').value.trim(), desc = $('crDesc').value.trim(), voice = $('crVoice').value;
   if (!useModel) {
     CR.draft = { name, voice, role: 'custom · agent', accent: null, source: 'manual', fields: { identity: '', who: desc, talk: '', bait: '', canon: '' } };
@@ -415,15 +419,25 @@ async function crInterpret(useModel) {
     const m = await r.json();
     if (!r.ok) throw new Error(m.error || 'draft failed');
     CR.draft = m; crFill();
-  } catch (e) { $('crErr').textContent = String(e.message || e); }
+  } catch (e) { crDraftFailed(String(e.message || e)); }
   finally { $('crBusy').style.display = 'none'; $('crNext').disabled = false; $('crSkip').disabled = false; }
+}
+function crDraftFailed(error) {
+  $('crErr').textContent = error;
+  if (!CR.draft) return;
+  // Refinements live in the form. Re-filling from the original draft would lose them.
+  $('crName').value = CR.refineMeta.name; $('crVoice').value = CR.refineMeta.voice;
+  crShow(2); crPaintAv(); crVoiceHint();
+  $('crErr').textContent += ' Previous draft and edits kept. Continue editing, or go Back to retry.';
 }
 function crFill() {
   const d = CR.draft; CR.accent = d.accent || CR.accent || CR.palette[0] || '#22d3ee';
   $('crName2').textContent = d.name || $('crName').value;
-  $('crSrc').textContent = d.source === 'llm' ? 'Drafted by the model' : d.source === 'fallback' ? 'Model failed: edit by hand' : d.source === 'heart' ? 'From heart.md' : 'Written by hand';
+  $('crSrc').textContent = d.source === 'llm' ? `Drafted by ${d.model_info?.model || 'the current model'}` : d.source === 'heart' ? 'From heart.md' : 'Written by hand';
+  if (d.model_info) $('crSrc').title = `${d.model_info.backend} · ${d.model_info.endpoint}`;
   if (d.name) $('crName').value = d.name;
   if (d.voice && [...$('crVoice').options].some((o) => o.value === d.voice)) $('crVoice').value = d.voice;
+  CR.refineMeta = { name: $('crName').value, voice: $('crVoice').value };
   $('crInterests').value = Array.isArray(d.interests) ? d.interests.join(', ') : (d.interests || (d.fields && d.fields.interests) || '');
   $('crTalk').value = d.talkativeness || 0.35; crTalkLabel();
   CR.promptEdited = !!d.prompt_locked;
@@ -1077,9 +1091,17 @@ let _eyeTs = 0;
 function renderEyes(sc) {
   const el = $('pEyes'); if (!el) return;
   if (!sc) { el.className = 'pill eyes'; return; }
+  const unavailable = sc.vision_supported === false;
   el.className = 'pill eyes ' + (sc.enabled ? 'ok' : 'warn');
-  el.childNodes[1].textContent = sc.enabled ? 'Eyes' : 'Eyes off';
+  $('eyesLabel').textContent = unavailable ? 'Eyes unavailable' : (sc.vision_supported == null && sc.model ? 'Eyes unverified' : (sc.enabled ? 'Eyes' : 'Eyes off'));
+  el.title = unavailable || (sc.vision_supported == null && sc.model) ? sc.unavailable_reason : 'Let agents look at your screen when asked. Click to toggle.';
+  el.setAttribute('aria-disabled', unavailable ? 'true' : 'false');
   const meta = $('eyeMeta'), img = $('eyeImg');
+  if (unavailable) {
+    meta.textContent = sc.unavailable_reason;
+    img.classList.remove('on'); img.removeAttribute('src'); _eyeTs = 0;
+    return;
+  }
   const live = sc.live;
   if (live && live.on) {             // Live screen: the newest live frame, refreshed every 2 s while the popup is open
     const now = Math.floor(Date.now() / 2000);
@@ -1098,23 +1120,36 @@ function renderEyes(sc) {
     }
     const ago = Math.max(0, Math.round(Date.now() / 1000 - sc.last_ts));
     meta.textContent = `Looked ${sc.count}x · last ${ago < 60 ? ago + 's' : Math.round(ago / 60) + 'm'} ago` + (sc.last_reason ? ` · "${sc.last_reason}"` : '') + (sc.enabled ? '' : ' · switched OFF');
-  } else meta.textContent = sc.enabled ? 'On. Agents can look when someone asks.' : "Off. Agents will say they can't see.";
+  } else meta.textContent = sc.vision_supported == null && sc.model ? sc.unavailable_reason : (sc.enabled ? 'On. Agents can look when someone asks.' : "Off. Agents will say they can't see.");
 }
 // ---- Brain (LLM backend: local Ollama <-> remote vLLM; hidden if not configured) ----
 let _brainInfo = null;
 function renderBrain(tb) {
   const el = $('pBrain'); if (!el) return;
-  if (!_brainInfo || !_brainInfo.available) { el.classList.add('hidden'); return; }
+  if (!_brainInfo || !_brainInfo.available) {
+    el.classList.add('hidden');
+    $('providerNotice')?.classList.add('hidden');
+    return;
+  }
   const b = tb || {};
   const remote = b.mode === 'remote', busy = b.switching || S.brainBusy;
   const r = b.remote || {};
   el.className = 'pill brain ' + (busy ? 'busy' : remote ? (r.healthy === false ? 'warn' : 'ok') : '');
-  $('brainLbl').textContent = busy ? 'Switching…' : remote ? 'Remote LLM' : 'Local LLM';
+  $('brainLbl').textContent = busy ? 'Switching…' : remote ? (r.usage_paused ? 'Account limited' : 'Remote LLM') : 'Local LLM';
+  const notice=$('providerNotice'), error=remote ? r.provider_error : null;
+  if (notice) {
+    notice.classList.toggle('hidden',!error);
+    if (error) {
+      const reset=Number.isFinite(error.reset_at) ? ` Resets ${new Date(error.reset_at*1000).toLocaleString()}.` : '';
+      $('providerNoticeText').textContent=error.message+reset;
+      $('providerRetry').hidden=error.code!=='usage_limit';
+    }
+  }
   const lines = [];
   lines.push(remote ? `<b>${esc(_brainInfo.remote_label || 'Remote')}</b>` : `<b>Local</b> · ${esc(_brainInfo.local_model || '')}`);
   if (remote) {
     lines.push(`${r.requests || 0} requests · ${r.fallbacks || 0} fell back to local`);
-    if (r.healthy === false) lines.push('Unreachable right now, using local until it recovers.');
+    if (r.healthy === false) lines.push(r.last_error ? esc(r.last_error) : r.allow_local_fallback ? 'Unreachable right now; local fallback is enabled.' : 'Unavailable right now. No local fallback.');
     lines.push('Local model unloaded (VRAM free for STT + TTS).');
   } else lines.push(`Remote available: ${esc(_brainInfo.remote_label || '')}`);
   if (S.brainErr) lines.push(`<span style="color:var(--bad)">${esc(S.brainErr)}</span>`);
@@ -1128,6 +1163,13 @@ async function loadBrain() {
 (function wireBrain() {
   const el = $('pBrain'); if (!el) return;
   loadBrain(); setInterval(loadBrain, 15000);
+  $('providerRetry')?.addEventListener('click',async()=>{
+    try {
+      const response=await fetch('/api/llm_backend/retry',{method:'POST'}), data=await response.json();
+      if (!response.ok) throw new Error(data.error || 'Retry failed');
+      toast(data.message); await loadBrain();
+    } catch(error) { toast(error.message,'#f87171'); }
+  });
   el.addEventListener('click', async (e) => {
     if (e.target.closest('.eyepop') || S.brainBusy || !_brainInfo) return;
     const want = (S.snap?.llm_backend?.mode || _brainInfo.mode) === 'remote' ? 'local' : 'remote';
@@ -1243,9 +1285,13 @@ function renderOwner(o) {
   el.addEventListener('mouseenter', () => { _eyeTs = 0; if (S.snap) renderEyes(S.snap.screen); });   // fresh frame on open
   el.addEventListener('click', async (e) => {
     if (e.target.closest('.eyepop')) return;
+    if (S.snap?.screen?.vision_supported === false) return;
     const on = !(S.snap && S.snap.screen && S.snap.screen.enabled);
     try { const r = await fetch('/api/screen', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: on }) });
-          const st = await r.json(); if (S.snap) S.snap.screen = st; renderEyes(st); } catch (_) {}
+          const st = await r.json();
+          if (!r.ok) { toast(st.error || 'Could not change Eyes.', '#f87171'); return; }
+          if (S.snap) S.snap.screen = st; renderEyes(st);
+    } catch (_) { toast('Could not reach ATLAS to change Eyes.', '#f87171'); }
   });
 })();
 

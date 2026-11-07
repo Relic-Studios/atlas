@@ -78,8 +78,7 @@ def target() -> dict:
 def _eyes_toggle() -> bool:
     try:
         import screen
-        with screen._lock:
-            return bool(screen._state["enabled"])
+        return bool(screen.status().get("enabled"))
     except Exception:  # noqa: BLE001
         return False
 

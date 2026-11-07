@@ -19,6 +19,31 @@ class Base(unittest.TestCase):
         self.root = self.tmp / "memory"
 
 
+class BackendSelection(unittest.TestCase):
+    def test_selected_cloud_does_not_fall_back_to_local(self):
+        import remote_llm
+        with mock.patch.object(remote_llm, "remote_selected", return_value=True), \
+             mock.patch.object(remote_llm, "load_config", return_value=None), \
+             mock.patch("requests.post") as post:
+            with self.assertRaisesRegex(RuntimeError, "selected cloud model"):
+                S.complete("system", "user")
+            post.assert_not_called()
+
+    def test_deepseek_plugin_calls_use_the_shared_wire_option(self):
+        import remote_llm
+        cfg = {"url": "https://api.deepseek.com", "model": "deepseek-flash", "key": "fixture", "vllm": False}
+        response = mock.Mock()
+        response.json.return_value = {"choices": [{"message": {"content": "hello"}}]}
+        with mock.patch.object(remote_llm, "remote_selected", return_value=True), \
+             mock.patch.object(remote_llm, "load_config", return_value=cfg), \
+             mock.patch("requests.post", return_value=response) as post:
+            self.assertEqual(S.complete("system", "user"), "hello")
+            body = post.call_args.kwargs["json"]
+            self.assertEqual(body["thinking"], {"type": "disabled"})
+            self.assertEqual(body["model"], "deepseek-flash")
+            self.assertNotIn("chat_template_kwargs", body)
+
+
 class Filter(unittest.TestCase):
     def test_good_notes_pass(self):
         for n in ("I'd like to ask a follow-up question instead of guessing.",
@@ -160,10 +185,11 @@ class Api(Base):
             d = c.get("/api/plugins/soul_reflection/feed").json()
             self.assertEqual(d["run"]["label"], "Reflect on the last call")
             self.assertEqual(d["items"][0]["id"], a[0]["id"])
-            r = c.post("/api/plugins/soul_reflection/action", json={"agent": "fae", "id": a[0]["id"], "act": "approve"})
-            self.assertEqual(r.status_code, 200)
-            self.assertEqual(c.post("/api/plugins/soul_reflection/action",
-                                    json={"agent": "fae", "id": "nope", "act": "approve"}).status_code, 404)
+            with mock.patch.object(plugins, "is_enabled", return_value=True):
+                r = c.post("/api/plugins/soul_reflection/action", json={"agent": "fae", "id": a[0]["id"], "act": "approve"})
+                self.assertEqual(r.status_code, 200)
+                self.assertEqual(c.post("/api/plugins/soul_reflection/action",
+                                        json={"agent": "fae", "id": "nope", "act": "approve"}).status_code, 404)
             self.assertEqual(c.post("/api/plugins/fact_check/action", json={}).status_code, 404)
             if not plugins.is_enabled("soul_reflection"):
                 self.assertEqual(c.post("/api/plugins/soul_reflection/run", json={}).status_code, 409)

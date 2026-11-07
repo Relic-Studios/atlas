@@ -52,6 +52,29 @@ class Transport:
 
 
 class LifecycleTests(unittest.TestCase):
+    @patch("llm_module.OPENAI_AVAILABLE", True)
+    def test_api_and_remote_messages_preserve_user_text_and_history(self):
+        for backend, remote in (("openai", None), ("lmstudio", None),
+                                ("ollama", Mock(cfg={"model": "api-model"}))):
+            with self.subTest(backend=backend, remote=remote is not None):
+                llm = LLM(backend, "test-model", no_think=True)
+                llm.remote = remote
+                history = [{"role": "user", "content": "Read these words aloud."}]
+                original = copy.deepcopy(history)
+                messages = llm.build_messages("Read these words aloud.", history,
+                                              use_system_prompt=False, log=False)
+                self.assertEqual(messages, original)
+                self.assertEqual(history, original)
+                messages = llm.build_messages("A different request.", history,
+                                              use_system_prompt=False, log=False)
+                self.assertEqual(messages[-1]["content"], "A different request.")
+                self.assertEqual(history, original)
+
+    def test_explicit_legacy_local_no_think_keeps_compatibility(self):
+        llm = LLM("ollama", "test-model", no_think=True)
+        self.assertEqual(llm.build_messages("Hello.", use_system_prompt=False,
+                                           log=False)[-1]["content"], "/no_think Hello.")
+
     def test_remote_prewarm_reports_actual_model_and_never_checks_local(self):
         llm = LLM("ollama", "local-model")
         llm.remote = Mock(cfg={"url": "http://remote:30000", "model": "model", "allow_local_fallback": False})
@@ -118,6 +141,28 @@ class LifecycleTests(unittest.TestCase):
                 self.assertEqual(response.closes, 1)
                 self.assertEqual(llm._active_requests, {})
 
+    def test_call_context_includes_tools_and_reserves_bounded_spoken_output(self):
+        for agentic in (False, True):
+            with self.subTest(agentic=agentic):
+                llm = self.make_llm([Response([packet('[SPEAK to=S1] Five.', done=True)])], agentic=agentic)
+                list(llm.generate('[S1] What is two plus three?', participation=True))
+                options = llm.ollama_session.payloads[0]['options']
+                self.assertGreaterEqual(options['num_ctx'] - options['num_predict'], 7680)
+                self.assertLessEqual(options['num_ctx'], 8192)
+
+    def test_explicit_spoken_output_limit_is_preserved(self):
+        llm = self.make_llm([Response([packet('Okay.', done=True)])])
+        list(llm.generate('hello', num_predict=100))
+        self.assertEqual(llm.ollama_session.payloads[0]['options']['num_predict'], 100)
+
+    def test_explicit_context_window_is_preserved_for_every_native_path(self):
+        for agentic in (False, True):
+            for context in (4096, 16384):
+                with self.subTest(agentic=agentic, context=context):
+                    llm = self.make_llm([Response([packet('Okay.', done=True)])], agentic=agentic)
+                    list(llm.generate('hello', num_ctx=context))
+                    self.assertEqual(llm.ollama_session.payloads[0]['options']['num_ctx'], context)
+
     def test_cancel_during_post_interrupts_the_remote_session(self):
         """A session still inside post() (think_listen's thought finish) gets interrupt()."""
         response = Response([packet("must not escape", done=True)])
@@ -168,6 +213,16 @@ class LifecycleTests(unittest.TestCase):
         import llm_module as _L
         self.assertEqual(followup["options"]["temperature"], _L.PARTICIPATION_SAMPLING["temperature"])
         self.assertNotIn("tools", followup)  # budget spent: final round must answer, not search
+
+    def test_prefetched_tool_does_not_override_user_format(self):
+        reply = Response([packet('[SPEAK to=S1] A short answer.', done=True)])
+        llm = self.make_llm([reply], agentic=True)
+        list(llm.generate('[S1] Check this and answer in one short sentence.', request_id='r',
+                          participation=True, prefetch_tool=('check_date_time', {})))
+        tool = next(m for m in llm.ollama_session.payloads[0]['messages'] if m['role']=='tool')
+        self.assertIn("user's requested length, language and format", tool['content'])
+        self.assertNotIn('one to three', tool['content'])
+        self.assertNotIn('No lists', tool['content'])
 
 
 if __name__ == "__main__":

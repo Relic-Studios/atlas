@@ -2,6 +2,7 @@
 from typing import Optional, Callable
 from pathlib import Path
 import threading
+import uuid
 import re
 import os
 import logging
@@ -105,7 +106,8 @@ RECHECK_S = 180.0
 
 def _board_search(query: str) -> str:
     """Background-worker search (no LLM). Parallel backend race lives in websearch."""
-    if _websearch is None:
+    import plugins
+    if _websearch is None or not plugins.usable("web_search"):
         return "search unavailable"
     return (_websearch.search(query) or {}).get("text") or "No results found."
 
@@ -191,12 +193,8 @@ def _rebuild_personas() -> None:
     _replace_in_place(PERSONA_FILES, files)
     _replace_in_place(PERSONA_META, meta)
     d = _registry.default_agent()
-    try:  # the agent the user created/picked in setup wins in the public build
-        import user_settings as _us
-        if _us.is_public() and _us.load().get("agent") in PERSONAS:
-            d = _us.load()["agent"]
-    except Exception:  # noqa: BLE001
-        pass
+    # Registry validation resolves the saved public choice for both persona and
+    # voice. Never resurrect an agent here whose reference was rejected there.
     DEFAULT_PERSONA = d if d in PERSONAS else next(iter(PERSONAS))
 
 
@@ -233,7 +231,7 @@ class PipelineRequest:
     Holds information about the action to perform (e.g., 'prepare', 'abort'),
     associated data (e.g., text input), and a timestamp for potential de-duplication.
     """
-    def __init__(self, action: str, data: Optional[any] = None):
+    def __init__(self, action: str, data: Optional[any] = None, *, resume_cut=None):
         """
         Initializes a PipelineRequest instance.
 
@@ -243,6 +241,7 @@ class PipelineRequest:
         """
         self.action = action
         self.data = data
+        self.resume_cut = resume_cut  # provenance belongs to this request, never a shared next-turn flag
         self.timestamp = time.time()
 
 class RunningGeneration:
@@ -261,7 +260,12 @@ class RunningGeneration:
             id: A unique identifier for this generation attempt.
         """
         self.id: int = id # Store the generation ID
+        self.llm_request_id = "voice-" + uuid.uuid4().hex
         self.text: Optional[str] = None
+        self.audio_committed: bool = False  # a chunk has been handed to an output transport
+        self.final_answer_committed: bool = False
+        self.resume_cut = None
+        self.resume_cancelled = False
         self.timestamp = time.time()
 
         self.llm_generator = None
@@ -454,7 +458,8 @@ class SpeechPipelineManager:
             # Best-of-3 WARM measurement. A single sample right after load can read
             # 4-5s (cold KV/graph setup) and that number becomes the turn-end
             # silence floor -> every turn waited ~5s. Take the fastest warm run.
-            samples = [t for t in (self.llm.measure_inference_time() for _ in range(3)) if t]
+            if not getattr(self.llm.ollama_session,"skip_startup_inference",False):
+                samples = [t for t in (self.llm.measure_inference_time() for _ in range(3)) if t]
         except Exception as e:  # noqa: BLE001
             logger.warning("LLM not ready at boot (%s): selected inference mode is retained", e)
         self.llm_inference_time = min(samples) if samples else 500.0
@@ -703,22 +708,32 @@ class SpeechPipelineManager:
 
                 if self.previous_request:
                     # Simple timestamp-based deduplication for identical consecutive requests
-                    if self.previous_request.data == request.data and isinstance(request.data, str):
+                    if (self.previous_request.data == request.data and isinstance(request.data, str)
+                            and getattr(self.previous_request, 'resume_cut', None) is getattr(request, 'resume_cut', None)):
                         if request.timestamp - self.previous_request.timestamp < 2:
                             logger.info(f"🗣️🗑️ Request Processor: Skipping duplicate request - {request.action}")
                             continue
 
                 # Drain the queue to get the most recent request
+                candidates = [request]
                 while not self.requests_queue.empty():
                     skipped_request = self.requests_queue.get(False)  # Non-blocking get
                     logger.debug(f"🗣️🗑️ Request Processor: Skipping older request - {skipped_request.action}")
                     request = skipped_request # Keep the last one we retrieved
+                    candidates.append(request)
+                # A later idle resume must never discard a pending human turn.
+                if getattr(request, 'resume_cut', None) is not None:
+                    request = next((r for r in reversed(candidates) if r.action == 'prepare'
+                                    and getattr(r, 'resume_cut', None) is None), request)
                 
                 self.abort_block_event.wait() # Wait if an abort is in progress
                 logger.debug(f"🗣️🔄 Request Processor: Processing most recent request - {request.action}")
                 
                 if request.action == "prepare":
-                    self.process_prepare_generation(request.data)
+                    if getattr(request, 'resume_cut', None) is None:
+                        self.process_prepare_generation(request.data)
+                    else:
+                        self.process_prepare_generation(request.data, resume_cut=request.resume_cut)
                     self.previous_request = request
                 elif request.action == "finish":
                      # Note: 'finish' action currently has no specific handling logic here.
@@ -923,14 +938,36 @@ class SpeechPipelineManager:
 
     @staticmethod
     def _adds_content(a: str, b: str) -> bool:
-        """True if b carries real new content beyond draft a (demo take 8, 10-05:
-        a draft built on 'Okay, Wren. Settle it.' was kept when the line went on
-        'Co-op or competitive? There are four of us.', so she answered the
-        half-sentence). Punctuation-insensitive; 3+ new words is a new clause."""
-        tok = lambda t: [w for w in re.findall(r"[a-z0-9']+", t.lower()) if w]
-        wa = set(tok(a))
-        new = [w for w in tok(b) if w not in wa]
-        return len(new) >= 3
+        """Payload changes invalidate an unspoken speculative prompt, even one token.
+
+        Ignore punctuation, regressive prefixes, unfinished word growth and
+        filler/function-word-only changes. This is a lexical ASR heuristic,
+        independent of the LLM; negation is always a payload change.
+        """
+        from difflib import SequenceMatcher
+        def tokens(text):
+            text = re.sub(r'^\s*\[(?:S\d+|user)\]\s*', '', text or '')
+            text = re.sub(r'\[(?:noise|silence|music|inaudible)\]', '', text, flags=re.I)
+            return re.findall(r"[a-z0-9']+", text.lower().replace('’', "'"))
+        old, new = tokens(a), tokens(b)
+        negation = lambda word: word.endswith("n't") or word in {
+            'no', 'not', 'never', 'without', 'neither', 'nor', 'cannot'}
+        if old == new:
+            return False
+        if new == old[:len(new)] and not any(negation(w) for w in old[len(new):]):
+            return False
+        if (old and len(old) == len(new) and old[:-1] == new[:-1]
+                and len(old[-1]) >= 2 and old[-1].isalpha() and new[-1].isalpha()
+                and new[-1].startswith(old[-1]) and not negation(old[-1]) and not negation(new[-1])):
+            return False
+        incidental = set(('uh um erm er hmm ah a an the please can could would will you me my your '
+                          'to for of in on at with is are was were be been it this that and or as '
+                          'just say tell do i').split())
+        for op, i, j, k, l in SequenceMatcher(a=old, b=new, autojunk=False).get_opcodes():
+            if op != 'equal' and any(negation(w) or (w not in incidental and (len(w) > 1 or not w.isalpha()))
+                                     for w in old[i:j] + new[k:l]):
+                return True
+        return False
 
     @staticmethod
     def _trim_transcript(txt: str, max_words: int = 60) -> str:
@@ -955,7 +992,15 @@ class SpeechPipelineManager:
         tail = ' '.join(words[-max_words:])
         return f'{label} {tail}'.strip() if label else tail
 
-    def _llm_context(self, txt: str, keep_ctx_text: bool = False):
+    def note_audio_committed(self, gen) -> None:
+        """Keep the output boundary after an interrupted generation is discarded."""
+        lock = self.__dict__.setdefault("_ctx_lock", threading.RLock())
+        with lock:
+            if not gen.audio_committed:
+                gen.audio_committed = True
+                self.convo.note_audio_committed()
+
+    def _llm_context(self, txt: str, keep_ctx_text: bool = False, *, consumed=None):
         """(history, room_context) for this turn. Never raises. keep_ctx_text: the thinker's call
         (another thread) leaves the turn's _ctx_text as it was."""
         lock = getattr(self, "_ctx_lock", None)
@@ -964,19 +1009,19 @@ class SpeechPipelineManager:
         with lock:
             prev = getattr(self, "_ctx_text", "")
             try:
-                return self._llm_context_locked(txt)
+                return self._llm_context_locked(txt, consumed=consumed)
             finally:
                 if keep_ctx_text:
                     self._ctx_text = prev
 
-    def _llm_context_locked(self, txt: str):
+    def _llm_context_locked(self, txt: str, *, consumed=None):
         self._ctx_text = txt
         room = self._room_context(txt)
         if not self.convo_enabled:
             history = [dict(m) for m in self.history]
             return self._finish_context(history, room)
         try:
-            history, in_view = self.convo.messages(txt)
+            history, in_view = self.convo.messages(txt, consumed=consumed)
             m = re.match(r'^\s*\[(S\d+)\]', txt or '')
             state = self.convo.state_note(m[1] if m else None, in_view)
             room = (room + "\n" + state).strip() if state else room
@@ -1518,7 +1563,7 @@ class SpeechPipelineManager:
         try:
             if is_cue:
                 return None
-            pf = _room.intent(txt)
+            pf = _clock.intent(txt) or _room.intent(txt)
             if pf is None:
                 return None
             if pf[0] == "cast_vote":
@@ -1531,6 +1576,8 @@ class SpeechPipelineManager:
                 or (getattr(self, 'current_persona', '') or '',)
             floor = getattr(self, 'floor', None)
             partner = floor.active_partner() if floor is not None else None
+            if pf[0] == "check_date_time" and not names_agent(txt, names):
+                return None  # Explicit clock commands require this agent's name.
             if not (names_agent(txt, names) or speaker is None or (partner and speaker == partner)):
                 return None
             return pf
@@ -1712,11 +1759,17 @@ class SpeechPipelineManager:
             logger.warning("cutoff note failed: %s", e)
         searched = False
         try:
+            import plugins as _board_plugins
+            kinds = set()
+            if _board_plugins.usable("web_search"):
+                kinds.add("search")
+            if _board_plugins.is_enabled("notes"):
+                kinds.add("note")
             b = self.board()
-            bnote = b.note()
+            bnote = b.note(kinds=kinds) if kinds else ""
             if bnote:
                 room = (room + chr(10) + bnote).strip()
-            searched = any(t["kind"] == "search" for t in b.snapshot())
+            searched = "search" in kinds and any(t["kind"] == "search" for t in b.snapshot())
         except Exception as e:  # noqa: BLE001
             logger.warning("task board note failed: %s", e)
         try:
@@ -1737,10 +1790,11 @@ class SpeechPipelineManager:
             room = (room + chr(10) + _cap.abilities_note(eyes_on, bool(WEB_SEARCH_TOOLS) and 'web_search' not in _off,
                                                       getattr(self, 'current_persona', '') or '', _off)).strip()
             try:
-                pn = _self_tools.context_note(getattr(self, "current_persona", "") or "")
+                pn = (_self_tools.context_note(getattr(self, "current_persona", "") or "")
+                      if "self_check" not in _off else "")
                 if pn:
                     room = (room + chr(10) + pn).strip()
-                cn = _self_tools.change_note(ctx)
+                cn = _self_tools.change_note(ctx) if "self_check" not in _off else ""
                 if cn:
                     room = (room + chr(10) + cn).strip()
             except Exception as e:  # noqa: BLE001
@@ -1952,11 +2006,12 @@ class SpeechPipelineManager:
                     # No abortion in progress, check similarity
                     logger.info(f"🗣️🛑🤔 {current_gen_id_str} Found active generation, checking text similarity.")
                     run_text = self.running_generation.text or ""
+                    redraft = bool(run_text and txt and not getattr(self.running_generation, 'audio_committed', False)
+                                   and self._adds_content(run_text, txt))
                     if run_text and txt and self._same_utterance(run_text, txt) and (
-                            self.running_generation.tts_quick_started
-                            or not self._adds_content(run_text, txt)):
-                        # Already speaking: keep it (cutting it off orphaned audio, demo
-                        # 10-04). Not speaking yet and the line grew a new clause: redraft.
+                            getattr(self.running_generation, 'audio_committed', False) or not redraft):
+                        # Keep an already delivered reply; synthesis alone is not
+                        # delivery. A new payload before delivery must redraft.
                         logger.info(f"🗣️🛑🙅 {current_gen_id_str} Text refines the same utterance (word overlap). Ignoring.")
                         return False
                     try:
@@ -1970,7 +2025,7 @@ class SpeechPipelineManager:
                         logger.warning(f"🗣️🛑💥 {current_gen_id_str} Error calculating similarity: {e}. Assuming different.")
                         similarity = 0.0 # Assume different on error
 
-                    if similarity >= 0.95:
+                    if similarity >= 0.95 and not redraft:
                         logger.info(f"🗣️🛑🙅 {current_gen_id_str} Text ('{txt[:30]}...') too similar ({similarity:.2f}) to current '{self.running_generation.text[:30] if self.running_generation.text else 'None'}...'. Ignoring.")
                         return False # No abort needed
 
@@ -2233,7 +2288,7 @@ class SpeechPipelineManager:
 
     # --- Processing Methods ---
 
-    def process_prepare_generation(self, txt: str):
+    def process_prepare_generation(self, txt: str, *, resume_cut=None):
         """
         Handles the 'prepare' action: initiates a new text-to-speech generation.
 
@@ -2252,7 +2307,18 @@ class SpeechPipelineManager:
         """
         # Repeated potential-sentence callbacks must not replace a generator
         # still owned by either worker (check_abort returns False for duplicates).
-        current = self.running_generation
+        with self.__dict__.setdefault('_request_lock', threading.RLock()):
+            if resume_cut is not None and resume_cut is not self.cutoff:
+                return  # a human request invalidated this idle cue while it waited
+            if resume_cut is None:
+                self.cutoff = None
+            current = self.running_generation
+            if resume_cut is None and current is not None and getattr(current, 'resume_cut', None) is not None:
+                current.resume_cancelled = True
+        if (current is not None and getattr(current, 'resume_cancelled', False)
+                and not current.abortion_started):
+            self.abort_generation(wait_for_completion=True, reason='human request supersedes idle resume')
+            current = self.running_generation
         if current is not None and not current.abortion_started and current.text == txt:
             logger.debug("Ignoring duplicate partial for active generation")
             return
@@ -2267,7 +2333,8 @@ class SpeechPipelineManager:
         keep = self.running_generation
         if not aborted and keep is not None and not keep.abortion_started:
             logger.info(f"🗣️✨🙅 [Gen {keep.id}] Keeping running generation for refined text: '{txt[:50]}...'")
-            keep.text = txt
+            # text records the input that actually created this generator. A
+            # kept draft must not pretend it was prompted with later ASR words.
             return
 
         # --- No live generation remains (none existed, or it was aborted) ---
@@ -2294,8 +2361,12 @@ class SpeechPipelineManager:
         # --- Create new generation object ---
         # Local ref: a barge-in abort can set self.running_generation = None while we
         # build this one (demo 10-04: AttributeError 'NoneType' .decision -> pipeline error).
-        gen = RunningGeneration(id=new_gen_id)
-        self.running_generation = gen
+        with self.__dict__.setdefault('_request_lock', threading.RLock()):
+            if resume_cut is not None and resume_cut is not self.cutoff:
+                return
+            gen = RunningGeneration(id=new_gen_id)
+            gen.resume_cut = resume_cut
+            self.running_generation = gen
         gen.text = txt
         from response_decision import expected_target_for
         gen.decision.expected_target = expected_target_for(txt)
@@ -2315,7 +2386,7 @@ class SpeechPipelineManager:
             gen.decision.heard = (strip_label(prev) + " " + strip_label(txt)).strip()
         except Exception as e:  # noqa: BLE001
             logger.warning("parrot heard failed: %s", e)
-        is_cue = self._attach_board(txt, new_gen_id)
+        is_cue = resume_cut is not None or self._attach_board(txt, new_gen_id)
 
         try:
             logger.info(f"🗣️🧠🚀 [Gen {new_gen_id}] Calling LLM generate...")
@@ -2336,7 +2407,13 @@ class SpeechPipelineManager:
                                       loopbait_handled=bool(is_cue or (bait is not None and bait.note)))
             except Exception as e:  # noqa: BLE001
                 logger.warning("note_roast failed: %s", e)
-            history, room = self._llm_context(txt)
+            # Keep gen.text as the raw ASR fragment for abort/refinement logic.
+            # Only the model-facing view joins a question with its trailing instruction.
+            with self.__dict__.setdefault("_ctx_lock", threading.RLock()):
+                model_text, consumed = (self.convo.current_turn(
+                                            txt, allow_continuation=not getattr(current, "audio_committed", False))
+                                        if self.convo_enabled and not is_cue else (txt, None))
+                history, room = self._llm_context(model_text, consumed=consumed)
             snap_mem = None
             if not is_cue:
                 try:   # think while listening: the memory block the thought was written with (the room
@@ -2386,6 +2463,7 @@ class SpeechPipelineManager:
             def _gen(text_in, _h=history, _r=room, _m=mem_ctx, _l=look, **sampling):
                 return self.llm.generate(
                     text=text_in,
+                    request_id=gen.llm_request_id,
                     history=_h,
                     use_system_prompt=True,
                     participation=True,
@@ -2394,7 +2472,7 @@ class SpeechPipelineManager:
                     prefetch_tool=_l,
                     **sampling,
                 )
-            trimmed = self._trim_transcript(txt)
+            trimmed = self._trim_transcript(model_text)
             if unseen:
                 trimmed = f"{trimmed}\n({unseen})"
             game = "" if is_cue else self._game_note(txt, frames)
@@ -2457,6 +2535,8 @@ class SpeechPipelineManager:
             except Exception as e:  # noqa: BLE001
                 logger.warning("think handover failed: %s", e)
                 self._clear_think_handover()
+            if gen.resume_cancelled:
+                return  # ownership changed while this request's context was being built
             raw_stream = _gen(trimmed)
             if retry_named_hold is not None:
                 raw_stream = retry_named_hold(
@@ -2533,7 +2613,9 @@ class SpeechPipelineManager:
             self.stop_tts_final_request_event.set()
             if hasattr(self.llm, 'cancel_generation'):
                 try:
-                    self.llm.cancel_generation()
+                    request_id=getattr(current_gen_obj,"llm_request_id",None)
+                    if request_id:
+                        self.llm.cancel_generation(request_id)
                 except Exception as cancel_e:
                     logger.warning("LLM transport cancel failed: %s", cancel_e)
 
@@ -2640,7 +2722,7 @@ class SpeechPipelineManager:
 
     # --- Public Methods ---
 
-    def prepare_generation(self, txt: str):
+    def prepare_generation(self, txt: str, *, resume_cut=None):
         """
         Public method to request the preparation of a new speech generation.
 
@@ -2656,7 +2738,17 @@ class SpeechPipelineManager:
             call_boundary.activity("generation")
         except Exception:  # noqa: BLE001
             pass
-        self.requests_queue.put(PipelineRequest("prepare", txt))
+        with self.__dict__.setdefault('_request_lock', threading.RLock()):
+            if resume_cut is not None and resume_cut is not self.cutoff:
+                return
+            if resume_cut is None:
+                # Even duplicate/final callbacks invalidate a pending autonomous
+                # resume. The queued human owns the next request, not the idle cue.
+                self.cutoff = None
+                current = self.running_generation
+                if current is not None and getattr(current, 'resume_cut', None) is not None:
+                    current.resume_cancelled = True
+            self.requests_queue.put(PipelineRequest("prepare", txt, resume_cut=resume_cut))
 
     def should_speak(self, txt: str, diarizer_participants: Optional[list] = None) -> bool:
         """Speak/not-speak gate — call BEFORE prepare_generation.

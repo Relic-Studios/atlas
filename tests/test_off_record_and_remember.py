@@ -238,6 +238,7 @@ class Recorder(unittest.TestCase):
             rec.enabled, rec.audio_enabled = True, True
             rec.event("user", spk="S2", text="my sister is pregnant")
             rec.audio(_np.ones(1600, dtype=_np.float32) * 0.1)
+            self.assertTrue(rec.flush())
             self.assertIsNotNone(rec._wav)
             rec.mask_since(time.time() - 5, time.time() + 1)
             self.assertIsNotNone(rec._wav)                     # bug review #13: audio kept recording
@@ -258,6 +259,7 @@ class Recorder(unittest.TestCase):
             rec = CR.CallRecorder(root=Path(d))
             rec.enabled = True
             rec.event("user", spk="S1", text="opening line")
+            self.assertTrue(rec.flush())
             path = rec.path
             now = time.time()
             with open(path, "a", encoding="utf-8") as fh:

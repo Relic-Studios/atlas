@@ -25,6 +25,11 @@ class YieldTests(unittest.TestCase):
         self.assertTrue(I.should_yield("[S1] wait, which one?", N, speaker="S1", partner="S1")[0])
     def test_partner_backchannel_holds(self):
         self.assertFalse(I.should_yield("[S1] mhm", N, speaker="S1", partner="S1")[0])
+    def test_partner_followup_is_not_lost_during_short_reply_tail(self):
+        args = dict(speaker='S1', partner='S1', agent_left_s=.4)
+        self.assertTrue(I.should_yield('[S1] Can you repeat the number you just told me?', N, **args)[0])
+        self.assertFalse(I.should_yield('[S1] Yeah, that makes sense.', N, **args)[0])
+        self.assertFalse(I.should_yield('[S1] Alex, did you feed the dog?', N, **args)[0])
     def test_chattier_holds_longer(self):
         self.assertLess(I.takeover_words(0.0), I.takeover_words(1.0))
 

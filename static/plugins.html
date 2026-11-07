@@ -154,8 +154,9 @@ button{font-family:var(--font)}
   </section>
 
   <section id="market" hidden>
-    <p class="mnote">The marketplace is just getting started. Everything here today is built into ATLAS and runs on your PC.
-      Plugins from other people will need signing and review before ATLAS runs them; see <a href="https://github.com/Relic-Studios/atlas/blob/main/SAFETY.md" target="_blank" rel="noopener">SAFETY.md</a>.</p>
+    <p class="mnote">Optional plugins start uninstalled and off. Install a bundled plugin here, configure it, then switch it on in Installed.
+      Installing does not enable it. Some plugins need an API key, a compatible model or extra software.
+      See the <a href="/static/plugin-guide.html" target="_blank" rel="noopener">plugin setup guide</a>. Planned plugins cannot be installed yet.</p>
     <div class="grid" id="mgrid"></div>
   </section>
 </div>
@@ -216,10 +217,12 @@ function toast(msg, bad) {
 }
 
 function status(p) {
+  if (p.readiness && !p.readiness.ready)
+    return {cls:'warn', text:(p.enabled ? 'On · needs setup: ' : 'Needs setup: ') + p.readiness.message};
   if (!p.enabled) return {cls:'', text:'Off'};
   const secrets = (p.settings || []).filter((f) => f.type === 'secret');
   if (secrets.length && !secrets.some((f) => f.secret && f.secret.set))
-    return {cls:'warn', text:'On · using the free fallback (no key)'};
+    return {cls:'warn', text:'On · needs an API key'};
   if (secrets.length) {
     const set = secrets.filter((f) => f.secret && f.secret.set).map((f) => f.label.replace(/ API key| Search API key/, ''));
     return {cls:'ok', text:'On · ' + set.join(' + ')};
@@ -228,16 +231,17 @@ function status(p) {
 }
 
 function renderCats() {
-  const cs = ['All', ...new Set(plugins.map((p) => p.category))];
+  const installed = plugins.filter((p) => p.installed);
+  const cs = ['All', ...new Set(installed.map((p) => p.category))];
   $('cats').innerHTML = cs.map((c) => `<button class="cat${c === cat ? ' on' : ''}" data-cat="${esc(c)}">${esc(c)}</button>`).join('');
-  const on = plugins.filter((p) => p.enabled).length;
-  $('summary').textContent = `${on} of ${plugins.length} on`;
-  $('nInst').textContent = plugins.length;
+  const on = installed.filter((p) => p.enabled).length;
+  $('summary').textContent = `${on} of ${installed.length} on`;
+  $('nInst').textContent = installed.length;
 }
 
 function renderGrid() {
-  const list = plugins.filter((p) => cat === 'All' || p.category === cat);
-  if (!list.length) { $('grid').innerHTML = '<div class="empty">Nothing in this category.</div>'; return; }
+  const list = plugins.filter((p) => p.installed && (cat === 'All' || p.category === cat));
+  if (!list.length) { $('grid').innerHTML = '<div class="empty">No optional plugins installed here. <button class="btn" data-browse="true">Browse plugins</button></div>'; return; }
   $('grid').innerHTML = list.map((p, i) => {
     const s = status(p);
     const cfg = (p.settings || []).length || p.testable;
@@ -256,13 +260,14 @@ function renderGrid() {
 
 function renderMarket() {
   $('nMarket').textContent = market.length;
-  const BADGE = { installed: ['inst', 'Installed'], in_progress: ['wip', 'In progress'] };
+  const BADGE = { installed: ['inst', 'Installed'], available: ['', 'Available · bundled'], in_progress: ['wip', 'In progress'] };
   $('mgrid').innerHTML = market.map((m) => { const b = BADGE[m.status] || ['', 'Planned']; return `<article class="card">
     <div class="ico">${icon(m.icon)}</div>
     <div class="head1"><span class="nm">${esc(m.name)}</span><span class="cg">${esc(m.category)} · ${esc(m.author || 'ATLAS')}</span></div>
     <p class="desc">${esc(m.summary)}</p>
     <div class="cf"><span class="badge ${b[0]}">${b[1]}</span>${m.status === 'installed'
-      ? `<button class="btn" data-goto="${esc(m.id)}">Open</button>` : ''}</div>
+      ? `<button class="btn" data-goto="${esc(m.id)}">Open</button>` : m.status === 'available'
+      ? `<button class="btn" data-install="${esc(m.id)}">Install</button>` : ''}</div>
   </article>`; }).join('') || '<div class="empty">No plugins listed yet.</div>';
 }
 
@@ -281,9 +286,20 @@ async function toggle(id, on, el) {
   try {
     const d = await api(`/api/plugins/${encodeURIComponent(id)}/enabled`, {enabled:on});
     plugins = plugins.map((p) => p.id === id ? d.plugin : p);
-    renderCats(); renderGrid();
+    await load();
     toast(`${d.plugin.name} ${on ? 'on' : 'off'} for every agent`);
   } catch (e) { el.checked = !on; el.disabled = false; toast(`Couldn't change it: ${e.message}`, true); }
+}
+
+async function installPlugin(id, btn) {
+  btn.disabled = true;
+  try {
+    const d = await api(`/api/plugins/${encodeURIComponent(id)}/install`, {});
+    await load();
+    document.querySelector('[data-tab="installed"]').click(); cat = 'All'; renderCats(); renderGrid();
+    openWin(d.plugin.id);
+    toast(`${d.plugin.name} installed · off until you enable it`);
+  } catch (e) { btn.disabled = false; toast(`Couldn't install: ${e.message}`, true); }
 }
 
 /* ---------- settings window ---------- */
@@ -321,7 +337,7 @@ function openWin(id) {
   $('wIco').innerHTML = icon(current.icon);
   $('wTitle').textContent = current.name;
   $('wCat').textContent = current.category + ' · ' + (current.enabled ? 'on' : 'off');
-  $('wLead').textContent = [current.summary, current.detail].filter(Boolean).join(' ');
+  $('wLead').textContent = [current.summary, current.detail, current.readiness?.message].filter(Boolean).join(' ');
   const fs = current.settings || [];
   $('wFields').innerHTML = fs.length ? fs.map((f) => fieldHtml(f, (current.values || {})[f.key])).join('')
     : '<div class="help" style="color:var(--muted);font-size:12.5px">Nothing to set up. Use the switch on the card to turn it on or off.</div>';
@@ -438,7 +454,9 @@ document.addEventListener('keydown', (ev) => {
 });
 document.addEventListener('click', (ev) => {
   const t = ev.target.closest('button,[data-cat]'); if (!t) { if (ev.target === $('scrim')) closeWin(); return; }
-  if (t.dataset.tab) {
+  if (t.dataset.browse) { document.querySelector('[data-tab="market"]').click(); }
+  else if (t.dataset.install) installPlugin(t.dataset.install, t);
+  else if (t.dataset.tab) {
     document.querySelectorAll('.tab').forEach((b) => { const on = b === t; b.classList.toggle('on', on); b.setAttribute('aria-selected', on); });
     $('installed').hidden = t.dataset.tab !== 'installed'; $('market').hidden = t.dataset.tab !== 'market';
   } else if (t.dataset.cat) { cat = t.dataset.cat; renderCats(); renderGrid(); }

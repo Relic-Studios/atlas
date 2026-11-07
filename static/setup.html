@@ -61,8 +61,8 @@ a{color:var(--accent)}
     <p class="lead">A voice companion that joins your calls, listens, and talks back in a voice you choose.
       Everything runs on this computer unless you link a cloud model yourself. No accounts, no hidden keys.</p>
     <div class="kv" id="sysinfo"></div>
-    <p class="note">Setup takes about five minutes: pick a brain, pick your microphone and speakers,
-      give your agent a voice, and describe who they are.</p>
+    <p class="note" id="readyNote">Pick a brain, microphone and speakers. Juniper comes with a voice and personality;
+      you can also create your own agent.</p>
     <div class="nav"><span></span><button onclick="go(1)">Get started</button></div>
   </section>
 
@@ -89,6 +89,7 @@ a{color:var(--accent)}
       <div id="olReady" class="hide">
         <label>Model</label>
         <select id="localModel"></select>
+        <p class="note" id="modelNote"></p>
         <p class="note" id="recNote"></p>
         <div id="pullBox" class="hide"><div class="bar"><i id="pullBar"></i></div><p class="note" id="pullTxt"></p></div>
       </div>
@@ -99,12 +100,26 @@ a{color:var(--accent)}
       <select id="prov" onchange="provChanged()"></select>
       <p class="note" id="provKeys"></p>
       <div class="row">
-        <div><label>Model</label><input id="cModel" placeholder="model id"></div>
-        <div><label>API key</label><input id="cKey" type="password" placeholder="sk-…" autocomplete="off"></div>
+        <div><label>Model</label><input id="cModel" placeholder="model id" list="accountModelOptions"><datalist id="accountModelOptions"></datalist></div>
+        <div id="apiKeyField"><label>API key</label><input id="cKey" type="password" placeholder="sk-…" autocomplete="off"></div>
       </div>
-      <label>Endpoint</label><input id="cUrl">
-      <label>Context window (tokens, optional)</label><input id="cCtx" inputmode="numeric" placeholder="8192">
-      <p class="note">Your key is stored only on this computer (user/settings.json) and sent only to the provider you pick.</p>
+      <div id="accountBox" hidden>
+        <p class="note" id="accountHelp"></p>
+        <div class="row"><button type="button" onclick="connectAccount()" id="accountConnect">Connect account</button>
+          <button type="button" class="ghost" onclick="verifyAccount()">Verify account</button>
+          <button type="button" class="ghost" onclick="refreshAccountModels()">Refresh models</button></div>
+        <p class="note" id="accountStatus" role="status">Account not yet verified.</p>
+        <p class="note" id="accountAuthLink" hidden><a id="accountAuthPage" target="_blank" rel="noopener noreferrer">Open official sign-in page</a>
+          · <button type="button" class="ghost" onclick="cancelAccountLogin()">Cancel sign-in</button></p>
+        <details><summary>CLI location</summary><label>Official executable (optional)</label><input id="accountExe" placeholder="Automatically find the installed CLI"></details>
+      </div>
+      <div id="apiEndpointField"><label>Endpoint</label><input id="cUrl"></div>
+      <label>Context window (tokens, optional; at least 8192 recommended)</label><input id="cCtx" inputmode="numeric" placeholder="8192">
+      <label><input id="cVision" type="checkbox" style="width:auto"> This model supports images (vision)</label>
+      <label id="cVllmLabel" hidden><input id="cVllm" type="checkbox" style="width:auto"> This is my own vLLM server</label>
+      <p class="note" id="cVllmNote" hidden>Enables vLLM-specific requests for optional live-screen and think-while-listening plugins. Leave off for other API servers.</p>
+      <p class="note">Enable this only for an image-capable API model. Local model support is detected automatically.</p>
+      <p class="note" id="apiKeyNote">Your key is stored only on this computer (user/settings.json) and sent only to the provider you pick.</p>
     </div>
     <div class="msg" id="brainMsg"></div>
     <div class="nav"><button class="ghost" onclick="go(0)">Back</button>
@@ -122,7 +137,9 @@ a{color:var(--accent)}
     </div>
     <p class="note">Headphones are best: with open speakers the agent may hear itself (echo cancellation helps, but not perfectly).</p>
     <div class="msg" id="audioMsg"></div>
-    <div class="nav"><button class="ghost" onclick="go(1)">Back</button><button onclick="saveAudio()">Continue</button></div>
+    <div class="nav"><button class="ghost" onclick="go(1)">Back</button>
+      <span><button class="ghost" onclick="saveAudio(true)">Customize agent</button>
+      <button id="audioBtn" onclick="saveAudio()">Continue with Juniper</button></span></div>
   </section>
 
   <!-- 3 voice -->
@@ -139,14 +156,14 @@ a{color:var(--accent)}
     <textarea id="vText" style="min-height:60px" placeholder="Type the words spoken in the clip"></textarea>
     <div class="msg" id="voiceMsg"></div>
     <div class="nav"><button class="ghost" onclick="go(2)">Back</button>
-      <span><button class="ghost" onclick="skipVoice()">Skip (default voice)</button>
+      <span><button class="ghost" onclick="skipVoice()">Use installed voice</button>
       <button id="voiceBtn" onclick="importVoice()" disabled>Import voice</button></span></div>
   </section>
 
   <!-- 4 persona -->
   <section class="card step hide" data-step="4">
     <h1>Who is your agent?</h1>
-    <p class="lead">Describe them in your own words and ATLAS drafts a personality you can edit.
+    <p class="lead">Describe them in your own words and ATLAS drafts a personality with the currently loaded model. Edit it freely, or draft again.
       Or import a <code>heart.md</code> character file.</p>
     <div class="row">
       <div><label>Name</label><input id="pName" placeholder="e.g. Juniper"></div>
@@ -177,7 +194,8 @@ a{color:var(--accent)}
     <div class="kv" id="summary"></div>
     <p class="note">You can change any of this later: the dashboard has a Settings button, and new agents come from the + in the dock.</p>
     <div class="msg" id="doneMsg"></div>
-    <div class="nav"><button class="ghost" onclick="go(4)">Back</button><button id="finishBtn" onclick="finish()">Open ATLAS</button></div>
+    <button class="ghost hide" id="summaryBrainBack" onclick="go(1)">Back to brain</button>
+    <div class="nav"><button class="ghost" onclick="go(W.customize ? 4 : 2)">Back</button><button id="finishBtn" onclick="finish()">Open ATLAS</button></div>
   </section>
 </div>
 
@@ -210,6 +228,7 @@ function go(n) {
 
 async function load() {
   S = await api('/api/setup/status');
+  updateReady();
   const g = S.gpu || {};
   $('sysinfo').innerHTML =
     `<span>GPU</span><span>${g.name ? `${esc(g.name)} · ${g.total_gb} GB` : 'none detected (ATLAS needs an NVIDIA GPU)'}</span>` +
@@ -229,6 +248,19 @@ async function load() {
 }
 function esc(s) { return String(s ?? '').replace(/[&<>"]/g, (c) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c])); }
 
+function selectedAgent() {
+  const choices = S.agent_choices || [];
+  return (W.agentChosen && choices.find((a) => a.id === W.agent)) ||
+    choices.find((a) => a.id === (S.ready_agent || {}).id) || null;
+}
+function updateReady() {
+  const a = selectedAgent();
+  $('audioBtn').textContent = a ? `Continue with ${a.name}` : 'Continue';
+  $('readyNote').textContent = a
+    ? `${a.name} is ready with a voice and personality. Pick a brain, microphone and speakers; customization is optional.`
+    : (S.bundle_error || 'Import a voice and create an agent to finish setup.');
+}
+
 // ---------------- brain ----------------
 function pickMode(m) {
   mode = m;
@@ -239,19 +271,101 @@ function pickMode(m) {
   clearMsg('brainMsg'); refreshBrain();
 }
 function provChanged(saved) {
+  cancelAccountLogin();
   const p = S.providers[$('prov').value]; if (!p) return;
+  $('cKey').value = '';  // Never carry a typed credential into a different provider's form.
   saved = saved && saved.provider === $('prov').value ? saved : {};
   $('cModel').value = saved.model || p.model;
   $('cUrl').value = saved.base_url || p.base_url;
   $('cCtx').value = saved.context || '';
+  $('cVision').checked = saved.vision === true;
+  $('cVllm').checked = saved.vllm === true;
+  $('cVllmLabel').hidden = $('cVllmNote').hidden = $('prov').value !== 'custom';
+  const account = p.auth_mode === 'subscription';
+  $('accountBox').hidden = !account;
+  $('apiKeyField').hidden = $('apiEndpointField').hidden = $('apiKeyNote').hidden = account;
+  $('accountExe').value = saved.executable || '';
+  $('accountStatus').textContent = 'Account not yet verified.';
+  $('accountModelOptions').innerHTML = '';
+  $('accountConnect').textContent = $('prov').value === 'claude_code' ? 'Connect Claude Code' : 'Connect Codex';
+  $('accountHelp').innerHTML = account ? `Uses your installed official CLI and its browser sign-in. Atlas does not copy login tokens or fall back to API billing. Your account’s plan limits apply. <a target="_blank" rel="noopener noreferrer" href="${esc(p.install_url)}">CLI installation instructions</a>` : '';
   $('cKey').placeholder = saved.has_key ? `saved key ${saved.key_hint || ''} (leave empty to keep)` : 'sk-…';
   $('provKeys').innerHTML = p.keys ? `Get a key: <a href="${p.keys}" target="_blank">${esc(p.keys)}</a>` : 'Any OpenAI-compatible server (vLLM, LM Studio, llama.cpp server).';
-  $('brainBtn').disabled = mode !== 'cloud' ? $('brainBtn').disabled : false;
+  $('brainBtn').disabled = brainBusy || (mode !== 'cloud' ? $('brainBtn').disabled : false);
 }
-let olTimer = null;
+let accountAttempt = null, accountPoll = null, accountRevision = 0;
+function accountCandidate() { return {provider: $('prov').value, executable: $('accountExe').value.trim() || null}; }
+function cancelAccountLogin() {
+  accountRevision++;
+  clearTimeout(accountPoll);
+  const old = accountAttempt; accountAttempt = null;
+  $('accountAuthLink').hidden = true;
+  $('accountAuthPage').removeAttribute('href');
+  if (old) api('/api/setup/provider/connect/' + encodeURIComponent(old), {method:'DELETE'}).catch(() => {});
+}
+async function verifyAccount() {
+  const revision = accountRevision, provider = $('prov').value;
+  $('accountStatus').textContent = 'Verifying the installed CLI account…';
+  try {
+    const r = await post('/api/setup/provider/status', accountCandidate());
+    if (revision !== accountRevision || provider !== $('prov').value) return;
+    $('accountStatus').textContent = r.message + (r.plan ? ` Plan: ${r.plan}.` : '');
+    if (r.connected) await refreshAccountModels();
+  } catch (e) { if (revision === accountRevision) $('accountStatus').textContent = e.message; }
+}
+async function refreshAccountModels() {
+  const revision = accountRevision, provider = $('prov').value;
+  try {
+    const r = await post('/api/setup/provider/models', accountCandidate());
+    if (revision !== accountRevision || provider !== $('prov').value) return;
+    $('accountModelOptions').innerHTML = r.models.map(m=>`<option value="${esc(m.id)}">${esc(m.label)}</option>`).join('');
+    if (!$('cModel').value && r.models.length) $('cModel').value = (r.models.find(m=>m.default) || r.models[0]).id;
+  } catch (e) { if (revision === accountRevision) $('accountStatus').textContent = e.message; }
+}
+async function connectAccount() {
+  cancelAccountLogin();
+  const revision = accountRevision, provider = $('prov').value;
+  $('accountStatus').textContent = 'Starting official browser sign-in…';
+  try {
+    let r = await post('/api/setup/provider/connect', accountCandidate());
+    if (revision !== accountRevision || provider !== $('prov').value) {
+      api('/api/setup/provider/connect/' + encodeURIComponent(r.id), {method:'DELETE'}).catch(()=>{}); return;
+    }
+    accountAttempt = r.id;
+    let opened = false;
+    const poll = async () => {
+      try {
+        r = await api('/api/setup/provider/connect/' + encodeURIComponent(accountAttempt));
+        if (revision !== accountRevision || provider !== $('prov').value) return;
+        if (r.authorization_url) {
+          $('accountAuthPage').href = r.authorization_url;
+          $('accountAuthLink').hidden = false;
+          if (!opened && provider === 'codex') { opened = true; window.open(r.authorization_url, '_blank', 'noopener'); }
+        }
+        if (r.state === 'connected') {
+          accountAttempt = null; $('accountAuthLink').hidden = true;
+          $('accountAuthPage').removeAttribute('href');
+          $('accountStatus').textContent = r.account.message + (r.account.plan ? ` Plan: ${r.account.plan}.` : '');
+          await refreshAccountModels(); return;
+        }
+        if (['error','cancelled','expired'].includes(r.state)) {
+          accountAttempt = null; $('accountAuthLink').hidden = true;
+          $('accountAuthPage').removeAttribute('href');
+          $('accountStatus').textContent = r.error?.message || `Sign-in ${r.state}. Connect again to retry.`; return;
+        }
+        $('accountStatus').textContent = 'Finish sign-in in your browser. Atlas will verify it automatically.';
+        accountPoll = setTimeout(poll, 1000);
+      } catch (e) { if (revision === accountRevision) { $('accountStatus').textContent = e.message; cancelAccountLogin(); } }
+    };
+    await poll();
+  } catch (e) { if (revision === accountRevision) $('accountStatus').textContent = e.message; }
+}
+let olTimer = null, brainBusy = false;
 async function refreshBrain() {
+  if (brainBusy) return;
   if (mode !== 'local') { $('brainBtn').disabled = mode !== 'cloud'; return; }
   try { S = await api('/api/setup/status'); } catch (_) { return; }
+  if (brainBusy) return;  // A poll may have started before the save began.
   const ol = S.ollama, ready = ol.running;
   $('olPill').textContent = ready ? 'running' : (ol.installed ? 'installed · start it' : 'not installed');
   $('olPill').className = 'pill ' + (ready ? 'ok' : 'bad');
@@ -259,22 +373,40 @@ async function refreshBrain() {
   $('olReady').classList.toggle('hide', !ready);
   if (ready && !$('localModel').options.length) {
     const have = new Set(ol.models), rec = S.recommended.model;
+    const selected = ((S.settings.llm || {}).local || {}).model || rec;
+    const visionRec = S.recommended_vision?.fits ? S.recommended_vision.model : null;
     const ladder = S.local_models.map((m) => m.model);
     const extra = ol.models.filter((m) => !ladder.includes(m) && !/embed/i.test(m));
-    $('localModel').innerHTML = S.local_models.map((m) =>
-      `<option value="${m.model}"${m.model === (((S.settings.llm || {}).local || {}).model || rec) ? ' selected' : ''}>${esc(m.label)}${have.has(m.model) ? ' · installed' : ''}${m.model === rec ? ' · recommended' : ''}</option>`).join('') +
-      extra.map((m) => `<option value="${esc(m)}">${esc(m)} · installed</option>`).join('');
+    const option = (m) => `<option value="${esc(m.model)}"${m.model === selected ? ' selected' : ''}>${esc(m.label)}${have.has(m.model) ? ' · installed' : ''}${m.model === visionRec ? ' · recommended for Eyes' : m.model === rec && S.recommended.fits ? ' · recommended for chat' : ''}</option>`;
+    $('localModel').innerHTML = '<optgroup label="Vision + tools · supports Eyes">' + S.local_models.filter(m => m.vision).map(option).join('') + '</optgroup>' +
+      '<optgroup label="Text only · Eyes unavailable">' + S.local_models.filter(m => !m.vision).map(option).join('') + '</optgroup>' +
+      (extra.length ? '<optgroup label="Other installed models · capabilities checked after loading">' + extra.map((m) => `<option value="${esc(m)}"${m === selected ? ' selected' : ''}>${esc(m)} · installed</option>`).join('') + '</optgroup>' : '');
+    $('localModel').addEventListener('change', renderModelNote);
+    renderModelNote();
     const r = S.recommended || {};
     $('recNote').textContent = !S.gpu.total_gb
       ? "No NVIDIA GPU found. The voice engine needs one, so ATLAS can't speak on this PC yet."
       : (r.fits === false ? `Your ${S.gpu.total_gb} GB GPU is below the local minimum (~11.5 GB total: ~6 GB for voice and listening plus ~5 GB for the smallest model that holds a conversation). A cloud provider will work much better.`
-                          : `Recommended for your ${S.gpu.total_gb} GB GPU (voice and listening use ~6 GB of it). Smaller models were tested and can't keep up with a group call.`);
+                          : `Suggestions allow ~6 GB for voice and listening on your ${S.gpu.total_gb} GB GPU. Image size, context and other apps can need more memory. Smaller models have not met the group-call baseline.`);
   }
   const p = S.pull;
   if (p && p.model && !['idle'].includes(p.status)) showPull(p);
   $('brainBtn').disabled = !ready || (p && p.status !== 'success' && p.status !== 'idle' && p.status !== 'error');
   clearTimeout(olTimer);
   if (W.step === 1 && mode === 'local') olTimer = setTimeout(refreshBrain, ready ? 1500 : 4000);
+}
+
+function renderModelNote() {
+  const m = S.local_models.find(m => m.model === $('localModel').value);
+  if (!m) { $('modelNote').textContent = 'Image support is checked after this model loads. Enable Eyes only when ATLAS confirms support.'; return; }
+  const total = Math.ceil(m.min_vram_gb + 6);
+  const fits = S.gpu.total_gb >= total;
+  $('modelNote').textContent = (m.vision
+    ? 'Vision + tools: supports Eyes after you install and enable the Eyes plugin. '
+    : 'Text only: Eyes will be unavailable with this model. ') +
+    `Allow about ${total} GB of GPU memory including voice and listening. ` +
+    (!fits ? 'This is above your GPU’s capacity; consider a smaller model or a vision-capable API provider. ' : '') +
+    'ATLAS checks reply-format compatibility before saving; capabilities and call quality vary by model.';
 }
 function showPull(p) {
   $('pullBox').classList.remove('hide');
@@ -289,6 +421,8 @@ async function installOllama() {
   catch (e) { msg('brainMsg', 'bad', e.message); }
 }
 async function saveBrain() {
+  if (brainBusy) return;
+  brainBusy = true;
   clearMsg('brainMsg'); $('brainBtn').disabled = true;
   try {
     if (mode === 'local') {
@@ -306,9 +440,11 @@ async function saveBrain() {
       msg('brainMsg', 'info', 'Testing the connection…');
       const r = await post('/api/setup/llm', {mode: 'cloud', provider: $('prov').value, model: $('cModel').value.trim(),
         base_url: $('cUrl').value.trim(), api_key: $('cKey').value.trim(),
-        context: parseInt($('cCtx').value, 10) || null});
+        executable: S.providers[$('prov').value].auth_mode === 'subscription' ? $('accountExe').value.trim() || null : null,
+        context: parseInt($('cCtx').value, 10) || null, vision: $('cVision').checked,
+        vllm: $('prov').value === 'custom' && $('cVllm').checked});
       $('cKey').value = '';
-      W.brain = `${S.providers[$('prov').value].label} · ${$('cModel').value.trim()} (${r.ms} ms)`;
+      W.brain = `${S.providers[$('prov').value].label} · ${$('cModel').value.trim()} (${r.verification === 'limited' ? 'connected, usage limited' : r.ms + ' ms'})`;
     }
     // Load the new brain now so the persona drafter (step 5) uses it.
     W.step = 2; saveW();
@@ -316,7 +452,7 @@ async function saveBrain() {
     await restartAndWait();
     go(2);
   } catch (e) { msg('brainMsg', 'bad', e.message); }
-  $('brainBtn').disabled = false;
+  brainBusy = false; $('brainBtn').disabled = false;
 }
 async function waitPull(model) {
   for (;;) {
@@ -334,13 +470,18 @@ async function restartAndWait() {
     try { S = await api('/api/setup/status'); return; } catch (_) {}
     await new Promise((r) => setTimeout(r, 1500));
   }
+  throw new Error('ATLAS did not restart. Check the desktop window and server.log, then try again.');
 }
 
 // ---------------- audio ----------------
-async function saveAudio() {
+async function saveAudio(customize = false) {
   try {
     await post('/api/setup/audio', {input: $('inDev').value || null, output: $('outDev').value || null});
-    W.audio = `${$('inDev').value || 'default mic'} → ${$('outDev').value || 'default speakers'}`; W.restart = true; saveW(); go(3);
+    S = await api('/api/setup/status'); updateReady();
+    W.audio = `${$('inDev').value || 'default mic'} → ${$('outDev').value || 'default speakers'}`;
+    W.restart = true; W.customize = customize; saveW();
+    if (!customize && selectedAgent()) go(5);
+    else { go(3); if (!customize) msg('voiceMsg', 'bad', S.bundle_error || 'Import a voice, then create an agent.'); }
   } catch (e) { msg('audioMsg', 'bad', e.message); }
 }
 
@@ -372,14 +513,19 @@ async function fillVoices() {
   const v = S.voices || [];
   $('pVoice').innerHTML = (v.length ? '' : '<option value="">Default voice</option>') +
     v.map((x) => `<option value="${esc(x)}"${x === W.voice ? ' selected' : ''}>${esc(x)}</option>`).join('');
+  try {
+    const t = await api('/api/agents/template');
+    msg('personaMsg', t.model_info ? 'info' : 'bad', t.model_info
+      ? `Current model: ${t.model_info.model} · ${t.model_info.endpoint || t.model_info.backend}` : t.model_error);
+  } catch (_) {}
 }
 async function draft() {
   const name = $('pName').value.trim(), description = $('pDesc').value.trim();
   if (name.length < 2 || description.length < 10) return msg('personaMsg', 'bad', 'Give a name and a sentence or two about them.');
-  $('draftBtn').disabled = true; msg('personaMsg', 'info', 'Drafting… (uses the brain you picked)');
+  $('draftBtn').disabled = true; msg('personaMsg', 'info', 'Drafting with the currently loaded model…');
   try { showDraft(await post('/api/agents/draft', {name, description, voice: $('pVoice').value}));
-    msg('personaMsg', draftData.source === 'llm' ? 'ok' : 'info', draftData.source === 'llm' ? 'Draft ready. Edit anything you like.' :
-      'Your model is not loaded yet, so this is a plain template from your description. Edit it, or come back after the restart to redraft.');
+    const mi = draftData.model_info;
+    msg('personaMsg', 'ok', `Drafted by ${mi?.model || 'the current model'}${mi?.endpoint ? ' · ' + mi.endpoint : ''}. Edit anything, or draft again.`);
   } catch (e) { msg('personaMsg', 'bad', e.message); }
   $('draftBtn').disabled = false;
 }
@@ -400,22 +546,34 @@ async function createAgent() {
     const r = await post('/api/agents', {...d, name: $('pName').value.trim(), voice: $('pVoice').value,
       prompt: $('pPrompt').value, interests: $('pInt').value.split(',').map((s) => s.trim()).filter(Boolean),
       talkativeness: +$('pTalk').value, fields: undefined});
-    W.agent = (r.agent || {}).id; W.agentName = $('pName').value.trim(); saveW(); go(5);
+    W.agent = (r.agent || {}).id; W.agentName = $('pName').value.trim(); W.agentChosen = true; saveW(); go(5);
   } catch (e) { msg('personaMsg', 'bad', e.message); $('createBtn').disabled = false; }
 }
 
 // ---------------- done ----------------
-function fillSummary() {
+function chooseAgent(id) { W.agent = id; W.agentChosen = true; saveW(); fillSummary(); }
+async function fillSummary() {
+  $('finishBtn').disabled = true;
+  try { S = await api('/api/setup/status'); } catch (e) { msg('doneMsg', 'bad', e.message); return false; }
+  const a = selectedAgent();
+  W.agent = a ? a.id : null; W.agentName = a ? a.name : ''; W.voice = a ? a.voice : ''; saveW();
   $('summary').innerHTML = `<span>Brain</span><span>${esc(W.brain || 'unchanged')}</span>` +
     `<span>Audio</span><span>${esc(W.audio || 'system default')}</span>` +
-    `<span>Voice</span><span>${esc(W.voice || 'default')}</span>` +
-    `<span>Agent</span><span>${esc(W.agentName || 'not created')}</span>`;
-  $('finishBtn').disabled = !W.agent;
-  if (!W.agent) msg('doneMsg', 'bad', 'Create an agent first (step 5).');
+    `<span>Voice</span><span>${esc(a ? a.voice : 'unavailable')}</span>` +
+    `<span>Agent</span><select id="summaryAgent" onchange="chooseAgent(this.value)">${(S.agent_choices || []).map((x) =>
+      `<option value="${esc(x.id)}"${a && x.id === a.id ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select>`;
+  $('finishBtn').disabled = !a || S.brain_ready !== true;
+  $('summaryBrainBack').classList.toggle('hide', S.brain_ready === true);
+  if (S.brain_ready !== true) msg('doneMsg', 'bad', S.brain_error || 'Choose and save a brain before completing setup.');
+  else if (!a) msg('doneMsg', 'bad', S.bundle_error || 'Import a voice and create an agent to continue.');
+  else clearMsg('doneMsg');
+  return Boolean(a) && S.brain_ready === true;
 }
 async function finish() {
   $('finishBtn').disabled = true;
   try {
+    if (!await fillSummary()) return;
+    $('finishBtn').disabled = true;
     await post('/api/setup/complete', {agent: W.agent});
     msg('doneMsg', 'info', 'Restarting ATLAS with your settings…');
     localStorage.removeItem('atlas.setup');

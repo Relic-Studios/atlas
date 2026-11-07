@@ -1,0 +1,44 @@
+{
+  "model": "qwen3:14b",
+  "model_digest": "bdbd181c33f2ed1b31c972991882db3cf4d192569092138a7d29e973cd9debe8",
+  "model_details": {
+    "parent_model": "",
+    "format": "gguf",
+    "family": "qwen3",
+    "families": [
+      "qwen3"
+    ],
+    "parameter_size": "14.8B",
+    "quantization_level": "Q4_K_M"
+  },
+  "context_length": 8192,
+  "voice": "juniper-natural (Juniper Take A)",
+  "voice_reference_sha256": "1cb7947acb185d960ca9ba22bb33e01c900b784af6271385acb57d1df04c97cd",
+  "capture": "Actual visible installed Electron app, foreground desktop capture at 10 fps; repeated frames for 30 fps encoding",
+  "assistant_inference": "Every reply generated live by local Ollama Qwen3:14b; no scripted assistant lines or response injection",
+  "human_inputs": "Synthetic participant from one designed voice reference; input audio only",
+  "editing": "One continuous real-time shot. Invisible Windows resize borders cropped; full UI fitted to a 1080p canvas with a separate caption strip. Only idle tail after final reply removed; no inference delays removed or sped up.",
+  "checks": {
+    "completed_selected_output_pcm": true,
+    "actual_local14b_requests": true,
+    "dinner_answer": true,
+    "contextual_protein_followup": true,
+    "aside_held": true,
+    "actual_date_tool": true,
+    "spoken_date_reply": true,
+    "story_audio_before_interrupt": true,
+    "interruption_returned_to_dinner": true,
+    "foreground_capture_complete": true,
+    "no_scripted_assistant": true
+  },
+  "video_duration_s": 83.2,
+  "raw_audio_duration_s": 107.12,
+  "video_sha256": "0ad392e5a21d6bac92d2f6cfd1434d1dbcf43965a89b12b3fad19bfdaf8c40b3",
+  "creative_approval": "Review candidate; technical verification is separate from user artistic approval",
+  "audio_verification": {
+    "spoken_dinner_ingredients": true,
+    "spoken_clock_day": true,
+    "speech_after_interruption": true,
+    "master_not_clipped": true
+  }
+}

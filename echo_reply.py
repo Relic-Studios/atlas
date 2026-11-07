@@ -32,9 +32,10 @@ except Exception:  # noqa: BLE001 - glue list stays generic
 
 MAX_WORDS = 8
 # Imperative prompts that ask for a pick/answer ("Pick one, cats or dogs.",
-# "Rate my setup from one to ten.", "Choose: pizza or tacos."). "Say X" is NOT
-# here on purpose: repeating a "say X" line is exactly the bait we drop.
+# "Rate my setup from one to ten.", "Choose: pizza or tacos."). Requested
+# speech is distinct from unsolicited mirroring; identity/safety checks are separate.
 _PROMPT = re.compile(r"(?:^|[.!?,:]\s*)(?:\w+,\s*)?(?:pick|choose|rate|guess|name|rank|finish|vote)\b|\b(?:which|or)\b|\bvs\.?\b", re.I)
+_REQUESTED_SPEECH = re.compile(r"\b(?:say|repeat|recite|quote|pronounce)\b|\bread\b.{0,60}\baloud\b", re.I)
 _QUESTION = re.compile(r"\?|^\W*(?:\w+,\s*)?(?:who|what|when|where|why|how|which|do|does|did|can|could|would|will|should|is|are|was|were|have|has)\b", re.I)
 # Wh-words make an echo-question a real clarification ("Delete what?", "Reins on what?").
 _WH = {"who", "what", "what's", "when", "where", "why", "how", "which", "whose", "wait"}
@@ -59,6 +60,11 @@ def is_parrot(sentence: str, heard: str) -> bool:
     """True if `sentence` only repeats content words from `heard`."""
     s = (sentence or "").strip()
     if not s:
+        return False
+    # The model may legitimately return words already present in the request.
+    # Do not suppress a requested quotation/repetition or spend another LLM call
+    # trying to paraphrase an answer the person explicitly asked to hear.
+    if _REQUESTED_SPEECH.search(heard or ""):
         return False
     words = _WORD.findall(s.lower())
     if _GREETING.match(s) and _GREETING.search(heard or "") and len(words) <= 4:

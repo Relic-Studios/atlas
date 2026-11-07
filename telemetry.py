@@ -313,7 +313,9 @@ class Telemetry:
             import screen as _scr
             s = _scr.status()
             out = {"enabled": s.get("enabled"), "count": s.get("count"), "last_ts": s.get("last_ts"),
-                   "last_reason": s.get("last_reason"), "last_size": s.get("last_size")}
+                   "last_reason": s.get("last_reason"), "last_size": s.get("last_size"),
+                   "vision_supported": s.get("vision_supported"), "model": s.get("model"),
+                   "unavailable_reason": s.get("unavailable_reason")}
             try:
                 import live_screen as _ls
                 out["live"] = _ls.status()

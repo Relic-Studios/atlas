@@ -1,7 +1,7 @@
 <p align="center"><img src="docs/images/banner.png" alt="ATLAS: local voice agents for group conversation" width="100%"></p>
 
 <p align="center">
-  <a href="https://github.com/Relic-Studios/atlas/releases/latest"><b>Download for Windows</b></a> ·
+  <a href="https://github.com/Relic-Studios/atlas/releases/tag/v0.7.0"><b>Download 0.7 beta for Windows</b></a> ·
   <a href="#linux">Linux</a> ·
   <a href="#requirements">Requirements</a> ·
   <a href="CHANGELOG.md">Changelog</a> ·
@@ -15,16 +15,18 @@
 
 Local voice agents for group conversation. They listen to everyone in the room or call,
 answer when they're talked to, and speak in a voice you choose.
-Everything runs on your PC. No account, no bundled API keys.
+Listening and the voice run on your PC. Choose a local language model or connect your own provider.
+Local mode needs no account, and ATLAS bundles no API keys.
 
-> **Early beta (v0.6).** It works well in the situations we test and has edges we haven't tested yet.
+> **Early beta (0.7.0).** Core installed pipelines have been verified; broader hardware and external integrations still need coverage.
 > Read [SAFETY.md](SAFETY.md) for exactly what an agent can do, what's tested, and what isn't.
 
-https://github.com/user-attachments/assets/b81f048c-592d-4777-8179-2192d1614af1
+[![Watch the live local 14B demo](docs/images/atlas-live-local14b.png)](docs/media/atlas-live-local14b.mp4)
 
-<p align="center"><sub>Unedited two-minute run of ATLAS 0.6. Sam and Riley are synthetic voices reading a script,
-and Thomas's words were written ahead of time. Hearing them, telling them apart, when he answers or stays quiet,
-the coin flip and prediction tools, and his voice are live.</sub></p>
+An 83-second continuous run of the installed app using **local Qwen3 14B** and Juniper Take A.
+Human inputs use one synthetic voice; every assistant reply is generated live. The run includes a contextual
+follow-up, staying quiet for an aside, a real clock lookup, and an audible interruption followed by a return to dinner.
+Only idle time after the final reply was trimmed. [Capture and audio provenance](docs/media/atlas-live-local14b-provenance.json).
 
 <p align="center">
   <img src="docs/images/voices.jpg" width="100%" alt="Four voices over a real one-minute conversation, the agent in teal">
@@ -43,23 +45,38 @@ the coin flip and prediction tools, and his voice are live.</sub></p>
 
 ### Windows
 
-1. Download **`ATLAS-Setup-<version>.exe`** from the [latest release](https://github.com/Relic-Studios/atlas/releases/latest) and run it.
-   No admin rights needed: ATLAS goes to your own Program Files (`%LOCALAPPDATA%\Programs\ATLAS`).
-   It installs Python 3.12 and Node.js if they're missing, a private Python environment,
-   PyTorch (CUDA), the app, and the speech models (~2.5 GB). This takes 10–20 minutes the first time.
-2. Open **ATLAS** from the desktop shortcut or the Start menu.
+1. Download **`ATLAS-Setup-<version>.exe`** (about 140 MB) from the
+   [0.7 beta release](https://github.com/Relic-Studios/atlas/releases/tag/v0.7.0) and run it.
+2. Setup checks your graphics card first, so a PC that can't run ATLAS finds out before any download.
+3. Click through the pages (license, folder, shortcuts) and **Install**. Setup shows each step, how much is downloaded
+   and the time left: about 7 GB in all (PyTorch, ATLAS's packages, and the speech and voice models), 20 to 30 minutes
+   on a 100 Mbit/s connection. You can keep using your PC.
+4. At the end, leave **Launch ATLAS** ticked. When the speech and voice downloads succeed, those models are ready for
+   the first launch. Setup warns if a download needs to finish later. Choose your language model and audio devices;
+   choosing an optional local language model downloads that model separately.
+
+No admin rights are needed, and nothing is installed system-wide: ATLAS goes to your own Program Files
+(`%LOCALAPPDATA%\Programs\ATLAS`) with its own copy of Python and of the desktop app, so you don't need Python or
+Node.js. With the default folder, Setup needs about 17 GB free on that drive (the app, its Python environment, the
+models and download caches); the Ready page checks every drive it uses.
+
+- **Stop** stops the install at any point. Run Setup again to finish; steps that are done are skipped.
+- If a step fails (for example the connection drops), Setup says what went wrong and offers **Try again** and
+  **Open log**.
+- **Updating:** run the new `ATLAS-Setup` over the old install. It closes ATLAS if it's open, keeps your Python
+  environment, models and data, and installs only what changed.
 
 > Windows may show a SmartScreen warning because the installer isn't code-signed yet.
 > Click **More info → Run anyway**.
 
 From source instead: clone this repo and double-click **Install ATLAS.cmd**
-(or `powershell -ExecutionPolicy Bypass -File install.ps1`). Options: `-SkipModels`, `-NoShortcut`.
-A log is written to `install.log`.
+(or `powershell -ExecutionPolicy Bypass -File install.ps1`). It installs Python 3.12 and Node.js with winget if
+they're missing. Options: `-SkipModels`, `-NoShortcut`. Each run adds to `install.log`.
 
-**Uninstall:** Windows Settings > Apps > **ATLAS** > Uninstall, or **Uninstall ATLAS** in the Start menu
-or in the ATLAS folder. It removes the app, its Python environment and shortcuts, and asks whether to
-delete your data too (settings, voices, agents, memories, call recordings). Python, Node.js and the
-downloaded speech models are left in place, since other programs may use them.
+**Uninstall:** Windows Settings > Apps > **ATLAS** > Uninstall, or **Uninstall ATLAS** in the Start menu.
+It removes the app, its Python, its Python environment, the desktop app and the shortcuts, and asks whether to keep
+your data (settings, voices, agents, memories, call recordings) for a later reinstall. The downloaded speech and voice
+models stay in the shared Hugging Face cache, since other programs may use them.
 
 ### Linux
 
@@ -85,19 +102,30 @@ The setup wizard walks you through:
    - **Cloud:** any OpenAI-compatible provider (OpenRouter, Together, Groq, OpenAI, your own vLLM server).
      Paste your own key; it's stored only in `user/settings.json` on this PC and never shown again in full.
      The same reply-format check runs against your provider.
+   - **Subscription account:** Claude Code or Codex through the installed official CLI. Connect opens its official
+     sign-in flow; Verify checks an existing session. No token copying or API billing fallback. This beta's inference
+     protocol checks support Claude Code 2.1.281 and Codex 0.146.1; other versions show an update message.
+     A verified but exhausted account stays selected and displays its limit until you explicitly retry.
+   - **Vision:** the local selector also offers vision-capable models. Text-only or unverified models clearly show
+     that Eyes is unavailable. Plugin and model capability requirements still apply.
 2. **Audio:** pick the input the agent listens on and the output it speaks to.
    To bring it into an online voice call (any app), route the call into a virtual cable (e.g. VB-Audio Voicemeeter)
    and pick that cable here.
-3. **Voice:** import a 10–20 second clean clip of the voice you want (WAV/MP3), plus what's said in it.
-   Until you do, ATLAS uses a neutral starter voice generated on your PC.
-4. **Agent:** describe a personality, let ATLAS draft it, edit the text, and save. Or import a `heart.md`.
+3. **Voice and agent:** Juniper and her bundled voice are ready by default. Start with her, or optionally
+   import a clean voice reference and create an agent. Drafting uses the model you have loaded; you can edit it before saving.
+
+All optional plugins start uninstalled and off. In **Plugins → Marketplace**, install a bundled plugin,
+configure it, then enable it in Installed. Installing does not enable it. Keys, compatible models or extra
+software are required for some plugins; the bundled plugin setup guide explains each requirement.
 
 You can change all of this later from the dashboard.
 
 ## Requirements
 
-- Windows 10/11 or Ubuntu 22.04+, 16 GB RAM, ~15 GB disk (plus the local model, if you use one).
+- Windows 10/11 or Ubuntu 22.04+, 16 GB RAM, about 17 GB free disk to install (plus the local model, if you use one).
 - **An NVIDIA GPU is required:** GeForce RTX 20-series or newer. GTX 10-series (Pascal) and older cards aren't supported. Listening and the voice use about 6 GB of VRAM.
+- **NVIDIA driver 570.65 or newer** (the one for CUDA 12.8). If yours is older, Setup says so; updates are free at
+  [nvidia.com/drivers](https://www.nvidia.com/drivers).
 
 | Your GPU | What works |
 |---|---|

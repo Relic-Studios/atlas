@@ -45,18 +45,11 @@ if (-not $KeepData -and -not $RemoveData) {
     $RemoveData = $a -match '^[yY]'
 }
 
-# 1. Stop ATLAS if it's running from this folder (the desktop shell, the server, a memory pass).
-$me = $PID
-Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
-    $_.ProcessId -ne $me -and $_.Name -notin @('cmd.exe', 'powershell.exe', 'pwsh.exe') -and (
-        (Under $_.ExecutablePath) -or
-        ($_.Name -like 'python*.exe' -and $_.CommandLine -and
-         ($_.CommandLine.IndexOf($Root, [StringComparison]::OrdinalIgnoreCase) -ge 0)))
-} | ForEach-Object {
-    Write-Host "  stopping $($_.Name) ($($_.ProcessId))"
-    Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
-}
-Start-Sleep -Milliseconds 800
+# 1. Stop ATLAS if it's running from this folder (the desktop shell, the server, a memory pass). The rule is shared
+#    with the setup program: installer\atlas_processes.ps1.
+. (Join-Path $Root 'installer\atlas_processes.ps1')
+foreach ($p in (Get-AtlasProcesses $Root)) { Write-Host "  stopping $($p.Name) ($($p.ProcessId))" }
+foreach ($p in (Stop-AtlasProcesses $Root 10)) { Write-Host "  still running: $($p.Name) ($($p.ProcessId))" -ForegroundColor Yellow }
 
 # 2. Shortcuts that point into this folder (never another ATLAS install's).
 $ws = New-Object -ComObject WScript.Shell

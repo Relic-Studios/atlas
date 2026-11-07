@@ -10,6 +10,7 @@ function harness(ownsInstance = true, ready = false) {
   const stats = { spawns: 0, quits: 0, loads: 0, kills: 0, requests: [], callEndReply: '{"ended": true, "start_pass": false}' };
   const app = new EventEmitter();
   app.requestSingleInstanceLock = () => ownsInstance;
+  app.setAppUserModelId = (id) => { stats.appId = id; };
   app.quit = () => { stats.quits++; };
   app.whenReady = () => ready ? Promise.resolve() : new Promise(() => {});
   const fakeFs = { existsSync: () => false, readdirSync: () => [],

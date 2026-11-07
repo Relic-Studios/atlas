@@ -16,6 +16,7 @@
     <div class="fld"><label>Voice</label><select id="voiceSel"></select></div>
     <div class="fld"><label>Model</label><div id="modelName">—</div></div>
     <div class="headR">
+      <a class="pill plug hidden" id="pSetup" href="/static/setup.html" title="Language model and setup">Settings</a>
       <div class="pill own" id="pMute" tabindex="0" role="button" title="Hard mute: agent says nothing (Ctrl+Shift+M). Click to toggle."><i></i><span id="muteLbl">Live</span><div class="eyepop"><div>Hard mute stops the reply mid-word and blocks every turn until you unmute.<br>Hotkey: <b>Ctrl+Shift+M</b> (works from any window).</div></div></div>
       <div class="pill own q" id="pQuiet" tabindex="0" role="button" title="Quiet mode: agent only answers when named."><i></i><span id="quietLbl">Quiet</span><div class="eyepop"><div id="quietMeta">Quiet mode: only answers when someone says its name. Click the pill to toggle (10 min).</div><div class="ownrow">quiet<input type="range" id="talkSlider" min="0" max="1" step="0.05">chatty <span id="talkVal"></span></div><div class="phint">Talkativeness for the active agent (saved).</div></div></div>
       <a class="pill plug" id="pPlugins" href="/static/plugins.html" title="Plugins: switch agent abilities on and off, add keys"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v5M15 3v5M7 8h10v3a5 5 0 01-10 0zM12 16v5"/></svg>Plugins</a>
@@ -132,7 +133,7 @@
       <div class="pill" id="pOllama"><i></i>Ollama</div>
       <div class="pill" id="pBridge"><i></i>Call</div>
       <div class="pill" id="pWs"><i></i>Link</div>
-      <div class="pill eyes" id="pEyes" title="Let agents look at your screen when asked. Click to toggle."><i></i>Eyes<div class="eyepop" id="eyePop"><img id="eyeImg" alt=""><div id="eyeMeta">No looks yet</div></div></div>
+      <div class="pill eyes" id="pEyes" title="Let agents look at your screen when asked. Click to toggle."><i></i><span id="eyesLabel">Eyes</span><div class="eyepop" id="eyePop"><img id="eyeImg" alt=""><div id="eyeMeta">No looks yet</div></div></div>
       <div class="pill brain hidden" id="pBrain" title="Where the LLM runs. Click to switch."><i></i><span id="brainLbl">Local LLM</span><div class="eyepop"><div id="brainMeta">…</div></div></div>
       <div class="sp"></div>
       <div class="clock" id="uptime">--:--:--</div>
@@ -158,7 +159,8 @@
       <div class="fld"><label>Who are they? Describe them in your own words</label>
         <textarea class="cin" id="crDesc" rows="7" placeholder="Angry celebrity chef who roasts everyone's food, secretly soft on beginners, yells about raw chicken, loves a proper beef wellington…"></textarea>
         <div class="hint">Or <a href="#" id="crHeart">import a heart.md</a> character sheet. The model turns this into a character sheet. Room etiquette, reply length, loop-breaking and no-punching-down rules are added automatically, the same as the built-in agents.</div></div>
-      <div class="busy" id="crBusy" style="display:none"><div class="spinner"></div>interpreting with the local model…</div>
+      <div class="hint" id="crModel"></div>
+      <div class="busy" id="crBusy" style="display:none"><div class="spinner"></div>drafting with the current model…</div>
     </div>
     <div class="cb" id="crStep2" style="display:none">
       <div class="preview-row">
@@ -252,6 +254,7 @@
   </div>
 </div>
 <div class="avtip" id="avTip"></div>
+<div class="provider-notice hidden" id="providerNotice" role="status"><span id="providerNoticeText"></span><a href="/static/setup.html">Settings</a><button id="providerRetry" type="button">Retry account</button></div>
 <div class="toast glass" id="toast"></div>
 <div class="vnotice glass" id="voiceNote" role="status" hidden><span class="vtext"></span><span class="mebtn" id="voiceNoteNotMe" tabindex="0" role="button">Not me</span></div>
 <script src="/static/atlas.js"></script>

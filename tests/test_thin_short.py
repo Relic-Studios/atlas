@@ -22,6 +22,14 @@ class ThinShortTests(unittest.TestCase):
         self.assertEqual(len([m for m in out if m["role"] == "user"]), 4)
         self.assertEqual(len(spoken), 4)
 
+    def test_default_preserves_prior_answers_after_unrelated_acknowledgments(self):
+        import floor
+        h = [U("Which city?"), A("Lisbon."), U("What material?"), A("Copper."),
+             U("What color?"), A("Violet."), U("Keep it brief."), A("Got it."),
+             U("What city did you name?")]
+        self.assertEqual(thin_short_replies(h), h)
+        self.assertEqual(floor.clip_own_replies(thin_short_replies(h)), h)
+
     def test_disabled(self):
         h = [A("ok."), A("sure."), A("yep.")]
         self.assertEqual(thin_short_replies(h, keep=-1), h)

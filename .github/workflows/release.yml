@@ -17,6 +17,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: {python-version: "3.12"}
+      - uses: actions/setup-node@v4
+        # the installer ships a prebuilt desktop shell: build_installer.py runs npm ci in its staging copy
+        with: {node-version: "22"}
       - name: Version
         shell: bash
         run: |
@@ -38,11 +41,22 @@ jobs:
         # Electron ships inside the installed app, so its CVEs count too.
         shell: bash
         run: cd desktop && npm audit --audit-level=low
-      - name: Inno Setup
+      - name: Inno Setup 6.7.3 (pinned)
+        # installer/atlas.iss needs 6.7.3 or later. Chocolatey stops at 6.7.1 and the runner image's own copy varies,
+        # so install the official release, checked against its SHA-256, into a folder of its own.
         run: |
-          if (-not (Test-Path "C:\Program Files (x86)\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
+          $url = "https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe"
+          $sha = "9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732"
+          $exe = Join-Path $env:RUNNER_TEMP "innosetup-6.7.3.exe"
+          $dir = Join-Path $env:RUNNER_TEMP "InnoSetup"
+          Invoke-WebRequest -Uri $url -OutFile $exe
+          $got = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
+          if ($got -ne $sha) { throw "Inno Setup installer SHA-256 mismatch: $got" }
+          $p = Start-Process -FilePath $exe -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', '/CURRENTUSER', "/DIR=$dir" -Wait -PassThru
+          if ($p.ExitCode -ne 0 -or -not (Test-Path "$dir\ISCC.exe")) { throw "Inno Setup install failed (exit $($p.ExitCode))" }
+          "ISCC=$dir\ISCC.exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - name: Build installer
-        run: python tools/build_installer.py --version $env:VERSION --ref $env:GITHUB_SHA --iscc "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+        run: python tools/build_installer.py --version $env:VERSION --ref $env:GITHUB_SHA --iscc $env:ISCC
       - name: Sign installer (Azure Artifact Signing, only if configured)
         # Skipped until the repo has these secrets: AZURE_TENANT_ID, AZURE_CLIENT_ID,
         # AZURE_CLIENT_SECRET, SIGNING_ENDPOINT, SIGNING_ACCOUNT, SIGNING_PROFILE.
@@ -72,9 +86,13 @@ jobs:
         env: {GH_TOKEN: "${{ github.token }}"}
         run: |
           NOTES=$(awk "/^## \[?${VERSION}/{f=1;next} /^## /{f=0} f" CHANGELOG.md)
-          # Publishing a prepared draft also pushes the tag: refresh its .exe instead of failing.
+          # A prepared/manual release may contain the exact installed-and-tested candidate.
+          # Keep those immutable assets; this independent rebuild remains a workflow artifact.
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" dist/ATLAS-Setup-*.exe dist/SHA256SUMS.txt --clobber
+            echo "Release already prepared; preserving its reviewed assets. Rebuild is available in Actions artifacts."
           else
-            gh release create "$GITHUB_REF_NAME" dist/ATLAS-Setup-*.exe dist/SHA256SUMS.txt --title "ATLAS $VERSION" --notes "${NOTES:-See CHANGELOG.md}"
+            FLAGS=()
+            HEADER=$(grep -m1 -E "^## \\[?${VERSION}([^0-9.]|$)" CHANGELOG.md || true)
+            if [[ "$VERSION" == *-* ]] || echo "$HEADER" | grep -Eqi 'beta|alpha|preview'; then FLAGS+=(--prerelease); fi
+            gh release create "$GITHUB_REF_NAME" dist/ATLAS-Setup-*.exe dist/SHA256SUMS.txt --title "ATLAS $VERSION" --notes "${NOTES:-See CHANGELOG.md}" "${FLAGS[@]}"
           fi

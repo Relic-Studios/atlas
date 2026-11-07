@@ -2,6 +2,7 @@
 actual date"). Two layers: a one-line NOW note in every turn's context (works even on
 small models that never call tools), and a check_date_time tool for other time zones."""
 import datetime as _dt
+import re as _re
 
 try:
     import zoneinfo as _zi
@@ -60,3 +61,29 @@ TOOL = {"type": "function", "function": {
         "timezone": {"type": "string",
                      "description": "optional IANA zone, e.g. Asia/Tokyo; empty = local"}},
         "required": []}}}
+
+
+def intent(text: str):
+    """An explicit named-clock command; ordinary time questions stay with the LLM.
+
+    The pipeline separately requires direct address and an enabled plugin. A city
+    needs model interpretation, so only local time or an explicit IANA zone can be
+    executed here without guessing an argument.
+    """
+    text = text or ""
+    match = _re.search(r"\b(?:use|call|run)\s+(?:(?:your|the)\s+)?"
+                       r"(?:(?:date\s+(?:and\s+)?time|date|time|clock)\s+tool|check_date_time)\b", text, _re.I)
+    if not match:
+        return None
+    if _re.search(r"\b(?:not|never|don['’]?t|shouldn['’]?t)\s*$", text[:match.start()], _re.I):
+        return None
+    # Quoted/reported commands are not owner commands.
+    if any(left in text[:match.start()] and right in text[match.end():]
+           for left, right in (('"', '"'), ('“', '”'))):
+        return None
+    if _re.search(r"\b(?:said|says|told|quote|quoted|repeat|recite|example)\b", text[:match.start()], _re.I):
+        return None
+    zone = _re.search(r"\b[A-Za-z_]+/[A-Za-z_]+(?:/[A-Za-z_]+)?\b", text)
+    if not zone and _re.search(r"\bin\s+[A-Za-z]", text[match.end():], _re.I):
+        return None
+    return "check_date_time", {"timezone": zone[0] if zone else ""}

@@ -49,6 +49,15 @@ class NoteTests(unittest.TestCase):
         self.assertIn("look at", C.abilities_note(True))
         self.assertNotIn("look at", C.abilities_note(False))
 
+    def test_no_plugins_still_allows_normal_language_tasks(self):
+        import plugins
+        off = {p['id'] for p in plugins.BUILTIN}
+        note = C.abilities_note(False, False, '', off)
+        self.assertIn('enabled external tools right now: none', note)
+        self.assertIn('clearly fictional stories', note)
+        self.assertIn('with all plugins off', note)
+        self.assertNotIn('listed above are all you have', note)
+
 
 if __name__ == "__main__":
     unittest.main()
